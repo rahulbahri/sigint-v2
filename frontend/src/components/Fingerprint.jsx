@@ -1,4 +1,5 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
+import axios from 'axios'
 import {
   RadarChart, PolarGrid, PolarAngleAxis, Radar,
   ResponsiveContainer, Tooltip, Legend
@@ -521,6 +522,19 @@ export default function Fingerprint({ fingerprint, onKpiClick }) {
   const [periodA,      setPeriodA]      = useState([7,8,9,10,11,12])   // H2 default
   const [periodB,      setPeriodB]      = useState([1,2,3,4,5,6])      // H1 default
   const [showDelta,    setShowDelta]    = useState(false)
+  const [annotations,  setAnnotations]  = useState({})
+  const [editingNote,  setEditingNote]  = useState(null)
+  const [noteText,     setNoteText]     = useState('')
+
+  useEffect(() => {
+    axios.get('/api/annotations').then(r => {
+      const map = {}
+      ;(r.data.annotations || []).forEach(a => {
+        map[`${a.kpi_key}::${a.period}`] = a
+      })
+      setAnnotations(map)
+    }).catch(() => {})
+  }, [])
 
   function handlePeriodChange(which, months) {
     if (which === 'A') setPeriodA(months)
@@ -881,7 +895,20 @@ export default function Fingerprint({ fingerprint, onKpiClick }) {
                     const isNewYear = period.endsWith('-01') && idx > 0
                     return (
                       <td key={period} className={`py-1.5 px-0.5 ${isNewYear ? 'border-l-2 border-blue-100' : ''}`}>
-                        <div className={`rounded px-1 py-1 text-center font-mono text-[11px] font-medium ${cellBg(st)}`}>
+                        <div
+                          className={`relative rounded px-1 py-1 text-center font-mono text-[11px] font-medium ${cellBg(st)} group/cell`}
+                          onContextMenu={(e) => {
+                            e.preventDefault()
+                            e.stopPropagation()
+                            const existing = annotations[`${kpi.key}::${period}`]
+                            setEditingNote({ kpiKey: kpi.key, kpiName: kpi.name, period, periodLabel: colLabel(period) })
+                            setNoteText(existing?.note || '')
+                          }}
+                        >
+                          {annotations[`${kpi.key}::${period}`] && (
+                            <div className="absolute top-0.5 right-0.5 w-1.5 h-1.5 rounded-full bg-blue-400" title={annotations[`${kpi.key}::${period}`].note}/>
+                          )}
+                          <span className="absolute bottom-0 right-0.5 text-[8px] text-slate-400 opacity-0 group-hover/cell:opacity-60 transition-opacity pointer-events-none">✎</span>
                           {val != null ? fmt(val, kpi.unit) : <span className="text-slate-300">—</span>}
                           {delta != null && (
                             <div className={`text-[8px] font-bold leading-tight mt-0.5 ${
@@ -914,6 +941,71 @@ export default function Fingerprint({ fingerprint, onKpiClick }) {
           </tbody>
         </table>
       </div>
+
+      {/* ── Annotation Editor Modal ──────────────────────────────────── */}
+      {editingNote && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/20" onClick={() => setEditingNote(null)}>
+          <div className="bg-white rounded-xl shadow-2xl border border-slate-200 p-4 w-80" onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-[12px] font-bold text-slate-700">
+                Note: {editingNote.kpiName} &middot; {editingNote.periodLabel}
+              </span>
+              <button onClick={() => setEditingNote(null)} className="text-slate-400 hover:text-slate-600">
+                <X size={14}/>
+              </button>
+            </div>
+            <textarea
+              className="w-full border border-slate-200 rounded-lg p-2 text-[12px] text-slate-700 resize-none focus:outline-none focus:ring-2 focus:ring-blue-300"
+              rows={3}
+              value={noteText}
+              onChange={e => setNoteText(e.target.value)}
+              placeholder="e.g. Lost Acme Corp deal, Hired 3 SDRs..."
+              autoFocus
+            />
+            <div className="flex justify-between mt-2">
+              {annotations[`${editingNote.kpiKey}::${editingNote.period}`] && (
+                <button
+                  onClick={() => {
+                    const annot = annotations[`${editingNote.kpiKey}::${editingNote.period}`]
+                    axios.delete(`/api/annotations/${annot.id}`).then(() => {
+                      setAnnotations(prev => {
+                        const next = { ...prev }
+                        delete next[`${editingNote.kpiKey}::${editingNote.period}`]
+                        return next
+                      })
+                      setEditingNote(null)
+                    })
+                  }}
+                  className="text-[11px] text-red-500 hover:text-red-700 font-medium">
+                  Delete
+                </button>
+              )}
+              <div className="flex gap-2 ml-auto">
+                <button onClick={() => setEditingNote(null)} className="text-[11px] text-slate-500 hover:text-slate-700 font-medium px-2 py-1">Cancel</button>
+                <button
+                  onClick={() => {
+                    if (!noteText.trim()) return
+                    axios.put('/api/annotations', {
+                      kpi_key: editingNote.kpiKey,
+                      period: editingNote.period,
+                      note: noteText.trim()
+                    }).then(r => {
+                      const a = r.data.annotation
+                      setAnnotations(prev => ({
+                        ...prev,
+                        [`${a.kpi_key}::${a.period}`]: a
+                      }))
+                      setEditingNote(null)
+                    })
+                  }}
+                  className="text-[11px] bg-[#0055A4] text-white font-medium px-3 py-1 rounded-lg hover:bg-[#003d80]">
+                  Save
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

@@ -78,6 +78,15 @@ def init_db():
             month INTEGER,
             data_json TEXT
         );
+        CREATE TABLE IF NOT EXISTS kpi_annotations (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            kpi_key TEXT NOT NULL,
+            period TEXT NOT NULL,
+            note TEXT NOT NULL,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(kpi_key, period)
+        );
     """)
     conn.commit()
     # Seed default targets
@@ -4110,6 +4119,417 @@ async def slack_notify(body: SlackAlertRequest):
         raise HTTPException(status_code=502, detail=str(exc))
 
     return {"status": "sent", "alerts_fired": len(body.red_kpis)}
+
+
+# ─── Board Deck PPTX Export ──────────────────────────────────────────────────
+
+from pptx import Presentation
+from pptx.util import Inches, Pt, Emu
+from pptx.dml.color import RGBColor
+from pptx.enum.text import PP_ALIGN
+
+def _hex_to_rgb(hex_str: str) -> RGBColor:
+    h = hex_str.lstrip("#")
+    return RGBColor(int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16))
+
+_DECK_DARK_BLUE = _hex_to_rgb("071e45")
+_DECK_HEADER_BLUE = _hex_to_rgb("0055A4")
+_DECK_WHITE = RGBColor(0xFF, 0xFF, 0xFF)
+_DECK_RED_BG = _hex_to_rgb("fef2f2")
+_DECK_RED_FG = _hex_to_rgb("dc2626")
+_DECK_GREEN_BG = _hex_to_rgb("f0fdf4")
+_DECK_GREEN_FG = _hex_to_rgb("059669")
+_DECK_YELLOW_BG = _hex_to_rgb("fffbeb")
+_DECK_YELLOW_FG = _hex_to_rgb("d97706")
+
+def _set_cell_style(cell, text, font_size=11, bold=False, fg=None, bg=None):
+    cell.text = str(text) if text is not None else ""
+    for paragraph in cell.text_frame.paragraphs:
+        paragraph.font.size = Pt(font_size)
+        paragraph.font.name = "Calibri"
+        paragraph.font.bold = bold
+        if fg:
+            paragraph.font.color.rgb = fg
+    if bg:
+        from pptx.oxml.ns import qn
+        tcPr = cell._tc.get_or_add_tcPr()
+        solidFill = tcPr.makeelement(qn("a:solidFill"), {})
+        srgbClr = solidFill.makeelement(qn("a:srgbClr"), {"val": bg.lstrip("#") if isinstance(bg, str) else f"{bg}"})
+        solidFill.append(srgbClr)
+        tcPr.append(solidFill)
+
+def _set_cell_bg_rgb(cell, rgb_color: RGBColor):
+    from pptx.oxml.ns import qn
+    tcPr = cell._tc.get_or_add_tcPr()
+    solidFill = tcPr.makeelement(qn("a:solidFill"), {})
+    srgbClr = solidFill.makeelement(qn("a:srgbClr"), {"val": f"{rgb_color}"})
+    solidFill.append(srgbClr)
+    tcPr.append(solidFill)
+
+def _status_colors(status: str):
+    if status == "red":
+        return _DECK_RED_FG, _DECK_RED_BG
+    elif status == "green":
+        return _DECK_GREEN_FG, _DECK_GREEN_BG
+    elif status == "yellow":
+        return _DECK_YELLOW_FG, _DECK_YELLOW_BG
+    return None, None
+
+def _add_header_row(table, col_texts):
+    for i, txt in enumerate(col_texts):
+        cell = table.cell(0, i)
+        _set_cell_style(cell, txt, font_size=11, bold=True, fg=_DECK_WHITE)
+        _set_cell_bg_rgb(cell, _DECK_HEADER_BLUE)
+
+def _compute_fingerprint_data():
+    """Reuse fingerprint logic without HTTP call."""
+    conn = get_db()
+    rows = conn.execute("SELECT * FROM monthly_data").fetchall()
+    targets = {r["kpi_key"]: {"target": r["target_value"], "direction": r["direction"], "unit": r["unit"]}
+               for r in conn.execute("SELECT * FROM kpi_targets").fetchall()}
+    conn.close()
+
+    kpi_monthly: dict = {}
+    for row in rows:
+        mo_key = f"{row['year']}-{row['month']:02d}"
+        data = json.loads(row["data_json"])
+        for kpi_key, val in data.items():
+            if kpi_key in ("year", "month"):
+                continue
+            kpi_monthly.setdefault(kpi_key, {})[mo_key] = val
+
+    fingerprint_out = []
+    for kdef in KPI_DEFS:
+        key = kdef["key"]
+        vals = kpi_monthly.get(key, {})
+        t = targets.get(key, {})
+        tval = t.get("target")
+        dirn = t.get("direction", "higher")
+        unit = t.get("unit", kdef["unit"])
+
+        monthly_list = [{"period": k, "value": v} for k, v in sorted(vals.items())]
+        values = [m["value"] for m in monthly_list]
+        avg = round(np.mean(values), 2) if values else None
+
+        def _status(val, target, direction):
+            if val is None or target is None:
+                return "grey"
+            pct = val / target if target else 0
+            if direction == "higher":
+                return "green" if pct >= 0.98 else ("yellow" if pct >= 0.90 else "red")
+            else:
+                return "green" if pct <= 1.02 else ("yellow" if pct <= 1.10 else "red")
+
+        trend = None
+        if len(values) >= 2:
+            trend = "up" if values[-1] > values[0] else ("down" if values[-1] < values[0] else "flat")
+
+        fingerprint_out.append({
+            "key": key,
+            "name": kdef["name"],
+            "unit": unit,
+            "target": tval,
+            "direction": dirn,
+            "avg": avg,
+            "trend": trend,
+            "fy_status": _status(avg, tval, dirn),
+            "monthly": monthly_list,
+        })
+    return fingerprint_out
+
+@app.get("/api/export/board-deck.pptx", tags=["Board Deck"])
+def export_board_deck(stage: str = "series_b"):
+    """Generate a 5-slide PPTX board deck with KPI health, red alerts, benchmarks, and watch zones."""
+    fp_data = _compute_fingerprint_data()
+
+    # Fetch benchmarks for the stage
+    valid_stages = {"seed", "series_a", "series_b", "series_c"}
+    if stage not in valid_stages:
+        stage = "series_b"
+    bench = {}
+    for kpi_key, stages_data in BENCHMARKS.items():
+        if stage in stages_data:
+            bench[kpi_key] = stages_data[stage]
+
+    # Categorise KPIs
+    green_kpis = [k for k in fp_data if k["fy_status"] == "green"]
+    yellow_kpis = [k for k in fp_data if k["fy_status"] == "yellow"]
+    red_kpis = [k for k in fp_data if k["fy_status"] == "red"]
+    total = len(green_kpis) + len(yellow_kpis) + len(red_kpis)
+    bhi = round((len(green_kpis) * 100 + len(yellow_kpis) * 60) / total) if total else 0
+    bhi_verdict = "Healthy" if bhi >= 80 else ("Caution" if bhi >= 60 else "At Risk")
+
+    prs = Presentation()
+    prs.slide_width = Inches(13.333)
+    prs.slide_height = Inches(7.5)
+    blank_layout = prs.slide_layouts[6]  # blank
+
+    # ── Slide 1: Title ──────────────────────────────────────────────────────
+    slide1 = prs.slides.add_slide(blank_layout)
+    bg1 = slide1.background
+    fill1 = bg1.fill
+    fill1.solid()
+    fill1.fore_color.rgb = _DECK_DARK_BLUE
+
+    txBox = slide1.shapes.add_textbox(Inches(1), Inches(2.2), Inches(11), Inches(1.5))
+    tf = txBox.text_frame
+    p = tf.paragraphs[0]
+    p.text = "Board Intelligence Brief"
+    p.font.size = Pt(40)
+    p.font.name = "Calibri"
+    p.font.bold = True
+    p.font.color.rgb = _DECK_WHITE
+    p.alignment = PP_ALIGN.CENTER
+
+    txBox2 = slide1.shapes.add_textbox(Inches(1), Inches(3.8), Inches(11), Inches(1))
+    tf2 = txBox2.text_frame
+    p2 = tf2.paragraphs[0]
+    p2.text = f"{datetime.now().strftime('%B %d, %Y')}  |  Generated by Axiom Intelligence"
+    p2.font.size = Pt(18)
+    p2.font.name = "Calibri"
+    p2.font.color.rgb = _DECK_WHITE
+    p2.alignment = PP_ALIGN.CENTER
+
+    # ── Slide 2: Business Health Summary ────────────────────────────────────
+    slide2 = prs.slides.add_slide(blank_layout)
+    title2 = slide2.shapes.add_textbox(Inches(0.5), Inches(0.3), Inches(8), Inches(0.7))
+    tf_t2 = title2.text_frame
+    p_t2 = tf_t2.paragraphs[0]
+    p_t2.text = "Business Health Summary"
+    p_t2.font.size = Pt(28)
+    p_t2.font.name = "Calibri"
+    p_t2.font.bold = True
+
+    # BHI score box
+    score_box = slide2.shapes.add_textbox(Inches(9), Inches(0.3), Inches(4), Inches(0.7))
+    tf_s = score_box.text_frame
+    p_s = tf_s.paragraphs[0]
+    p_s.text = f"BHI Score: {bhi}  —  {bhi_verdict}"
+    p_s.font.size = Pt(20)
+    p_s.font.name = "Calibri"
+    p_s.font.bold = True
+    fg_bhi, _ = _status_colors("green" if bhi >= 80 else ("yellow" if bhi >= 60 else "red"))
+    if fg_bhi:
+        p_s.font.color.rgb = fg_bhi
+
+    # Summary table
+    tbl2 = slide2.shapes.add_table(2, 4, Inches(0.5), Inches(1.5), Inches(8), Inches(1)).table
+    _add_header_row(tbl2, ["Total KPIs", "Green", "Yellow", "Red"])
+    vals2 = [str(total), str(len(green_kpis)), str(len(yellow_kpis)), str(len(red_kpis))]
+    colors2 = [None, _DECK_GREEN_FG, _DECK_YELLOW_FG, _DECK_RED_FG]
+    for i, (v, c) in enumerate(zip(vals2, colors2)):
+        cell = tbl2.cell(1, i)
+        _set_cell_style(cell, v, font_size=14, bold=True, fg=c)
+
+    # ── Slide 3: Critical KPIs (Red) ───────────────────────────────────────
+    slide3 = prs.slides.add_slide(blank_layout)
+    title3 = slide3.shapes.add_textbox(Inches(0.5), Inches(0.3), Inches(8), Inches(0.7))
+    p_t3 = title3.text_frame.paragraphs[0]
+    p_t3.text = "Critical KPIs (Red)"
+    p_t3.font.size = Pt(28)
+    p_t3.font.name = "Calibri"
+    p_t3.font.bold = True
+
+    # Sort red KPIs by gap magnitude
+    red_rows = []
+    for k in red_kpis:
+        if k["avg"] is not None and k["target"] is not None and k["target"] != 0:
+            gap_pct = round((k["avg"] - k["target"]) / abs(k["target"]) * 100, 1)
+        else:
+            gap_pct = 0
+        red_rows.append((k["name"], k["avg"], k["target"], gap_pct, k["fy_status"]))
+    red_rows.sort(key=lambda r: abs(r[3]), reverse=True)
+
+    if red_rows:
+        n_rows = len(red_rows) + 1
+        tbl3 = slide3.shapes.add_table(n_rows, 5, Inches(0.5), Inches(1.3), Inches(12), Inches(min(n_rows * 0.5, 5.5))).table
+        _add_header_row(tbl3, ["KPI Name", "Current", "Target", "Gap %", "Status"])
+        for ri, (name, current, target, gap, status) in enumerate(red_rows, 1):
+            fg, bg = _status_colors(status)
+            _set_cell_style(tbl3.cell(ri, 0), name)
+            _set_cell_style(tbl3.cell(ri, 1), current)
+            _set_cell_style(tbl3.cell(ri, 2), target)
+            _set_cell_style(tbl3.cell(ri, 3), f"{gap:+.1f}%", fg=fg)
+            cell_status = tbl3.cell(ri, 4)
+            _set_cell_style(cell_status, status.upper(), bold=True, fg=fg)
+            if bg:
+                _set_cell_bg_rgb(cell_status, bg)
+    else:
+        no_red = slide3.shapes.add_textbox(Inches(0.5), Inches(2), Inches(8), Inches(1))
+        no_red.text_frame.paragraphs[0].text = "No critical (red) KPIs — all clear!"
+        no_red.text_frame.paragraphs[0].font.size = Pt(16)
+        no_red.text_frame.paragraphs[0].font.name = "Calibri"
+
+    # ── Slide 4: Benchmark Comparison ───────────────────────────────────────
+    slide4 = prs.slides.add_slide(blank_layout)
+    title4 = slide4.shapes.add_textbox(Inches(0.5), Inches(0.3), Inches(8), Inches(0.7))
+    p_t4 = title4.text_frame.paragraphs[0]
+    p_t4.text = f"Benchmark Comparison ({stage.replace('_', ' ').title()})"
+    p_t4.font.size = Pt(28)
+    p_t4.font.name = "Calibri"
+    p_t4.font.bold = True
+
+    bench_rows = []
+    for k in fp_data:
+        if k["key"] in bench and k["avg"] is not None:
+            b = bench[k["key"]]
+            val = k["avg"]
+            if val >= b["p75"]:
+                pos = "Above P75"
+            elif val >= b["p50"]:
+                pos = "P50–P75"
+            elif val >= b["p25"]:
+                pos = "P25–P50"
+            else:
+                pos = "Below P25"
+            bench_rows.append((k["name"], val, b["p25"], b["p50"], b["p75"], pos))
+
+    if bench_rows:
+        n_br = len(bench_rows) + 1
+        tbl4 = slide4.shapes.add_table(n_br, 6, Inches(0.5), Inches(1.3), Inches(12), Inches(min(n_br * 0.5, 5.5))).table
+        _add_header_row(tbl4, ["KPI Name", "Current", "P25", "P50 (Median)", "P75", "Position"])
+        for ri, (name, val, p25, p50, p75, pos) in enumerate(bench_rows, 1):
+            _set_cell_style(tbl4.cell(ri, 0), name)
+            _set_cell_style(tbl4.cell(ri, 1), val)
+            _set_cell_style(tbl4.cell(ri, 2), p25)
+            _set_cell_style(tbl4.cell(ri, 3), p50)
+            _set_cell_style(tbl4.cell(ri, 4), p75)
+            pos_fg = _DECK_GREEN_FG if "P75" in pos else (_DECK_RED_FG if "Below" in pos else None)
+            _set_cell_style(tbl4.cell(ri, 5), pos, bold=True, fg=pos_fg)
+    else:
+        nb = slide4.shapes.add_textbox(Inches(0.5), Inches(2), Inches(8), Inches(1))
+        nb.text_frame.paragraphs[0].text = "No benchmark data available."
+        nb.text_frame.paragraphs[0].font.size = Pt(16)
+        nb.text_frame.paragraphs[0].font.name = "Calibri"
+
+    # ── Slide 5: Watch Zone + Bright Spots ──────────────────────────────────
+    slide5 = prs.slides.add_slide(blank_layout)
+    title5 = slide5.shapes.add_textbox(Inches(0.5), Inches(0.3), Inches(8), Inches(0.7))
+    p_t5 = title5.text_frame.paragraphs[0]
+    p_t5.text = "Watch Zone & Bright Spots"
+    p_t5.font.size = Pt(28)
+    p_t5.font.name = "Calibri"
+    p_t5.font.bold = True
+
+    y_offset = 1.3
+    # Yellow (watch) section
+    watch_label = slide5.shapes.add_textbox(Inches(0.5), Inches(y_offset), Inches(5), Inches(0.5))
+    wl_p = watch_label.text_frame.paragraphs[0]
+    wl_p.text = "Watch Zone (Yellow KPIs)"
+    wl_p.font.size = Pt(18)
+    wl_p.font.name = "Calibri"
+    wl_p.font.bold = True
+    wl_p.font.color.rgb = _DECK_YELLOW_FG
+    y_offset += 0.6
+
+    if yellow_kpis:
+        n_yw = len(yellow_kpis) + 1
+        tbl5y = slide5.shapes.add_table(n_yw, 3, Inches(0.5), Inches(y_offset), Inches(8), Inches(min(n_yw * 0.4, 2.5))).table
+        _add_header_row(tbl5y, ["KPI Name", "Current", "Target"])
+        for ri, k in enumerate(yellow_kpis, 1):
+            _set_cell_style(tbl5y.cell(ri, 0), k["name"])
+            _set_cell_style(tbl5y.cell(ri, 1), k["avg"], fg=_DECK_YELLOW_FG)
+            _set_cell_style(tbl5y.cell(ri, 2), k["target"])
+        y_offset += min(n_yw * 0.4, 2.5) + 0.3
+    else:
+        no_y = slide5.shapes.add_textbox(Inches(0.5), Inches(y_offset), Inches(8), Inches(0.4))
+        no_y.text_frame.paragraphs[0].text = "No yellow KPIs."
+        no_y.text_frame.paragraphs[0].font.size = Pt(14)
+        no_y.text_frame.paragraphs[0].font.name = "Calibri"
+        y_offset += 0.6
+
+    # Green (bright spots) section
+    bright_label = slide5.shapes.add_textbox(Inches(0.5), Inches(y_offset), Inches(5), Inches(0.5))
+    bl_p = bright_label.text_frame.paragraphs[0]
+    bl_p.text = "Bright Spots (Green KPIs)"
+    bl_p.font.size = Pt(18)
+    bl_p.font.name = "Calibri"
+    bl_p.font.bold = True
+    bl_p.font.color.rgb = _DECK_GREEN_FG
+    y_offset += 0.6
+
+    if green_kpis:
+        n_gw = len(green_kpis) + 1
+        tbl5g = slide5.shapes.add_table(n_gw, 3, Inches(0.5), Inches(y_offset), Inches(8), Inches(min(n_gw * 0.4, 2.5))).table
+        _add_header_row(tbl5g, ["KPI Name", "Current", "Target"])
+        for ri, k in enumerate(green_kpis, 1):
+            _set_cell_style(tbl5g.cell(ri, 0), k["name"])
+            _set_cell_style(tbl5g.cell(ri, 1), k["avg"], fg=_DECK_GREEN_FG)
+            _set_cell_style(tbl5g.cell(ri, 2), k["target"])
+    else:
+        no_g = slide5.shapes.add_textbox(Inches(0.5), Inches(y_offset), Inches(8), Inches(0.4))
+        no_g.text_frame.paragraphs[0].text = "No green KPIs."
+        no_g.text_frame.paragraphs[0].font.size = Pt(14)
+        no_g.text_frame.paragraphs[0].font.name = "Calibri"
+
+    # Serialize to bytes
+    buf = io.BytesIO()
+    prs.save(buf)
+    buf.seek(0)
+
+    return StreamingResponse(
+        buf,
+        media_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        headers={"Content-Disposition": "attachment; filename=board-deck.pptx"},
+    )
+
+
+# ─── KPI Annotations CRUD ───────────────────────────────────────────────────
+
+from pydantic import BaseModel as _AnnotationBaseModel
+
+class _AnnotationBody(_AnnotationBaseModel):
+    kpi_key: str
+    period: str
+    note: str
+
+@app.get("/api/annotations", tags=["Annotations"])
+def list_annotations(kpi_key: Optional[str] = None, period: Optional[str] = None):
+    """List KPI annotations, optionally filtered by kpi_key and/or period."""
+    conn = get_db()
+    clauses, params = [], []
+    if kpi_key:
+        clauses.append("kpi_key = ?")
+        params.append(kpi_key)
+    if period:
+        clauses.append("period = ?")
+        params.append(period)
+    where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+    rows = conn.execute(f"SELECT * FROM kpi_annotations{where} ORDER BY created_at DESC", params).fetchall()
+    conn.close()
+    return {"annotations": [dict(r) for r in rows]}
+
+@app.put("/api/annotations", tags=["Annotations"])
+def upsert_annotation(body: _AnnotationBody):
+    """Create or update (upsert) a KPI annotation for a given kpi_key + period."""
+    conn = get_db()
+    now = datetime.utcnow().isoformat()
+    conn.execute(
+        """INSERT INTO kpi_annotations (kpi_key, period, note, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?)
+           ON CONFLICT(kpi_key, period) DO UPDATE SET note=excluded.note, updated_at=excluded.updated_at""",
+        (body.kpi_key, body.period, body.note, now, now),
+    )
+    conn.commit()
+    row = conn.execute(
+        "SELECT * FROM kpi_annotations WHERE kpi_key=? AND period=?",
+        (body.kpi_key, body.period),
+    ).fetchone()
+    conn.close()
+    return {"status": "ok", "annotation": dict(row)}
+
+@app.delete("/api/annotations/{annotation_id}", tags=["Annotations"])
+def delete_annotation(annotation_id: int):
+    """Delete a KPI annotation by its ID."""
+    conn = get_db()
+    existing = conn.execute("SELECT id FROM kpi_annotations WHERE id=?", (annotation_id,)).fetchone()
+    if not existing:
+        conn.close()
+        raise HTTPException(status_code=404, detail="Annotation not found")
+    conn.execute("DELETE FROM kpi_annotations WHERE id=?", (annotation_id,))
+    conn.commit()
+    conn.close()
+    return {"status": "ok"}
 
 
 # ─── Serve React Frontend ───────────────────────────────────────────────────

@@ -1142,7 +1142,16 @@ export default function BoardReady({ fingerprint, bridgeData, onNavigate, period
           ))}
         </div>
 
-        <div className="ml-auto flex-shrink-0">
+        <div className="ml-auto flex-shrink-0 flex items-center gap-2">
+          <button onClick={() => {
+              const a = document.createElement('a')
+              a.href = `/api/export/board-deck.pptx?stage=${companyStage || 'series_b'}`
+              a.download = 'board-deck.pptx'
+              a.click()
+            }}
+            className="flex items-center gap-1.5 px-3 py-2 bg-[#0055A4] hover:bg-[#003d80] border border-[#0055A4] rounded-xl text-[11px] text-white font-semibold transition-all">
+            <ExternalLink size={12}/> Board Deck
+          </button>
           <button onClick={e => { e.stopPropagation(); window.print() }}
             className="flex items-center gap-1.5 px-3 py-2 bg-slate-100 hover:bg-slate-200 border border-slate-200 rounded-xl text-[11px] text-slate-600 font-semibold transition-all">
             <Printer size={12}/> Print
@@ -1270,6 +1279,68 @@ export default function BoardReady({ fingerprint, bridgeData, onNavigate, period
             {recoveringCount > 0 ? ` and ${recoveringCount} showing recovery momentum` : ''}.
           </p>
         )
+
+        // — Month-over-Month Delta
+        const momDelta = (() => {
+          // Get all periods from the first KPI's monthly data, sorted
+          const allPeriods = [...new Set(fp.flatMap(k => (k.monthly || []).map(m => m.period)))].sort()
+          if (allPeriods.length < 2) return null
+          const lastPeriod = allPeriods[allPeriods.length - 1]
+          const prevPeriod = allPeriods[allPeriods.length - 2]
+
+          let improved = 0, deteriorated = 0, crossedToRed = [], crossedToGreen = []
+          let biggestImprover = null, biggestDecliner = null
+          let bestDelta = -Infinity, worstDelta = Infinity
+
+          fp.forEach(kpi => {
+            const last = kpi.monthly?.find(m => m.period === lastPeriod)?.value
+            const prev = kpi.monthly?.find(m => m.period === prevPeriod)?.value
+            if (last == null || prev == null || prev === 0) return
+
+            const delta = ((last - prev) / Math.abs(prev)) * 100
+            const isImprovement = kpi.direction === 'higher' ? delta > 0 : delta < 0
+
+            if (isImprovement) improved++
+            else if (Math.abs(delta) > 1) deteriorated++
+
+            // Status changes
+            const lastStatus = cellStatus(last, kpi.target, kpi.direction)
+            const prevStatus = cellStatus(prev, kpi.target, kpi.direction)
+            if (lastStatus === 'red' && prevStatus !== 'red') crossedToRed.push(kpi)
+            if (lastStatus === 'green' && prevStatus !== 'green') crossedToGreen.push(kpi)
+
+            const signedDelta = isImprovement ? Math.abs(delta) : -Math.abs(delta)
+            if (signedDelta > bestDelta) { bestDelta = signedDelta; biggestImprover = { kpi, delta } }
+            if (signedDelta < worstDelta) { worstDelta = signedDelta; biggestDecliner = { kpi, delta } }
+          })
+
+          return { improved, deteriorated, crossedToRed, crossedToGreen, biggestImprover, biggestDecliner, lastPeriod, prevPeriod }
+        })()
+
+        if (momDelta && (momDelta.improved + momDelta.deteriorated > 0)) {
+          const MONTHS_SHORT = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']
+          const periodName = (p) => {
+            const [y,m] = p.split('-')
+            return `${MONTHS_SHORT[parseInt(m,10)-1]} ${y}`
+          }
+          paragraphs.push(
+            <p key="mom-delta" className="text-[13px] text-white/90 leading-relaxed">
+              Compared to {periodName(momDelta.prevPeriod)}: {momDelta.improved} KPI{momDelta.improved !== 1 ? 's' : ''} improved, {momDelta.deteriorated} deteriorated.
+              {momDelta.crossedToRed.length > 0 && (
+                <>{' '}{momDelta.crossedToRed.map((k,i) => <span key={k.key}>{i > 0 ? ', ' : ''}{kpiChip(k)}</span>)} crossed into the red zone this period.</>
+              )}
+              {momDelta.crossedToGreen.length > 0 && (
+                <>{' '}{momDelta.crossedToGreen.map((k,i) => <span key={k.key}>{i > 0 ? ', ' : ''}{kpiChip(k)}</span>)} recovered to on-target.</>
+              )}
+              {momDelta.biggestImprover && (
+                <>{' '}Biggest positive move: {kpiChip(momDelta.biggestImprover.kpi)}, up {Math.abs(momDelta.biggestImprover.delta).toFixed(1)}%.</>
+              )}
+              {momDelta.biggestDecliner && momDelta.biggestDecliner.kpi.key !== momDelta.biggestImprover?.kpi?.key && (
+                <>{' '}Sharpest decline: {kpiChip(momDelta.biggestDecliner.kpi)}, down {Math.abs(momDelta.biggestDecliner.delta).toFixed(1)}%.</>
+              )}
+            </p>
+          )
+        }
 
         // — Peer context sentence for top red KPI (if benchmark data available)
         if (top2Red.length > 0 && benchmarks) {
@@ -1700,6 +1771,107 @@ export default function BoardReady({ fingerprint, bridgeData, onNavigate, period
           </div>
         </div>
       </div>
+
+      {/* ── FUNDRAISING READINESS ─────────────────────────────────────────── */}
+      {benchmarks && Object.keys(benchmarks).length > 0 && (() => {
+        // Score each KPI vs peer benchmarks
+        let aboveP75 = 0, aboveP50 = 0, belowP25 = 0, total = 0
+        const scrutinyKpis = []
+        const strengthKpis = []
+
+        fp.forEach(kpi => {
+          const bm = benchmarks[kpi.key]
+          if (!bm || kpi.avg == null) return
+          total++
+          const isLower = kpi.direction === 'lower'
+          const val = kpi.avg
+
+          // For "lower is better" KPIs, being below p25 means being BETTER
+          const isAboveP75 = isLower ? val < bm.p25 : val > bm.p75
+          const isAboveP50 = isLower ? val < bm.p50 : val > bm.p50
+          const isBelowP25 = isLower ? val > bm.p75 : val < bm.p25
+
+          if (isAboveP75) { aboveP75++; strengthKpis.push(kpi) }
+          else if (isAboveP50) aboveP50++
+          if (isBelowP25) { belowP25++; scrutinyKpis.push(kpi) }
+        })
+
+        if (total === 0) return null
+
+        const topQuartilePct = Math.round((aboveP75 / total) * 100)
+        const bottomQuartilePct = Math.round((belowP25 / total) * 100)
+
+        // Overall positioning
+        const position = aboveP75 > belowP25 * 2 ? 'top quartile'
+          : aboveP75 >= belowP25 ? 'median range'
+          : 'bottom quartile'
+
+        const posColor = position === 'top quartile' ? '#10b981' : position === 'median range' ? '#f59e0b' : '#ef4444'
+        const nextRound = { seed: 'Series A', series_a: 'Series B', series_b: 'Series C', series_c: 'Growth/IPO' }[companyStage] || 'next round'
+
+        return (
+          <div className="rounded-2xl overflow-hidden border border-slate-200 bg-white shadow-sm">
+            <div style={{ height: 4, background: posColor }}/>
+            <div className="p-6">
+              <div className="flex items-center gap-2 mb-4">
+                <ArrowUpRight size={14} className="text-slate-500"/>
+                <span className="text-[11px] font-black text-slate-600 uppercase tracking-widest">Fundraising Readiness</span>
+                <div className="flex-1 h-px bg-slate-100"/>
+                <span className="text-[10px] text-slate-400">vs {stageLabel(companyStage)} peers</span>
+              </div>
+
+              <div className="flex items-start gap-6 flex-wrap">
+                {/* Position badge */}
+                <div className="text-center px-4 py-3 rounded-xl border" style={{ borderColor: posColor + '40', background: posColor + '08' }}>
+                  <div className="text-[28px] font-black leading-none" style={{ color: posColor }}>
+                    {position === 'top quartile' ? 'T1' : position === 'median range' ? 'M' : 'B1'}
+                  </div>
+                  <div className="text-[10px] font-bold text-slate-500 uppercase mt-1 tracking-wide">
+                    {position}
+                  </div>
+                </div>
+
+                {/* Narrative */}
+                <div className="flex-1 min-w-[260px]">
+                  <p className="text-[13px] text-slate-700 leading-relaxed mb-3">
+                    Based on current metrics, this business would be positioned in the{' '}
+                    <span className="font-bold" style={{ color: posColor }}>{position}</span>{' '}
+                    for a {nextRound} raise.{' '}
+                    {topQuartilePct > 0 && <>{topQuartilePct}% of benchmarked KPIs exceed the 75th percentile. </>}
+                    {bottomQuartilePct > 0 && <>{bottomQuartilePct}% fall below the 25th percentile. </>}
+                  </p>
+
+                  {scrutinyKpis.length > 0 && (
+                    <div className="mb-2">
+                      <span className="text-[10px] font-bold text-red-500 uppercase tracking-wider">Likely investor scrutiny:</span>
+                      <div className="flex flex-wrap gap-1.5 mt-1">
+                        {scrutinyKpis.slice(0, 4).map(k => (
+                          <span key={k.key} className="text-[11px] font-medium text-red-700 bg-red-50 border border-red-200 px-2 py-0.5 rounded-full">
+                            {k.name}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {strengthKpis.length > 0 && (
+                    <div>
+                      <span className="text-[10px] font-bold text-emerald-600 uppercase tracking-wider">Likely investor strengths:</span>
+                      <div className="flex flex-wrap gap-1.5 mt-1">
+                        {strengthKpis.slice(0, 4).map(k => (
+                          <span key={k.key} className="text-[11px] font-medium text-emerald-700 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-full">
+                            {k.name}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          </div>
+        )
+      })()}
 
       {/* ── SIDE PANEL ───────────────────────────────────────────────────── */}
       <SidePanel
