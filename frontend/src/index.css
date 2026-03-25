@@ -1,0 +1,126 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+* { font-family: 'Inter', sans-serif; }
+
+/* ── Base ──────────────────────────────────────────────── */
+/*
+  Body: #E6F2FF — light sky blue canvas.
+*/
+body { background: #E6F2FF; color: #0f172a; }
+
+/* ── Scrollbars ─────────────────────────────────────────── */
+::-webkit-scrollbar { width: 5px; height: 5px; }
+::-webkit-scrollbar-track { background: #C8DFF5; }
+::-webkit-scrollbar-thumb { background: #7AABDA; border-radius: 3px; }
+
+/* ── Sidebar ────────────────────────────────────────────── */
+/*
+  Deeper ink-navy: #07122A → #0E2248
+  Research: Financial SaaS leaders (Cohere, Amplitude, Brex) use a
+  deeper, near-black navy with rich blue undertones — feels premium
+  and authoritative. Stronger depth vs the old #0f2044 → #1a3360.
+*/
+.sidebar {
+  background: linear-gradient(180deg, #07122A 0%, #0E2248 100%);
+  box-shadow: 4px 0 28px rgba(0,0,0,0.25);
+}
+.sidebar-link {
+  @apply flex items-center gap-3 px-4 py-3 mx-2 rounded-lg text-sm font-medium
+         text-slate-300 hover:text-white hover:bg-white/10 transition-all cursor-pointer;
+}
+.sidebar-link.active {
+  @apply bg-white/15 text-white;
+  border-left: 3px solid #00AEEF;
+  padding-left: calc(1rem - 3px);
+}
+.sidebar-link.active svg { color: #00AEEF; }
+
+/* ── Cards ──────────────────────────────────────────────── */
+/*
+  White cards on the blue-tinted background create clear depth.
+  Slightly more shadow + warmer border for the "elevated surface"
+  aesthetic used by Linear, Notion, and Retool in 2025.
+*/
+.card {
+  background: #ffffff;
+  border: 1px solid #DDE5F4;
+  border-radius: 14px;
+  box-shadow: 0 1px 5px rgba(15,23,42,0.07), 0 0 0 0.5px rgba(100,130,200,0.06);
+}
+.card:hover {
+  box-shadow: 0 5px 18px rgba(15,23,42,0.11), 0 0 0 0.5px rgba(100,130,200,0.08);
+  transition: box-shadow 0.2s;
+}
+
+/* ── KPI Section Accents ────────────────────────────────── */
+.section-critical { border-left: 4px solid #dc2626; }
+.section-attention { border-left: 4px solid #d97706; }
+.section-normal   { border-left: 4px solid #059669; }
+
+/* ── Status colours (text) ──────────────────────────────── */
+.kpi-green  { color: #059669; }
+.kpi-yellow { color: #d97706; }
+.kpi-red    { color: #dc2626; }
+.kpi-grey   { color: #64748b; }
+
+/* ── KPI card border-left by status ──────────────────────── */
+.kpi-card-green  { border-left: 4px solid #059669 !important; }
+.kpi-card-yellow { border-left: 4px solid #d97706 !important; }
+.kpi-card-red    { border-left: 4px solid #dc2626 !important; }
+.kpi-card-grey   { border-left: 4px solid #94a3b8 !important; }
+
+/* ── Pill badges ─────────────────────────────────────────── */
+.badge-green  { background:#dcfce7; color:#166534; }
+.badge-yellow { background:#fef9c3; color:#854d0e; }
+.badge-red    { background:#fee2e2; color:#991b1b; }
+.badge-grey   { background:#f1f5f9; color:#475569; }
+
+/* ── Top summary strip ───────────────────────────────────── */
+.summary-tile {
+  @apply bg-white border rounded-xl px-4 py-3;
+  border-color: #DDE5F4;
+  box-shadow: 0 1px 4px rgba(15,23,42,0.06);
+}
+
+/* ── Section header bar ──────────────────────────────────── */
+.section-header {
+  @apply flex items-center gap-3 mb-4 pb-3;
+  border-bottom: 2px solid;
+}
+
+/* ── Topbar ──────────────────────────────────────────────── */
+/*
+  White topbar with a blue-tinted border to harmonise with the body.
+  Slightly stronger shadow for clear depth separation.
+*/
+.topbar {
+  background: #ffffff;
+  border-bottom: 1px solid #D8E2F5;
+  box-shadow: 0 1px 6px rgba(15,23,42,0.07);
+}
+
+/* ── Page title ──────────────────────────────────────────── */
+.page-title {
+  @apply text-base font-semibold text-slate-800 flex items-center gap-2;
+}
+.page-title::before {
+  content: '';
+  display: inline-block;
+  width: 4px; height: 18px;
+  background: linear-gradient(180deg, #0055A4 0%, #00AEEF 100%);
+  border-radius: 2px;
+}
+
+/* ── Heat map cells ──────────────────────────────────────── */
+.hm-green  { background:#dcfce7; color:#166534; }
+.hm-yellow { background:#fef9c3; color:#854d0e; }
+.hm-red    { background:#fee2e2; color:#991b1b; }
+.hm-grey   { background:#f8fafc; color:#64748b; }
+
+@keyframes pulse-accent {
+  0%,100% { box-shadow: 0 0 0 0 rgba(0,85,164,0); }
+  50%      { box-shadow: 0 0 14px 4px rgba(0,85,164,0.18); }
+}
+.pulse-accent { animation: pulse-accent 3s ease-in-out infinite; }
