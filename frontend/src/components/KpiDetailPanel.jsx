@@ -54,8 +54,13 @@ function SmartDot({ cx, cy, value, isBest, isWorst }) {
   return <Dot cx={cx} cy={cy} r={3} fill="#0055A4" stroke="#fff" strokeWidth={1}/>
 }
 
+/* ── stage label helper ─────────────────────────────── */
+function stageLabel(s) {
+  return ({ seed: 'Seed', series_a: 'Series A', series_b: 'Series B', series_c: 'Series C+' }[s] || s)
+}
+
 /* ── main panel ─────────────────────────────────────── */
-export default function KpiDetailPanel({ kpi, onClose, periodLabel }) {
+export default function KpiDetailPanel({ kpi, onClose, periodLabel, benchmarks, companyStage }) {
   const isOpen = !!kpi
 
   /* Escape key to close */
@@ -521,6 +526,103 @@ export default function KpiDetailPanel({ kpi, onClose, periodLabel }) {
                   </div>
                 )}
               </div>
+              )
+            })()}
+
+            {/* ── vs Industry Peers ─────────────────────────── */}
+            {benchmarks && kpi && benchmarks[kpi.key] && (() => {
+              const bm = benchmarks[kpi.key]
+              const avg = kpi.avg
+              const isLower = kpi.direction === 'lower'
+
+              // Compute position on the p25–p75 scale for the bar
+              // We render a range bar showing p25, p50, p75 and a dot for company value
+              const allVals = [bm.p25, bm.p50, bm.p75, avg].filter(v => v != null)
+              const barMin = Math.min(...allVals) * (isLower ? 1.1 : 0.9)
+              const barMax = Math.max(...allVals) * (isLower ? 0.9 : 1.1)
+              const range = barMax - barMin || 1
+
+              function pct(v) {
+                return Math.max(0, Math.min(100, ((v - barMin) / range) * 100))
+              }
+
+              const companyPct = avg != null ? pct(avg) : null
+              const pctFromMedian = (avg != null && bm.p50 != null && bm.p50 !== 0)
+                ? ((avg - bm.p50) / Math.abs(bm.p50)) * 100
+                : null
+              const isAboveMedian = pctFromMedian != null
+                ? (isLower ? pctFromMedian < 0 : pctFromMedian > 0)
+                : null
+
+              return (
+                <div className="px-6 py-4 border-t border-slate-100">
+                  <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-3">
+                    vs Industry Peers ({stageLabel(companyStage)})
+                  </p>
+
+                  {/* Visual range bar */}
+                  <div className="relative h-5 mb-3">
+                    {/* Background track */}
+                    <div className="absolute top-1/2 -translate-y-1/2 left-0 right-0 h-1.5 bg-slate-100 rounded-full"/>
+
+                    {/* p25–p75 highlighted range */}
+                    <div
+                      className="absolute top-1/2 -translate-y-1/2 h-1.5 rounded-full bg-blue-100 border border-blue-200"
+                      style={{
+                        left: `${pct(bm.p25)}%`,
+                        width: `${pct(bm.p75) - pct(bm.p25)}%`,
+                      }}
+                    />
+
+                    {/* p25 marker */}
+                    <div className="absolute top-0 h-full flex flex-col items-center" style={{ left: `${pct(bm.p25)}%` }}>
+                      <div className="w-0.5 h-full bg-blue-300"/>
+                    </div>
+
+                    {/* p50 marker */}
+                    <div className="absolute top-0 h-full flex flex-col items-center" style={{ left: `${pct(bm.p50)}%` }}>
+                      <div className="w-0.5 h-full bg-blue-500"/>
+                    </div>
+
+                    {/* p75 marker */}
+                    <div className="absolute top-0 h-full flex flex-col items-center" style={{ left: `${pct(bm.p75)}%` }}>
+                      <div className="w-0.5 h-full bg-blue-300"/>
+                    </div>
+
+                    {/* Company dot */}
+                    {companyPct != null && (
+                      <div
+                        className="absolute top-1/2 -translate-y-1/2 -translate-x-1/2 w-3.5 h-3.5 rounded-full border-2 border-white shadow-md z-10"
+                        style={{
+                          left: `${companyPct}%`,
+                          background: isAboveMedian ? '#059669' : '#dc2626',
+                        }}
+                      />
+                    )}
+                  </div>
+
+                  {/* Labels */}
+                  <div className="flex justify-between text-[9px] text-slate-400 mb-3">
+                    <span>P25: {fmt(bm.p25, kpi.unit)}</span>
+                    <span className="font-semibold text-blue-500">Median: {fmt(bm.p50, kpi.unit)}</span>
+                    <span>P75: {fmt(bm.p75, kpi.unit)}</span>
+                  </div>
+
+                  {/* Verdict */}
+                  {avg != null && pctFromMedian != null && (
+                    <p className={`text-[11px] font-semibold ${isAboveMedian ? 'text-emerald-600' : 'text-red-500'}`}>
+                      Your avg {fmt(avg, kpi.unit)} is {Math.abs(pctFromMedian).toFixed(1)}%{' '}
+                      {isAboveMedian ? 'above' : 'below'} the {stageLabel(companyStage)} peer median.
+                    </p>
+                  )}
+                  {avg == null && (
+                    <p className="text-[11px] text-slate-400">No data available for comparison.</p>
+                  )}
+
+                  <p className="text-[9px] text-slate-300 mt-1.5">
+                    Source: OpenView, Bessemer, SaaS Capital benchmarks
+                  </p>
+                </div>
               )
             })()}
 

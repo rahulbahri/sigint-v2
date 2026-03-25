@@ -820,6 +820,125 @@ def calc_revenue_growth(monthly_kpi_df: pd.DataFrame) -> pd.DataFrame:
     monthly_kpi_df = monthly_kpi_df.copy()
     return monthly_kpi_df
 
+# ─── Industry Benchmarks (SaaS — OpenView / Bessemer / SaaS Capital) ────────
+
+BENCHMARKS = {
+    "revenue_growth": {
+        "seed":     {"p25": 30,  "p50": 60,  "p75": 120, "label": "% YoY"},
+        "series_a": {"p25": 50,  "p50": 80,  "p75": 130, "label": "% YoY"},
+        "series_b": {"p25": 35,  "p50": 60,  "p75": 90,  "label": "% YoY"},
+        "series_c": {"p25": 20,  "p50": 40,  "p75": 65,  "label": "% YoY"},
+    },
+    "gross_margin": {
+        "seed":     {"p25": 55,  "p50": 65,  "p75": 74},
+        "series_a": {"p25": 60,  "p50": 70,  "p75": 78},
+        "series_b": {"p25": 63,  "p50": 72,  "p75": 80},
+        "series_c": {"p25": 65,  "p50": 74,  "p75": 82},
+    },
+    "operating_margin": {
+        "seed":     {"p25": -65, "p50": -40, "p75": -20},
+        "series_a": {"p25": -40, "p50": -20, "p75":  -5},
+        "series_b": {"p25": -20, "p50":  -5, "p75":  10},
+        "series_c": {"p25": -10, "p50":   5, "p75":  20},
+    },
+    "ebitda_margin": {
+        "seed":     {"p25": -70, "p50": -45, "p75": -20},
+        "series_a": {"p25": -45, "p50": -22, "p75":  -8},
+        "series_b": {"p25": -22, "p50":  -8, "p75":   8},
+        "series_c": {"p25":  -8, "p50":   5, "p75":  22},
+    },
+    "nrr": {
+        "seed":     {"p25": 85,  "p50": 98,  "p75": 108},
+        "series_a": {"p25": 90,  "p50": 104, "p75": 115},
+        "series_b": {"p25": 95,  "p50": 108, "p75": 118},
+        "series_c": {"p25": 100, "p50": 112, "p75": 125},
+    },
+    "arr_growth": {
+        "seed":     {"p25": 30,  "p50": 70,  "p75": 150},
+        "series_a": {"p25": 55,  "p50": 85,  "p75": 140},
+        "series_b": {"p25": 38,  "p50": 62,  "p75": 95},
+        "series_c": {"p25": 22,  "p50": 42,  "p75": 68},
+    },
+    "burn_multiple": {
+        "seed":     {"p25": 0.8, "p50": 1.6, "p75": 2.8},
+        "series_a": {"p25": 0.6, "p50": 1.2, "p75": 2.0},
+        "series_b": {"p25": 0.5, "p50": 1.0, "p75": 1.6},
+        "series_c": {"p25": 0.3, "p50": 0.8, "p75": 1.4},
+    },
+    "cac_payback": {
+        "seed":     {"p25": 12,  "p50": 20,  "p75": 30},
+        "series_a": {"p25": 10,  "p50": 16,  "p75": 24},
+        "series_b": {"p25": 8,   "p50": 13,  "p75": 20},
+        "series_c": {"p25": 6,   "p50": 11,  "p75": 17},
+    },
+    "churn_rate": {
+        "seed":     {"p25": 1.5, "p50": 2.8, "p75": 4.5},
+        "series_a": {"p25": 1.0, "p50": 2.0, "p75": 3.5},
+        "series_b": {"p25": 0.5, "p50": 1.5, "p75": 2.8},
+        "series_c": {"p25": 0.3, "p50": 1.0, "p75": 2.0},
+    },
+    "sales_efficiency": {
+        "seed":     {"p25": 0.4, "p50": 0.7, "p75": 1.2},
+        "series_a": {"p25": 0.7, "p50": 1.1, "p75": 1.8},
+        "series_b": {"p25": 0.9, "p50": 1.4, "p75": 2.2},
+        "series_c": {"p25": 1.1, "p50": 1.8, "p75": 3.0},
+    },
+    "opex_ratio": {
+        "seed":     {"p25": 80,  "p50": 110, "p75": 160},
+        "series_a": {"p25": 70,  "p50": 90,  "p75": 120},
+        "series_b": {"p25": 55,  "p50": 75,  "p75": 100},
+        "series_c": {"p25": 45,  "p50": 60,  "p75": 80},
+    },
+    "contribution_margin": {
+        "seed":     {"p25": 30,  "p50": 45,  "p75": 60},
+        "series_a": {"p25": 35,  "p50": 50,  "p75": 65},
+        "series_b": {"p25": 40,  "p50": 55,  "p75": 70},
+        "series_c": {"p25": 45,  "p50": 60,  "p75": 75},
+    },
+    "dso": {
+        "seed":     {"p25": 20,  "p50": 35,  "p75": 55},
+        "series_a": {"p25": 22,  "p50": 38,  "p75": 58},
+        "series_b": {"p25": 20,  "p50": 35,  "p75": 52},
+        "series_c": {"p25": 18,  "p50": 30,  "p75": 48},
+    },
+    "cash_conv_cycle": {
+        "seed":     {"p25": 25,  "p50": 42,  "p75": 65},
+        "series_a": {"p25": 28,  "p50": 45,  "p75": 68},
+        "series_b": {"p25": 25,  "p50": 40,  "p75": 60},
+        "series_c": {"p25": 20,  "p50": 35,  "p75": 55},
+    },
+    "customer_concentration": {
+        "seed":     {"p25": 10,  "p50": 22,  "p75": 40},
+        "series_a": {"p25": 8,   "p50": 18,  "p75": 32},
+        "series_b": {"p25": 5,   "p50": 14,  "p75": 26},
+        "series_c": {"p25": 4,   "p50": 10,  "p75": 20},
+    },
+    "recurring_revenue": {
+        "seed":     {"p25": 70,  "p50": 82,  "p75": 92},
+        "series_a": {"p25": 75,  "p50": 86,  "p75": 94},
+        "series_b": {"p25": 80,  "p50": 88,  "p75": 95},
+        "series_c": {"p25": 82,  "p50": 90,  "p75": 96},
+    },
+    "revenue_quality": {
+        "seed":     {"p25": 65,  "p50": 76,  "p75": 88},
+        "series_a": {"p25": 68,  "p50": 79,  "p75": 90},
+        "series_b": {"p25": 72,  "p50": 82,  "p75": 92},
+        "series_c": {"p25": 75,  "p50": 85,  "p75": 93},
+    },
+    "operating_leverage": {
+        "seed":     {"p25": 0.8, "p50": 1.1, "p75": 1.5},
+        "series_a": {"p25": 0.9, "p50": 1.2, "p75": 1.6},
+        "series_b": {"p25": 1.0, "p50": 1.4, "p75": 1.8},
+        "series_c": {"p25": 1.1, "p50": 1.5, "p75": 2.0},
+    },
+    "pipeline_conversion": {
+        "seed":     {"p25": 2,   "p50": 4,   "p75": 7},
+        "series_a": {"p25": 3,   "p50": 5,   "p75": 9},
+        "series_b": {"p25": 4,   "p50": 6,   "p75": 10},
+        "series_c": {"p25": 5,   "p50": 8,   "p75": 12},
+    },
+}
+
 # ─── Endpoints ──────────────────────────────────────────────────────────────
 
 @app.get("/api/health", tags=["System"])
@@ -976,6 +1095,20 @@ def available_years():
     rows = conn.execute("SELECT DISTINCT year FROM monthly_data ORDER BY year").fetchall()
     conn.close()
     return [r["year"] for r in rows]
+
+@app.get("/api/benchmarks", tags=["Analytics"])
+def get_benchmarks(stage: str = "series_b"):
+    """Return industry benchmark percentiles (p25/p50/p75) for the given company stage.
+    Valid stages: seed, series_a, series_b, series_c.
+    Source: OpenView SaaS Benchmarks, Bessemer Venture Partners, SaaS Capital."""
+    valid = {"seed", "series_a", "series_b", "series_c"}
+    if stage not in valid:
+        stage = "series_b"
+    result = {}
+    for kpi_key, stages in BENCHMARKS.items():
+        if stage in stages:
+            result[kpi_key] = stages[stage]
+    return {"stage": stage, "benchmarks": result}
 
 @app.post("/api/upload", tags=["Data Ingestion"])
 async def upload_csv(file: UploadFile = File(...)):

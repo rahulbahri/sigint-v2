@@ -3,7 +3,7 @@ import axios from 'axios'
 import {
   LayoutDashboard, Fingerprint, TrendingUp,
   Upload, Code2, RefreshCw, ChevronRight,
-  Activity, GitBranch, Network, Layers, BarChart2
+  Activity, GitBranch, Network, Layers, BarChart2, BookOpen
 } from 'lucide-react'
 import Scorecard from './components/Scorecard.jsx'
 import Fingerprint2 from './components/Fingerprint.jsx'
@@ -18,6 +18,7 @@ import MonthRangeFilter from './components/MonthRangeFilter.jsx'
 import OntologyPage from './components/OntologyPage.jsx'
 import BoardReady from './components/BoardReady.jsx'
 import ForecastPage from './components/ForecastPage.jsx'
+import DevDocs from './components/DevDocs.jsx'
 
 // ── V2: Nav structured into labelled zones with business-friendly names ──────
 const NAV_GROUPS = [
@@ -46,8 +47,9 @@ const NAV_GROUPS = [
   {
     label: 'Settings',
     tabs: [
-      { id: 'upload', label: 'Data Upload',    Icon: Upload },
-      { id: 'api',    label: 'API Reference',  Icon: Code2  },
+      { id: 'upload',  label: 'Data Upload',   Icon: Upload   },
+      { id: 'api',     label: 'API Reference', Icon: Code2    },
+      { id: 'devdocs', label: 'Dev Docs',      Icon: BookOpen },
     ],
   },
 ]
@@ -65,6 +67,7 @@ const PAGE_TITLES = {
   forecast:    'Forward Signals — 90-Day Outlook',
   upload:      'Data Upload',
   api:         'API Reference',
+  devdocs:     'Developer Documentation',
 }
 
 const FILTER_TABS = new Set(['dashboard', 'fingerprint', 'trends', 'projection'])
@@ -91,6 +94,8 @@ export default function App() {
   const [selectedYears, setSelectedYears]         = useState([])   // empty = all years
   const [selectedMonths, setSelectedMonths]       = useState([])   // empty = all months
   const [availableYears, setAvailableYears]       = useState([])
+  const [companyStage, setCompanyStage]           = useState(() => localStorage.getItem('axiom_stage') || 'series_b')
+  const [benchmarks, setBenchmarks]               = useState({})
 
   // ── Derived filter sets ───────────────────────────────────────────────────
   const yearSet  = useMemo(() => new Set(selectedYears),  [selectedYears])
@@ -260,6 +265,12 @@ export default function App() {
 
   useEffect(() => { loadAll() }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
+  useEffect(() => {
+    axios.get(`/api/benchmarks?stage=${companyStage}`)
+      .then(r => setBenchmarks(r.data.benchmarks || {}))
+      .catch(() => {})
+  }, [companyStage])
+
   const noData    = !loading && summary?.months_of_data === 0
   const sb        = filteredSummary?.status_breakdown || {}
   const critical  = sb.red    || 0
@@ -334,6 +345,35 @@ export default function App() {
             </div>
           </div>
         )}
+
+        {/* ── Company Stage Selector ─────────────────────── */}
+        <div className="px-3 py-2 border-b border-white/10">
+          <p className="text-slate-500 text-[9px] uppercase tracking-widest font-semibold mb-1.5 px-1">
+            Stage
+          </p>
+          <div className="flex gap-1 flex-wrap">
+            {[
+              { id: 'seed',     label: 'Seed'  },
+              { id: 'series_a', label: 'Ser A' },
+              { id: 'series_b', label: 'Ser B' },
+              { id: 'series_c', label: 'Ser C+' },
+            ].map(({ id, label }) => (
+              <button
+                key={id}
+                onClick={() => {
+                  setCompanyStage(id)
+                  localStorage.setItem('axiom_stage', id)
+                }}
+                className={`flex-1 text-center text-[10px] font-bold py-1 rounded-lg border transition-all ${
+                  companyStage === id
+                    ? 'bg-[#0055A4] border-[#00AEEF]/50 text-white'
+                    : 'bg-white/5 border-white/10 text-slate-400 hover:text-white hover:border-white/25'
+                }`}>
+                {label}
+              </button>
+            ))}
+          </div>
+        </div>
 
         {/* Navigation + AI Panel */}
         <div className="flex-1 flex flex-col min-h-0">
@@ -517,6 +557,8 @@ export default function App() {
                   bridgeData={filteredBridgeData}
                   onNavigate={setTab}
                   periodLabel={periodLabel}
+                  benchmarks={benchmarks}
+                  companyStage={companyStage}
                 />
               )}
               {tab === 'dashboard'   && (
@@ -541,7 +583,7 @@ export default function App() {
                       </button>
                     </div>
                   </div>
-                  <Scorecard fingerprint={filteredFingerprint} kpiDefs={kpiDefs} onKpiClick={openKpi} boardView={boardView} periodLabel={periodLabel}/>
+                  <Scorecard fingerprint={filteredFingerprint} kpiDefs={kpiDefs} onKpiClick={openKpi} boardView={boardView} periodLabel={periodLabel} benchmarks={benchmarks} companyStage={companyStage}/>
                 </>
               )}
               {tab === 'fingerprint' && <Fingerprint2 fingerprint={yearFilteredFingerprint} onKpiClick={openKpi}/>}
@@ -559,6 +601,7 @@ export default function App() {
               {tab === 'forecast'    && <ForecastPage />}
               {tab === 'upload'      && <CSVUpload onUploaded={loadAll}/>}
               {tab === 'api'         && <APIReference kpiDefs={kpiDefs}/>}
+              {tab === 'devdocs'     && <DevDocs />}
             </>
           )}
 
@@ -566,6 +609,7 @@ export default function App() {
           {!loading && noData && tab === 'forecast'   && <ForecastPage />}
           {!loading && noData && tab === 'upload'     && <CSVUpload onUploaded={loadAll}/>}
           {!loading && noData && tab === 'api'        && <APIReference kpiDefs={kpiDefs}/>}
+          {!loading && noData && tab === 'devdocs'    && <DevDocs />}
           {!loading && noData && tab === 'projection' && (
             <ProjectionBridge
               bridgeData={filteredBridgeData}
@@ -579,7 +623,7 @@ export default function App() {
       </div>
 
       {/* ── KPI Detail Panel (global, fixed overlay) ──────── */}
-      <KpiDetailPanel kpi={selectedKpi} onClose={closeKpi} periodLabel={periodLabel}/>
+      <KpiDetailPanel kpi={selectedKpi} onClose={closeKpi} periodLabel={periodLabel} benchmarks={benchmarks} companyStage={companyStage}/>
     </div>
   )
 }

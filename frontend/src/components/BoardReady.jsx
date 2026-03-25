@@ -997,8 +997,13 @@ function AboveFoldSignalRow({ signal, onNavigate, onExpand }) {
   )
 }
 
+// ── Stage label helper ─────────────────────────────────────────────────────────
+function stageLabel(s) {
+  return ({ seed: 'Seed', series_a: 'Series A', series_b: 'Series B', series_c: 'Series C+' }[s] || s)
+}
+
 // ── MAIN COMPONENT ────────────────────────────────────────────────────────────
-export default function BoardReady({ fingerprint, bridgeData, onNavigate, periodLabel: globalPeriodLabel }) {
+export default function BoardReady({ fingerprint, bridgeData, onNavigate, periodLabel: globalPeriodLabel, benchmarks, companyStage }) {
   const [sideCard, setSideCard] = useState(null)
   const dateStr = new Date().toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' })
 
@@ -1219,6 +1224,15 @@ export default function BoardReady({ fingerprint, bridgeData, onNavigate, period
           const downstream = (kpi.causation?.downstream_impact || [])
             .map(key => fp.find(k => k.key === key))
             .filter(k => k && k.fy_status !== 'green')
+          // Benchmark peer context
+          const bm = benchmarks?.[kpi.key]
+          const isLower = kpi.direction === 'lower'
+          const pctFromMedian = (bm && kpi.avg != null && bm.p50 != null && bm.p50 !== 0)
+            ? ((kpi.avg - bm.p50) / Math.abs(bm.p50)) * 100
+            : null
+          const isAboveMedian = pctFromMedian != null
+            ? (isLower ? pctFromMedian < 0 : pctFromMedian > 0)
+            : null
           return (
             <>
               {kpiChip(kpi)} at {fmt(kpi.avg, kpi.unit)} vs target {fmt(kpi.target, kpi.unit)} ({absGap}% off)
@@ -1231,6 +1245,9 @@ export default function BoardReady({ fingerprint, bridgeData, onNavigate, period
                 </>
               )}
               {fix ? <>. To address: {fix.charAt(0).toLowerCase() + fix.slice(1)}</> : ''}.
+              {bm && pctFromMedian != null && (
+                <> Peer context: {stageLabel(companyStage)} SaaS median is {fmt(bm.p50, kpi.unit)} — this business is {Math.abs(pctFromMedian).toFixed(0)}% {isAboveMedian ? 'above' : 'below'} the industry midpoint.</>
+              )}
             </>
           )
         }
@@ -1253,6 +1270,23 @@ export default function BoardReady({ fingerprint, bridgeData, onNavigate, period
             {recoveringCount > 0 ? ` and ${recoveringCount} showing recovery momentum` : ''}.
           </p>
         )
+
+        // — Peer context sentence for top red KPI (if benchmark data available)
+        if (top2Red.length > 0 && benchmarks) {
+          const topKpi = top2Red[0]
+          const bm = benchmarks[topKpi.key]
+          if (bm && topKpi.avg != null && bm.p50 != null && bm.p50 !== 0) {
+            const isLower = topKpi.direction === 'lower'
+            const pctFromMedian = ((topKpi.avg - bm.p50) / Math.abs(bm.p50)) * 100
+            const isAboveMedian = isLower ? pctFromMedian < 0 : pctFromMedian > 0
+            paragraphs.push(
+              <p key="peer-context" className="text-[13px] text-white/60 leading-relaxed italic">
+                For context: {topKpi.name} median for {stageLabel(companyStage)} SaaS is {fmt(bm.p50, topKpi.unit)} — this business is{' '}
+                {Math.abs(pctFromMedian).toFixed(0)}% {isAboveMedian ? 'above' : 'below'} the peer median.
+              </p>
+            )
+          }
+        }
 
         // — Critical KPI deep-dives (top 2 red)
         if (top2Red.length > 0) {
