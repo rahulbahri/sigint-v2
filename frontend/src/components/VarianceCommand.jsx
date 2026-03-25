@@ -1,8 +1,9 @@
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, useCallback } from 'react'
 import axios from 'axios'
 import {
   AlertCircle, AlertTriangle, CheckCircle2, User, Calendar,
-  ChevronDown, ChevronUp, Download, TrendingDown, TrendingUp, X
+  ChevronDown, ChevronUp, Download, TrendingDown, TrendingUp, X,
+  Loader2, Clock, FileQuestion, ArrowRight
 } from 'lucide-react'
 
 // ── Core KPI set (12 metrics CFOs care about most) ──────────────────────────
@@ -57,6 +58,7 @@ export default function VarianceCommand({ fingerprint, bridgeData, benchmarks, c
   const [expandedKpi, setExpandedKpi] = useState(null)
   const [saving, setSaving] = useState(null)
   const [showResolved, setShowResolved] = useState(false)
+  const [smartActionsCache, setSmartActionsCache] = useState({})   // { [kpiKey]: { data, loading, error } }
 
   // ── Fetch accountability data ────────────────────────────────────────────
   useEffect(() => {
@@ -65,10 +67,38 @@ export default function VarianceCommand({ fingerprint, bridgeData, benchmarks, c
       .catch(() => {})
   }, [])
 
-  // ── Save accountability field ────────────────────────────────────────────
+  // ── Fetch smart actions when a KPI is expanded ─────────────────────────
+  const fetchSmartActions = useCallback((kpiKey) => {
+    if (smartActionsCache[kpiKey]?.data || smartActionsCache[kpiKey]?.loading) return
+    setSmartActionsCache(prev => ({ ...prev, [kpiKey]: { data: null, loading: true, error: false } }))
+    axios.get(`/api/smart-actions/${kpiKey}?stage=${companyStage || 'series_b'}`)
+      .then(res => {
+        setSmartActionsCache(prev => ({ ...prev, [kpiKey]: { data: res.data, loading: false, error: false } }))
+      })
+      .catch(() => {
+        setSmartActionsCache(prev => ({ ...prev, [kpiKey]: { data: null, loading: false, error: true } }))
+      })
+  }, [companyStage, smartActionsCache])
+
+  // ── Save accountability field (supports notes) ─────────────────────────
   const saveAccountability = (kpiKey, field, value) => {
-    const current = accountability[kpiKey] || { owner: '', due_date: '', status: 'open' }
-    const updated = { ...current, [field]: value }
+    const current = accountability[kpiKey] || { owner: '', due_date: '', status: 'open', notes: '', status_history: [] }
+    const now = new Date().toISOString()
+    let updated = { ...current, [field]: value, last_updated: now }
+
+    // Track status changes in history
+    if (field === 'status' && value !== current.status) {
+      const history = [...(current.status_history || [])]
+      history.push({ status: value, timestamp: now })
+      updated.status_history = history
+    }
+    // Track owner assignment
+    if (field === 'owner' && value && value !== current.owner) {
+      const history = [...(updated.status_history || [])]
+      history.push({ status: `assigned to ${value}`, timestamp: now })
+      updated.status_history = history
+    }
+
     setAccountability(prev => ({ ...prev, [kpiKey]: updated }))
     setSaving(kpiKey)
     axios.put(`/api/accountability/${kpiKey}`, updated)
@@ -199,7 +229,13 @@ export default function VarianceCommand({ fingerprint, bridgeData, benchmarks, c
               saving={saving === kpi.key}
               benchmarkCtx={getBenchmarkContext(kpi)}
               recentTrend={getRecentTrend(kpi)}
-              onToggle={() => setExpandedKpi(expandedKpi === kpi.key ? null : kpi.key)}
+              smartActions={smartActionsCache[kpi.key]}
+              fingerprint={fp}
+              onToggle={() => {
+                const willExpand = expandedKpi !== kpi.key
+                setExpandedKpi(willExpand ? kpi.key : null)
+                if (willExpand) fetchSmartActions(kpi.key)
+              }}
               onSave={(field, value) => saveAccountability(kpi.key, field, value)}
               onKpiClick={onKpiClick}
             />
@@ -322,8 +358,8 @@ function GapCell({ kpi }) {
 }
 
 // ── KPI Row ──────────────────────────────────────────────────────────────────
-function KpiRow({ kpi, idx, accountability: acct, expanded, saving, benchmarkCtx, recentTrend, onToggle, onSave, onKpiClick }) {
-  const acc = acct || { owner: '', due_date: '', status: 'open' }
+function KpiRow({ kpi, idx, accountability: acct, expanded, saving, benchmarkCtx, recentTrend, smartActions, fingerprint, onToggle, onSave, onKpiClick }) {
+  const acc = acct || { owner: '', due_date: '', status: 'open', notes: '', status_history: [] }
   const style = STATUS_STYLES[kpi.fy_status] || STATUS_STYLES.yellow
 
   return (
@@ -363,7 +399,7 @@ function KpiRow({ kpi, idx, accountability: acct, expanded, saving, benchmarkCtx
 
         {/* Root Cause */}
         <span className="text-[11px] text-slate-500 truncate" title={kpi.causation?.root_causes?.[0]}>
-          {kpi.causation?.root_causes?.[0] || '—'}
+          {kpi.causation?.root_causes?.[0] || '---'}
         </span>
 
         {/* Owner input */}
@@ -415,6 +451,10 @@ function KpiRow({ kpi, idx, accountability: acct, expanded, saving, benchmarkCtx
           kpi={kpi}
           benchmarkCtx={benchmarkCtx}
           recentTrend={recentTrend}
+          smartActions={smartActions}
+          fingerprint={fingerprint}
+          accountability={acc}
+          onSave={onSave}
           idx={idx}
         />
       )}
@@ -422,77 +462,287 @@ function KpiRow({ kpi, idx, accountability: acct, expanded, saving, benchmarkCtx
   )
 }
 
+// ── Mini Spark Trend (3 dots) ─────────────────────────────────────────────────
+function SparkTrend({ recentTrend, kpi }) {
+  if (!recentTrend || recentTrend.length === 0) return null
+  return (
+    <div className="flex items-center gap-1.5">
+      {recentTrend.map((m, i) => (
+        <span key={i} className="text-[10px] font-medium text-slate-600 tabular-nums">
+          {fmt(m.value, kpi.unit)}
+        </span>
+      ))}
+      <TrendArrow values={recentTrend.map(m => m.value)} direction={kpi.direction} />
+    </div>
+  )
+}
+
+// ── Status Timeline ──────────────────────────────────────────────────────────
+function StatusTimeline({ history }) {
+  if (!history || history.length === 0) return null
+  const fmtDate = (ts) => {
+    if (!ts) return ''
+    const d = new Date(ts)
+    return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+  }
+  return (
+    <div className="flex items-center gap-1 flex-wrap">
+      {history.map((entry, i) => (
+        <span key={i} className="flex items-center gap-1">
+          {i > 0 && <ArrowRight size={9} className="text-slate-300" />}
+          <span className="text-[10px] text-slate-500">
+            <span className="capitalize font-medium">{entry.status}</span>
+            {' '}
+            <span className="text-slate-400">{fmtDate(entry.timestamp)}</span>
+          </span>
+        </span>
+      ))}
+    </div>
+  )
+}
+
+// ── Priority Badge ───────────────────────────────────────────────────────────
+function PriorityBadge({ priority }) {
+  const p = (priority || 'medium').toLowerCase()
+  const styles = {
+    high:   'bg-red-100 text-red-700 border-red-200',
+    medium: 'bg-amber-100 text-amber-700 border-amber-200',
+    low:    'bg-slate-100 text-slate-600 border-slate-200',
+  }
+  return (
+    <span className={`text-[9px] font-bold uppercase px-1.5 py-0.5 rounded border ${styles[p] || styles.medium}`}>
+      {p}
+    </span>
+  )
+}
+
 // ── Expanded Detail Panel ────────────────────────────────────────────────────
-function ExpandedDetail({ kpi, benchmarkCtx, recentTrend, idx }) {
-  const causes = kpi.causation?.root_causes || []
-  const downstream = kpi.causation?.downstream_impact || kpi.causation?.impacted_kpis || []
-  const corrective = kpi.causation?.corrective_actions || kpi.causation?.recommended_actions || []
-  const annotations = kpi.annotations || kpi.causation?.annotations || []
+function ExpandedDetail({ kpi, benchmarkCtx, recentTrend, smartActions, fingerprint, accountability, onSave, idx }) {
+  // Fall back to static causation data if smart actions failed or haven't loaded
+  const sa = smartActions?.data
+  const loading = smartActions?.loading
+  const failed = smartActions?.error
+
+  // Static fallback data from fingerprint causation
+  const staticCauses = kpi.causation?.root_causes || []
+  const staticDownstream = kpi.causation?.downstream_impact || kpi.causation?.impacted_kpis || []
+  const staticCorrective = kpi.causation?.corrective_actions || kpi.causation?.recommended_actions || []
+
+  // Smart actions data (or fallback)
+  const upstreamCauses = sa?.upstream_causes || []
+  const downstreamImpact = sa?.downstream_impact || []
+  const actions = sa?.actions || []
+  const dataGaps = sa?.data_gaps || []
+  const quantifiedProblem = sa?.quantified_problem || null
+
+  // Build upstream causes from fingerprint if API didn't return them
+  const resolvedUpstream = upstreamCauses.length > 0 ? upstreamCauses : staticCauses.map(c => ({ explanation: c }))
+  const resolvedDownstream = downstreamImpact.length > 0 ? downstreamImpact : staticDownstream
+  const resolvedActions = actions.length > 0 ? actions : staticCorrective.map((a, i) => ({
+    action: typeof a === 'string' ? a : a.action || a.description || String(a),
+    priority: 'medium',
+    number: i + 1,
+  }))
+
+  // Lookup helper for fingerprint KPIs by key
+  const fpLookup = useMemo(() => {
+    const map = {}
+    ;(fingerprint || []).forEach(k => { map[k.key] = k })
+    return map
+  }, [fingerprint])
+
+  // Border color for upstream KPIs based on status
+  const borderForStatus = (status) => {
+    if (status === 'red') return 'border-l-red-500'
+    if (status === 'yellow') return 'border-l-amber-400'
+    return 'border-l-emerald-500'
+  }
+
+  const acc = accountability || {}
+
+  // Loading state
+  if (loading) {
+    return (
+      <div className="px-6 py-8 border-b border-slate-100 bg-slate-50/40">
+        <div className="flex items-center justify-center gap-2 text-slate-400">
+          <Loader2 size={16} className="animate-spin" />
+          <span className="text-[12px]">Loading smart analysis...</span>
+        </div>
+      </div>
+    )
+  }
 
   return (
-    <div className={`px-6 py-4 ${idx % 2 === 0 ? 'bg-white' : 'bg-slate-50/30'} border-b border-slate-100`}>
-      <div className="grid grid-cols-3 gap-6">
-        {/* Left: Causation */}
-        <div className="space-y-3">
-          <h4 className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider">Root Causes</h4>
-          {causes.length > 0 ? (
-            <ul className="space-y-1.5">
-              {causes.map((c, i) => (
-                <li key={i} className="flex items-start gap-1.5 text-[11px] text-slate-600">
-                  <AlertCircle size={11} className="text-red-400 mt-0.5 shrink-0" />
-                  <span>{c}</span>
-                </li>
-              ))}
-            </ul>
-          ) : (
-            <p className="text-[11px] text-slate-400 italic">No root causes identified</p>
-          )}
+    <div className="px-4 py-4 border-b border-slate-100 bg-slate-50/20">
+      <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
 
-          {downstream.length > 0 && (
-            <div className="mt-3">
-              <h4 className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider mb-1.5">Downstream Impact</h4>
-              <div className="flex flex-wrap gap-1">
-                {downstream.map((d, i) => (
-                  <span key={i} className="px-2 py-0.5 rounded bg-red-50 text-red-600 text-[10px] font-medium border border-red-100">
-                    {typeof d === 'string' ? d : d.kpi || d.name || d}
-                  </span>
-                ))}
-              </div>
+        {/* ── Quantified Problem Banner ──────────────────────────────────── */}
+        <div className="px-5 py-3 bg-gradient-to-r from-slate-50 to-white border-b border-slate-100">
+          <div className="flex items-start justify-between gap-4">
+            <div className="flex-1">
+              {quantifiedProblem ? (
+                <p className="text-[12px] text-slate-700 font-medium leading-relaxed">{quantifiedProblem}</p>
+              ) : (
+                <p className="text-[12px] text-slate-700 font-medium leading-relaxed">
+                  {kpi.name} is at {fmt(kpi.avg, kpi.unit)}
+                  {kpi.target != null && <>, {Math.abs(gapPct(kpi) || 0).toFixed(0)}% {(gapPct(kpi) || 0) < 0 ? 'below' : 'above'} target {fmt(kpi.target, kpi.unit)}</>}
+                  {benchmarkCtx && <>. Peer median: {fmt(benchmarkCtx.peerMedian, kpi.unit)} — {Math.abs(benchmarkCtx.diff || 0).toFixed(0)}% {(benchmarkCtx.diff || 0) < 0 ? 'below' : 'above'} midpoint.</>}
+                </p>
+              )}
             </div>
-          )}
+            {/* Spark trend */}
+            <div className="shrink-0">
+              <SparkTrend recentTrend={recentTrend} kpi={kpi} />
+            </div>
+          </div>
         </div>
 
-        {/* Center: Corrective Actions */}
-        <div className="space-y-3">
-          <h4 className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider">Corrective Actions</h4>
-          {corrective.length > 0 ? (
-            <ul className="space-y-1.5">
-              {corrective.map((a, i) => (
-                <li key={i} className="flex items-start gap-1.5 text-[11px] text-slate-600">
-                  <CheckCircle2 size={11} className="text-blue-400 mt-0.5 shrink-0" />
-                  <span>{typeof a === 'string' ? a : a.action || a.description || a}</span>
-                </li>
-              ))}
-            </ul>
-          ) : (
-            <p className="text-[11px] text-slate-400 italic">No corrective actions listed</p>
-          )}
+        <div className="grid grid-cols-2 gap-0 divide-x divide-slate-100">
+          {/* ── Left Column: Causes + Downstream ─────────────────────────── */}
+          <div className="p-4 space-y-4">
 
-          {annotations.length > 0 && (
-            <div className="mt-3">
-              <h4 className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider mb-1.5">Annotations</h4>
-              {annotations.map((note, i) => (
-                <p key={i} className="text-[10px] text-slate-500 italic mb-1">{typeof note === 'string' ? note : note.text || note}</p>
-              ))}
-            </div>
-          )}
-        </div>
-
-        {/* Right: Benchmark + Trend */}
-        <div className="space-y-3">
-          {benchmarkCtx && (
+            {/* Upstream Causes */}
             <div>
-              <h4 className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider mb-1.5">Benchmark Context</h4>
+              <h4 className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider mb-2">Upstream Causes</h4>
+              {resolvedUpstream.length > 0 ? (
+                <div className="space-y-2">
+                  {resolvedUpstream.map((cause, i) => {
+                    const causeKey = cause.kpi_key || cause.key
+                    const causeKpi = causeKey ? fpLookup[causeKey] : null
+                    const causeStatus = causeKpi?.fy_status || cause.status
+                    return (
+                      <div
+                        key={i}
+                        className={`rounded-lg border border-slate-100 bg-slate-50/50 p-2.5 border-l-[3px] ${borderForStatus(causeStatus)}`}
+                      >
+                        {causeKpi ? (
+                          <>
+                            <div className="flex items-center justify-between mb-1">
+                              <span className="text-[11px] font-semibold text-slate-700">{causeKpi.name}</span>
+                              <span className={`text-[10px] font-medium ${causeStatus === 'red' ? 'text-red-600' : causeStatus === 'yellow' ? 'text-amber-600' : 'text-emerald-600'}`}>
+                                {fmt(causeKpi.avg, causeKpi.unit)} / {fmt(causeKpi.target, causeKpi.unit)}
+                              </span>
+                            </div>
+                            {gapPct(causeKpi) != null && (
+                              <div className="text-[10px] text-red-500 font-medium mb-1">
+                                Gap: {gapPct(causeKpi).toFixed(1)}%
+                              </div>
+                            )}
+                          </>
+                        ) : cause.name ? (
+                          <div className="flex items-center justify-between mb-1">
+                            <span className="text-[11px] font-semibold text-slate-700">{cause.name}</span>
+                            {cause.value != null && (
+                              <span className="text-[10px] text-slate-500">{cause.value}{cause.target != null && ` / ${cause.target}`}</span>
+                            )}
+                          </div>
+                        ) : null}
+                        <p className="text-[10px] text-slate-500 leading-relaxed">{cause.explanation || cause}</p>
+                      </div>
+                    )
+                  })}
+                </div>
+              ) : (
+                <p className="text-[11px] text-slate-400 italic">No upstream causes identified</p>
+              )}
+            </div>
+
+            {/* Downstream Impact */}
+            {resolvedDownstream.length > 0 && (
+              <div>
+                <h4 className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider mb-2">Downstream Impact</h4>
+                <div className="space-y-1.5">
+                  {resolvedDownstream.map((d, i) => {
+                    const dKey = typeof d === 'string' ? d : (d.kpi_key || d.key || d.kpi || d.name)
+                    const dKpi = dKey ? fpLookup[dKey] : null
+                    const dName = dKpi?.name || (typeof d === 'string' ? d : d.name || d.kpi || d)
+                    return (
+                      <div key={i} className="flex items-center justify-between px-2.5 py-1.5 rounded-md bg-red-50/60 border border-red-100">
+                        <span className="text-[11px] text-red-700 font-medium">{dName}</span>
+                        {dKpi && (
+                          <span className="text-[10px] text-red-500 tabular-nums">
+                            {fmt(dKpi.avg, dKpi.unit)}
+                          </span>
+                        )}
+                      </div>
+                    )
+                  })}
+                </div>
+              </div>
+            )}
+
+            {/* Data Gaps */}
+            {dataGaps.length > 0 && (
+              <div>
+                <h4 className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider mb-2">Data Needed</h4>
+                <div className="space-y-1">
+                  {dataGaps.map((gap, i) => (
+                    <div key={i} className="flex items-start gap-1.5 text-[10px] text-amber-700">
+                      <FileQuestion size={11} className="mt-0.5 shrink-0 text-amber-400" />
+                      <span>{typeof gap === 'string' ? gap : gap.metric || gap.description || gap}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* ── Right Column: Actions + Accountability ───────────────────── */}
+          <div className="p-4 space-y-4">
+
+            {/* Specific Actions */}
+            <div>
+              <h4 className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider mb-2">Actions</h4>
+              {resolvedActions.length > 0 ? (
+                <div className="space-y-2">
+                  {resolvedActions.map((a, i) => {
+                    const actionText = typeof a === 'string' ? a : (a.action || a.description || String(a))
+                    const num = a.number || i + 1
+                    const priority = a.priority || 'medium'
+                    const impact = a.expected_impact || a.impact
+                    const owner = a.suggested_owner || a.owner
+                    const timeframe = a.timeframe || a.timeline
+                    return (
+                      <div key={i} className="rounded-lg border border-slate-200 bg-white p-3 hover:shadow-sm transition-shadow">
+                        <div className="flex items-start gap-2">
+                          <div className="flex items-center justify-center w-5 h-5 rounded-full bg-blue-50 text-blue-600 text-[10px] font-bold shrink-0 mt-0.5">
+                            {num}
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-2 mb-1">
+                              <span className="text-[11px] text-slate-700 font-medium leading-snug">{actionText}</span>
+                              <PriorityBadge priority={priority} />
+                            </div>
+                            <div className="flex flex-wrap gap-x-3 gap-y-0.5">
+                              {impact && (
+                                <span className="text-[9px] text-emerald-600 font-medium">
+                                  Impact: {impact}
+                                </span>
+                              )}
+                              {owner && (
+                                <span className="text-[9px] text-slate-400 flex items-center gap-0.5">
+                                  <User size={8} /> {owner}
+                                </span>
+                              )}
+                              {timeframe && (
+                                <span className="text-[9px] text-slate-400 flex items-center gap-0.5">
+                                  <Clock size={8} /> {timeframe}
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
+              ) : (
+                <p className="text-[11px] text-slate-400 italic">No actions listed</p>
+              )}
+            </div>
+
+            {/* ── Benchmark Context (compact) ─────────────────────────────── */}
+            {benchmarkCtx && (
               <div className="bg-slate-50 rounded-lg p-2.5 border border-slate-100">
                 <div className="flex items-center justify-between text-[11px]">
                   <span className="text-slate-500">Peer median</span>
@@ -508,29 +758,34 @@ function ExpandedDetail({ kpi, benchmarkCtx, recentTrend, idx }) {
                   </div>
                 )}
               </div>
-            </div>
-          )}
-
-          <div>
-            <h4 className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider mb-1.5">Recent Trend</h4>
-            {recentTrend.length > 0 ? (
-              <div className="flex items-end gap-2">
-                {recentTrend.map((m, i) => (
-                  <div key={i} className="text-center">
-                    <div className="text-[11px] font-medium text-slate-700 tabular-nums">{fmt(m.value, kpi.unit)}</div>
-                    <div className="text-[9px] text-slate-400 mt-0.5">
-                      {m.period?.split('-').slice(1).join('/') || `M${i + 1}`}
-                    </div>
-                  </div>
-                ))}
-                <TrendArrow
-                  values={recentTrend.map(m => m.value)}
-                  direction={kpi.direction}
-                />
-              </div>
-            ) : (
-              <p className="text-[11px] text-slate-400 italic">No trend data available</p>
             )}
+
+            {/* ── Accountability: Notes + Timeline ────────────────────────── */}
+            <div className="border-t border-slate-100 pt-3 space-y-2">
+              <h4 className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider">Accountability</h4>
+
+              {/* Status timeline */}
+              {acc.status_history && acc.status_history.length > 0 && (
+                <StatusTimeline history={acc.status_history} />
+              )}
+
+              {/* Last updated */}
+              {acc.last_updated && (
+                <div className="flex items-center gap-1 text-[9px] text-slate-400">
+                  <Clock size={9} />
+                  Last updated: {new Date(acc.last_updated).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
+                </div>
+              )}
+
+              {/* Notes textarea */}
+              <textarea
+                placeholder="Add notes..."
+                defaultValue={acc.notes || ''}
+                onBlur={e => onSave('notes', e.target.value)}
+                rows={2}
+                className="w-full text-[11px] text-slate-600 bg-slate-50 border border-slate-200 rounded-lg px-2.5 py-1.5 focus:border-blue-400 focus:outline-none focus:ring-1 focus:ring-blue-200 placeholder:text-slate-300 resize-none transition-colors"
+              />
+            </div>
           </div>
         </div>
       </div>

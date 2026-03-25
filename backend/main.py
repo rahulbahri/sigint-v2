@@ -4742,6 +4742,436 @@ def export_weekly_briefing(stage: str = "series_b"):
     )
 
 
+# ─── Smart Actions Endpoint ─────────────────────────────────────────────────
+
+def _generate_smart_actions(kpi_key: str, fp_data: list, benchmarks_for_stage: dict, stage: str):
+    """
+    Generate data-backed, number-specific corrective action recommendations
+    for a given KPI using fingerprint data, benchmarks, and the causal knowledge graph.
+    """
+    # ── Find the requested KPI in fingerprint data ──
+    kpi_data = None
+    fp_lookup = {}
+    for k in fp_data:
+        fp_lookup[k["key"]] = k
+        if k["key"] == kpi_key:
+            kpi_data = k
+    if kpi_data is None:
+        return None
+
+    current_value = kpi_data["avg"]
+    target = kpi_data["target"]
+    direction = kpi_data["direction"]
+    unit = kpi_data["unit"]
+    status = kpi_data["fy_status"]
+    kpi_name = kpi_data["name"]
+    monthly = kpi_data["monthly"]
+
+    # ── Step 1: Quantify the problem ──
+    gap_pct = None
+    if current_value is not None and target is not None and target != 0:
+        if direction == "higher":
+            gap_pct = round((current_value - target) / abs(target) * 100, 1)
+        else:
+            gap_pct = round((target - current_value) / abs(target) * 100, 1)
+
+    # ── Benchmark context ──
+    bench_info = None
+    bench_data = benchmarks_for_stage.get(kpi_key)
+    if bench_data and current_value is not None:
+        p25 = bench_data.get("p25")
+        p50 = bench_data.get("p50")
+        p75 = bench_data.get("p75")
+        pct_from_median = round((current_value - p50) / abs(p50) * 100, 1) if p50 and p50 != 0 else None
+        if direction == "higher":
+            if current_value < p25:
+                position = "below_p25"
+            elif current_value < p50:
+                position = "p25_to_p50"
+            elif current_value < p75:
+                position = "p50_to_p75"
+            else:
+                position = "above_p75"
+        else:
+            # For "lower is better" KPIs, lower values are better
+            if current_value > p75:
+                position = "below_p25"  # worst quartile
+            elif current_value > p50:
+                position = "p25_to_p50"
+            elif current_value > p25:
+                position = "p50_to_p75"
+            else:
+                position = "above_p75"  # best quartile
+        bench_info = {
+            "p25": p25, "p50": p50, "p75": p75,
+            "position": position,
+            "pct_from_median": pct_from_median,
+        }
+
+    # ── Trend computation (last 3 months) ──
+    trend_info = None
+    if monthly and len(monthly) >= 2:
+        sorted_monthly = sorted(monthly, key=lambda m: m["period"])
+        last_3 = sorted_monthly[-3:] if len(sorted_monthly) >= 3 else sorted_monthly
+        vals_3 = [m["value"] for m in last_3 if m["value"] is not None]
+
+        trend_direction = "stable"
+        pct_change_3m = None
+        consecutive_declining = 0
+
+        if len(vals_3) >= 2:
+            if vals_3[-1] > vals_3[0]:
+                trend_direction = "improving" if direction == "higher" else "declining"
+            elif vals_3[-1] < vals_3[0]:
+                trend_direction = "declining" if direction == "higher" else "improving"
+
+            if vals_3[0] != 0:
+                pct_change_3m = round((vals_3[-1] - vals_3[0]) / abs(vals_3[0]) * 100, 1)
+
+            # Count consecutive months in the same direction
+            for i in range(len(vals_3) - 1, 0, -1):
+                if direction == "higher":
+                    if vals_3[i] < vals_3[i - 1]:
+                        consecutive_declining += 1
+                    else:
+                        break
+                else:
+                    if vals_3[i] > vals_3[i - 1]:
+                        consecutive_declining += 1
+                    else:
+                        break
+
+        # Count consecutive red months from the end
+        consecutive_red = 0
+        for m in reversed(sorted_monthly):
+            v = m["value"]
+            if v is not None and target is not None:
+                if direction == "higher":
+                    ratio = v / target if target != 0 else 0
+                    if ratio < 0.90:
+                        consecutive_red += 1
+                    else:
+                        break
+                else:
+                    ratio = v / target if target != 0 else 0
+                    if ratio > 1.10:
+                        consecutive_red += 1
+                    else:
+                        break
+            else:
+                break
+
+        trend_info = {
+            "direction": trend_direction,
+            "last_3_months": last_3,
+            "pct_change_3m": pct_change_3m,
+            "consecutive_red_months": consecutive_red,
+        }
+
+    # ── Step 2: Trace upstream causes using CAUSATION_RULES ──
+    upstream_causes = []
+    for source_key, rules in ALL_CAUSATION_RULES.items():
+        if kpi_key in rules.get("downstream_impact", []):
+            upstream_kpi = fp_lookup.get(source_key)
+            if upstream_kpi:
+                u_val = upstream_kpi["avg"]
+                u_target = upstream_kpi["target"]
+                u_status = upstream_kpi["fy_status"]
+                u_direction = upstream_kpi["direction"]
+                u_gap = None
+                if u_val is not None and u_target is not None and u_target != 0:
+                    if u_direction == "higher":
+                        u_gap = round((u_val - u_target) / abs(u_target) * 100, 1)
+                    else:
+                        u_gap = round((u_target - u_val) / abs(u_target) * 100, 1)
+
+                if u_val is not None:
+                    u_unit_label = upstream_kpi["unit"]
+                    fmt_val = f"{u_val}"
+                    fmt_target = f"{u_target}" if u_target is not None else "N/A"
+                    if u_status in ("red", "yellow"):
+                        gap_str = f"{abs(u_gap)}% {'below' if u_gap < 0 else 'above'} target" if u_gap is not None else ""
+                        explanation = (
+                            f"{upstream_kpi['name']} is at {fmt_val} vs target {fmt_target} ({gap_str}). "
+                            f"This directly impacts {kpi_name} as a causal upstream driver."
+                        )
+                    else:
+                        explanation = (
+                            f"{upstream_kpi['name']} is healthy at {fmt_val} "
+                            f"({'above' if u_direction == 'higher' else 'below'} target of {fmt_target}) "
+                            f"— this is not contributing to the problem."
+                        )
+                    upstream_causes.append({
+                        "kpi_key": source_key,
+                        "kpi_name": upstream_kpi["name"],
+                        "status": u_status,
+                        "value": u_val,
+                        "target": u_target,
+                        "gap_pct": u_gap,
+                        "explanation": explanation,
+                        "is_data_available": True,
+                    })
+                else:
+                    upstream_causes.append({
+                        "kpi_key": source_key,
+                        "kpi_name": upstream_kpi["name"],
+                        "status": "grey",
+                        "value": None,
+                        "target": u_target,
+                        "gap_pct": None,
+                        "explanation": f"No data available for {upstream_kpi['name']}. Collecting it would improve diagnostic accuracy.",
+                        "is_data_available": False,
+                    })
+            else:
+                # KPI exists in causation rules but not in fingerprint data at all
+                upstream_causes.append({
+                    "kpi_key": source_key,
+                    "kpi_name": source_key.replace("_", " ").title(),
+                    "status": "grey",
+                    "value": None,
+                    "target": None,
+                    "gap_pct": None,
+                    "explanation": f"No data available for {source_key.replace('_', ' ').title()}. Collecting it would improve diagnostic accuracy.",
+                    "is_data_available": False,
+                })
+
+    # Sort: red first, then yellow, then green, then grey
+    status_order = {"red": 0, "yellow": 1, "green": 2, "grey": 3}
+    upstream_causes.sort(key=lambda x: status_order.get(x["status"], 4))
+
+    # ── Find downstream impact ──
+    downstream_impact = []
+    rules_for_kpi = ALL_CAUSATION_RULES.get(kpi_key, {})
+    for ds_key in rules_for_kpi.get("downstream_impact", []):
+        ds_kpi = fp_lookup.get(ds_key)
+        if ds_kpi:
+            ds_val = ds_kpi["avg"]
+            ds_target = ds_kpi["target"]
+            ds_status = ds_kpi["fy_status"]
+            ds_direction = ds_kpi["direction"]
+            ds_gap = None
+            if ds_val is not None and ds_target is not None and ds_target != 0:
+                if ds_direction == "higher":
+                    ds_gap = round((ds_val - ds_target) / abs(ds_target) * 100, 1)
+                else:
+                    ds_gap = round((ds_target - ds_val) / abs(ds_target) * 100, 1)
+            fmt_ds_val = f"{ds_val}" if ds_val is not None else "N/A"
+            fmt_ds_target = f"{ds_target}" if ds_target is not None else "N/A"
+            explanation = (
+                f"{ds_kpi['name']} is at {fmt_ds_val} (target {fmt_ds_target}, status: {ds_status}). "
+                f"If {kpi_name} improves, {ds_kpi['name']} should improve proportionally as a downstream metric."
+            )
+            downstream_impact.append({
+                "kpi_key": ds_key,
+                "kpi_name": ds_kpi["name"],
+                "status": ds_status,
+                "value": ds_val,
+                "target": ds_target,
+                "explanation": explanation,
+            })
+
+    # ── Step 3: Generate SPECIFIC corrective actions with numbers ──
+    actions = []
+    priority = 1
+
+    # Action from worst upstream cause
+    red_upstreams = [u for u in upstream_causes if u["status"] == "red" and u["is_data_available"]]
+    if red_upstreams:
+        worst = red_upstreams[0]
+        # Get corrective actions from causation rules for the upstream KPI
+        upstream_actions = ALL_CAUSATION_RULES.get(worst["kpi_key"], {}).get("corrective_actions", [])
+        specific_action = upstream_actions[0] if upstream_actions else "Investigate root cause"
+
+        # Estimate impact: if upstream recovers to target, approximate the KPI improvement
+        impact_str = ""
+        if worst["value"] is not None and worst["target"] is not None and current_value is not None and target is not None:
+            # Proportional estimate
+            upstream_recovery_ratio = worst["target"] / worst["value"] if worst["value"] != 0 else 1
+            estimated_new_value = round(current_value * upstream_recovery_ratio, 2)
+            impact_str = (
+                f"If {worst['kpi_name']} recovers from {worst['value']} to the target of {worst['target']}, "
+                f"{kpi_name} would improve from {current_value} to approximately {estimated_new_value}, "
+                f"assuming other factors remain constant."
+            )
+
+        actions.append({
+            "priority": priority,
+            "action": (
+                f"Address {worst['kpi_name']} first — it is the primary upstream driver and is "
+                f"{abs(worst['gap_pct'])}% {'below' if worst['gap_pct'] < 0 else 'above'} target. "
+                f"{specific_action}."
+            ),
+            "expected_impact": impact_str,
+            "owner_suggestion": "Revenue Operations / VP Sales" if "sales" in worst["kpi_key"] or "pipeline" in worst["kpi_key"] else "Finance / Operations",
+            "timeframe": "30-60 days for diagnosis, 60-90 days for improvement",
+        })
+        priority += 1
+
+    # Action from benchmark position
+    if bench_info and current_value is not None:
+        stage_label = stage.replace("_", " ").title()
+        position = bench_info["position"]
+        if position == "below_p25":
+            p25_val = bench_info["p25"]
+            p50_val = bench_info["p50"]
+            corrective_actions = rules_for_kpi.get("corrective_actions", [])
+            specific_fix = corrective_actions[0] if corrective_actions else "Review operational processes"
+            actions.append({
+                "priority": priority,
+                "action": (
+                    f"{kpi_name} at {current_value} is below the {stage_label} 25th percentile ({p25_val}). "
+                    f"Benchmark against peer operational structure. {specific_fix}."
+                ),
+                "expected_impact": (
+                    f"Reaching the peer median of {p50_val} would represent a "
+                    f"{abs(bench_info['pct_from_median'])}% improvement from current levels."
+                ),
+                "owner_suggestion": "CRO / CFO",
+                "timeframe": "Quarterly review cycle",
+            })
+            priority += 1
+        elif position == "p25_to_p50":
+            p50_val = bench_info["p50"]
+            actions.append({
+                "priority": priority,
+                "action": (
+                    f"{kpi_name} at {current_value} is between the 25th and 50th percentile for {stage_label}. "
+                    f"Closing the gap to the median ({p50_val}) should be an operational priority."
+                ),
+                "expected_impact": (
+                    f"Reaching the peer median of {p50_val} would represent a "
+                    f"{abs(bench_info['pct_from_median'])}% improvement."
+                ),
+                "owner_suggestion": "Operations Lead",
+                "timeframe": "60-90 days",
+            })
+            priority += 1
+
+    # Action from trend
+    if trend_info and trend_info["direction"] == "declining" and trend_info["pct_change_3m"] is not None:
+        last3 = trend_info["last_3_months"]
+        values_str = " -> ".join([f"{m['value']}" for m in last3 if m["value"] is not None])
+        pct_chg = abs(trend_info["pct_change_3m"])
+        first_val = next((m["value"] for m in last3 if m["value"] is not None), None)
+
+        # Try to identify which upstream KPI also declined in same period
+        coinciding_upstream = ""
+        for u in red_upstreams:
+            u_fp = fp_lookup.get(u["kpi_key"])
+            if u_fp and u_fp["monthly"] and len(u_fp["monthly"]) >= 2:
+                u_sorted = sorted(u_fp["monthly"], key=lambda m: m["period"])
+                u_last3 = u_sorted[-3:] if len(u_sorted) >= 3 else u_sorted
+                u_vals = [m["value"] for m in u_last3 if m["value"] is not None]
+                if len(u_vals) >= 2 and u_vals[-1] < u_vals[0]:
+                    coinciding_upstream = (
+                        f" This coincides with {u['kpi_name']} deteriorating from {u_vals[0]} to {u_vals[-1]} "
+                        f"— addressing {u['kpi_name']} is likely the highest-leverage fix."
+                    )
+                    break
+
+        actions.append({
+            "priority": priority,
+            "action": (
+                f"The {len(last3)}-month declining trend ({values_str}, -{pct_chg}%) suggests a structural change, "
+                f"not seasonal variance. Investigate what changed in the operational process starting "
+                f"{len(last3)} months ago.{coinciding_upstream}"
+            ),
+            "expected_impact": (
+                f"Identifying and reversing the structural cause could restore the metric to its "
+                f"{len(last3)}-month-ago level of {first_val}."
+            ) if first_val is not None else "Reversing the trend would stabilize the metric.",
+            "owner_suggestion": "Operations / Strategy",
+            "timeframe": "2-week investigation, 30-day corrective action",
+        })
+        priority += 1
+
+    # Fallback: if no actions generated, use corrective_actions from causation rules
+    if not actions:
+        corrective_actions = rules_for_kpi.get("corrective_actions", [])
+        for i, ca in enumerate(corrective_actions[:3]):
+            actions.append({
+                "priority": priority,
+                "action": ca,
+                "expected_impact": f"Addressing this would help move {kpi_name} toward the target of {target}." if target else "Impact depends on severity of root cause.",
+                "owner_suggestion": "Operations Lead",
+                "timeframe": "30-60 days",
+            })
+            priority += 1
+
+    # ── Step 4: Identify data gaps ──
+    data_gaps = []
+    for u in upstream_causes:
+        if not u["is_data_available"]:
+            data_gaps.append(
+                f"{u['kpi_name']} has no data available — this is a critical upstream metric. "
+                f"Collecting it would enable more precise diagnosis. Add it to your data collection via the KPI export template."
+            )
+    # Also flag missing monthly data
+    if not monthly or len(monthly) < 3:
+        data_gaps.append(
+            f"Only {len(monthly) if monthly else 0} months of data available for {kpi_name}. "
+            f"At least 3 months are needed for reliable trend analysis."
+        )
+
+    return {
+        "kpi_key": kpi_key,
+        "kpi_name": kpi_name,
+        "current_value": current_value,
+        "target": target,
+        "gap_pct": gap_pct,
+        "unit": unit,
+        "status": status,
+        "benchmark": bench_info,
+        "trend": trend_info,
+        "upstream_causes": upstream_causes,
+        "downstream_impact": downstream_impact,
+        "actions": actions,
+        "data_gaps": data_gaps,
+    }
+
+
+@app.get("/api/smart-actions/{kpi_key}", tags=["Smart Actions"])
+def get_smart_actions(kpi_key: str, stage: str = "series_b"):
+    """
+    Generate data-backed, number-specific corrective action recommendations for a KPI.
+    Uses fingerprint data, benchmarks, and the causal knowledge graph (CAUSATION_RULES)
+    to produce actionable insights with specific numbers, upstream/downstream analysis,
+    and quantified expected impact.
+    """
+    # Validate stage
+    valid_stages = {"seed", "series_a", "series_b", "series_c"}
+    if stage not in valid_stages:
+        stage = "series_b"
+
+    # Compute fingerprint data
+    fp_data = _compute_fingerprint_data()
+
+    # Get benchmarks for stage
+    bench = {}
+    for bk, stages_data in BENCHMARKS.items():
+        if stage in stages_data:
+            bench[bk] = stages_data[stage]
+
+    # Validate KPI exists
+    valid_keys = {k["key"] for k in fp_data}
+    if kpi_key not in valid_keys:
+        from fastapi.responses import JSONResponse
+        return JSONResponse(
+            status_code=404,
+            content={"detail": f"KPI '{kpi_key}' not found. Valid keys: {sorted(valid_keys)}"}
+        )
+
+    result = _generate_smart_actions(kpi_key, fp_data, bench, stage)
+    if result is None:
+        from fastapi.responses import JSONResponse
+        return JSONResponse(
+            status_code=404,
+            content={"detail": f"Could not generate actions for KPI '{kpi_key}' — no data found."}
+        )
+
+    return result
+
+
 # ─── Serve React Frontend ───────────────────────────────────────────────────
 
 STATIC_DIR = Path(__file__).parent.parent / "frontend" / "dist"

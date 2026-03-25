@@ -109,7 +109,7 @@ const DECISIONS = [
   { decision: 'Excel export uses 4-row header block', rationale: 'Row 1 is machine-readable keys (import anchor). Rows 2–4 are human metadata. Auto-detect logic in import checks for this structure to distinguish V2 from legacy V1 CSV.' },
   { decision: 'Markov forecast uses Wasserstein distance for regime detection', rationale: 'Technically sophisticated but the label is hidden from users in V2. Business-friendly label "Forward Signals" shown instead.' },
   { decision: 'TextChip components use dotted underline only', rationale: 'No colour change on hover — the dotted underline is the sole click signal. Keeps uniform text colour throughout the Executive Brief narrative.' },
-  { decision: 'BHI score computed on the frontend from filteredFingerprint', rationale: 'Avoids a round-trip. The BHI formula is: (green×100 + yellow×60) / total KPIs. Status thresholds: ≥98% = green, ≥90% = yellow, <90% = red.' },
+  { decision: 'Status distribution (red/yellow/green counts) computed from filteredFingerprint', rationale: 'Simple count of KPIs by fy_status. Displayed in the sidebar and Executive Brief header. No composite score — just raw counts for clarity.' },
   { decision: 'Benchmarks stored as a Python dict (not DB table)', rationale: 'Static reference data — no user-modifiable content. Easier to update inline. Source: OpenView, Bessemer, SaaS Capital reports.' },
 ]
 
@@ -346,7 +346,7 @@ cd "/Users/rahulbahri/Signal-platform V2/signals-intelligence-v2/frontend"
           <SubHeading>Component tree</SubHeading>
           <Code>{`App
 ├── aside (sidebar)
-│   ├── Logo / BHI ring
+│   ├── Logo / Status counts
 │   ├── Stage selector (benchmarking pill buttons)
 │   ├── Ask Anika CTA button
 │   ├── nav (NAV_GROUPS rendered as sidebar-link buttons)

@@ -98,8 +98,6 @@ function generateBoardPack(fingerprint) {
   const green  = fingerprint.filter(k => k.fy_status === 'green').length
   const yellow = fingerprint.filter(k => k.fy_status === 'yellow').length
   const red    = fingerprint.filter(k => k.fy_status === 'red').length
-  const bhi    = Math.round((green * 100 + yellow * 60) / Math.max(green + yellow + red, 1))
-
   const rows = fingerprint.map(k => {
     const byMonth = {}
     k.monthly?.forEach(m => { byMonth[parseInt(m.period.split('-')[1], 10)] = m.value })
@@ -123,8 +121,6 @@ function generateBoardPack(fingerprint) {
       <td style="color:${trendColor};font-weight:700;text-align:center">${trend}</td>
     </tr>`
   }).join('')
-
-  const bhiColor = bhi >= 70 ? '#16a34a' : bhi >= 50 ? '#d97706' : '#dc2626'
 
   const html = `<!DOCTYPE html>
 <html><head><title>Board Performance Pack — FY 2025</title>
@@ -151,7 +147,6 @@ function generateBoardPack(fingerprint) {
 <h1>FY 2025 — Board Performance Pack</h1>
 <div class="sub">Signals Intelligence · Prepared ${dateStr}</div>
 <div class="summary">
-  <div class="s-item"><div class="s-num" style="color:${bhiColor}">${bhi}</div><div class="s-lbl">Business Health Index</div></div>
   <div class="s-item"><div class="s-num" style="color:#16a34a">${green}</div><div class="s-lbl">On Target</div></div>
   <div class="s-item"><div class="s-num" style="color:#d97706">${yellow}</div><div class="s-lbl">Needs Attention</div></div>
   <div class="s-item"><div class="s-num" style="color:#dc2626">${red}</div><div class="s-lbl">Critical</div></div>
@@ -189,24 +184,17 @@ function generatePresentation(fingerprint, periodA, periodB) {
   const green   = fingerprint.filter(k => k.fy_status === 'green').length
   const yellow  = fingerprint.filter(k => k.fy_status === 'yellow').length
   const red     = fingerprint.filter(k => k.fy_status === 'red').length
-  const bhi     = Math.round((green * 100 + yellow * 60) / Math.max(green + yellow + red, 1))
-  const bhiColor = bhi >= 70 ? '#16a34a' : bhi >= 50 ? '#d97706' : '#dc2626'
-
   const pALabel = periodLabel(periodA)
   const pBLabel = periodLabel(periodB)
   const compareNote = (periodA?.length && periodB?.length)
     ? `Period comparison: <strong>${pALabel}</strong> vs <strong>${pBLabel}</strong>`
     : ''
 
-  // Slide 1 — Title + BHI
+  // Slide 1 — Title + Status Overview
   const slide1 = `
     <div class="slide">
       <div class="slide-header"><span class="logo">Signals Intelligence</span><span class="date">${dateStr}</span></div>
       <div class="slide-body center">
-        <div class="bhi-ring" style="border-color:${bhiColor}">
-          <div class="bhi-num" style="color:${bhiColor}">${bhi}</div>
-          <div class="bhi-lbl">Business Health Index</div>
-        </div>
         <h1 class="slide-title">FY 2025 Performance Review</h1>
         <p class="slide-sub">KPI Fingerprint &amp; Trend Analysis${compareNote ? ' · ' + compareNote : ''}</p>
         <div class="pill-row">
@@ -343,13 +331,6 @@ function generatePresentation(fingerprint, periodA, periodB) {
     font-size: 10px; color: #94a3b8; text-align: right;
   }
   .center { display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; }
-  .bhi-ring {
-    width: 120px; height: 120px; border-radius: 50%; border: 6px solid #16a34a;
-    display: flex; flex-direction: column; align-items: center; justify-content: center;
-    margin-bottom: 20px;
-  }
-  .bhi-num { font-size: 38px; font-weight: 900; line-height: 1; }
-  .bhi-lbl { font-size: 10px; color: #64748b; text-transform: uppercase; letter-spacing: 0.06em; margin-top: 2px; }
   .slide-title { font-size: 26px; font-weight: 800; color: #0f172a; margin-bottom: 6px; }
   .slide-sub { font-size: 13px; color: #64748b; margin-bottom: 20px; }
   .pill-row { display: flex; gap: 8px; flex-wrap: wrap; justify-content: center; }

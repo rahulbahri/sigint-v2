@@ -196,7 +196,7 @@ function signalActions(signal) {
 }
 
 // ── Thesis sentence ───────────────────────────────────────────────────────────
-// buildThesis — removed; BHI composite score replaced with factual status distribution
+// buildThesis — removed; replaced with factual status distribution
 
 // ── Hidden signal detector ────────────────────────────────────────────────────
 function detectSignals(fingerprint) {
@@ -1305,7 +1305,7 @@ export default function BoardReady({ fingerprint, bridgeData, onNavigate, period
         // ── Narrative paragraphs ───────────────────────────────────────────
         const paragraphs = []
 
-        // — Opening: BHI + trajectory + count summary
+        // — Opening: trajectory + count summary
         const openingTone = redKpis.length === 0
           ? `performing strongly — ${greenKpis.length} of ${total} KPIs on or above target`
           : redKpis.length <= total * 0.25
@@ -1478,7 +1478,7 @@ export default function BoardReady({ fingerprint, bridgeData, onNavigate, period
                 </span>
               ))}{' '}
               {top2Yellow.length > 1 ? 'are' : 'is'} in the amber band and approaching the critical threshold.{' '}
-              Without corrective action in this period, {top2Yellow.length > 1 ? 'these will' : 'this will'} push the BHI lower and increase the critical count next period.
+              Without corrective action in this period, {top2Yellow.length > 1 ? 'these will' : 'this will'} increase the critical count next period.
             </p>
           )
         }

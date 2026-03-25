@@ -285,9 +285,6 @@ export default function App() {
   const attention = sb.yellow || 0
   const onTarget  = sb.green  || 0
   const total     = critical + attention + onTarget
-  const bhi       = total > 0 ? Math.round((onTarget * 100 + attention * 60) / total) : null
-  const bhiColor  = bhi == null ? '#94a3b8' : bhi >= 80 ? '#059669' : bhi >= 60 ? '#d97706' : '#dc2626'
-  const bhiTrack  = bhi == null ? '#e2e8f0' : bhi >= 80 ? '#dcfce7' : bhi >= 60 ? '#fef3c7' : '#fee2e2'
 
   return (
     <div className="flex h-screen overflow-hidden">
@@ -311,44 +308,26 @@ export default function App() {
           </div>
         </div>
 
-        {/* Business Health Index — replaces count pills */}
+        {/* Status Distribution */}
         {!loading && filteredSummary && (
           <div className="px-4 py-3 border-b border-white/10">
             <p className="text-slate-400 text-[10px] uppercase tracking-wider mb-2 font-medium">
-              Business Health Index
+              Status Distribution
             </p>
-            {/* BHI score with arc indicator */}
-            <div className="flex items-center gap-3 mb-2">
-              <div className="relative flex-shrink-0">
-                <svg width="48" height="48" viewBox="0 0 48 48">
-                  <circle cx="24" cy="24" r="20" fill="none" stroke={bhiTrack} strokeWidth="4"/>
-                  <circle cx="24" cy="24" r="20" fill="none" stroke={bhiColor} strokeWidth="4"
-                    strokeDasharray={`${((bhi ?? 0) / 100) * 125.7} 125.7`}
-                    strokeLinecap="round"
-                    transform="rotate(-90 24 24)"/>
-                </svg>
-                <span className="absolute inset-0 flex items-center justify-center text-sm font-bold"
-                  style={{ color: bhiColor }}>
-                  {bhi ?? '—'}
-                </span>
-              </div>
-              <div className="min-w-0">
-                <p className="text-white text-xs font-semibold leading-none">
-                  {bhi == null ? 'No data' : bhi >= 80 ? 'Healthy' : bhi >= 60 ? 'Caution' : 'At Risk'}
-                </p>
-                <p className="text-slate-400 text-[10px] mt-0.5">out of 100</p>
-              </div>
-            </div>
-            {/* Supporting detail pills */}
-            <div className="flex gap-1.5">
-              <span className="flex-1 text-center text-[9px] font-bold px-1 py-1 rounded bg-red-500/15 text-red-400">
-                {critical} red
+            <div className="flex items-center gap-2 flex-wrap text-[11px] font-semibold">
+              <span className="flex items-center gap-1">
+                <span className="inline-block w-2 h-2 rounded-full bg-red-500" />
+                <span className="text-red-400">{critical} critical</span>
               </span>
-              <span className="flex-1 text-center text-[9px] font-bold px-1 py-1 rounded bg-amber-500/15 text-amber-400">
-                {attention} watch
+              <span className="text-slate-600">·</span>
+              <span className="flex items-center gap-1">
+                <span className="inline-block w-2 h-2 rounded-full bg-amber-500" />
+                <span className="text-amber-400">{attention} watch</span>
               </span>
-              <span className="flex-1 text-center text-[9px] font-bold px-1 py-1 rounded bg-emerald-500/15 text-emerald-400">
-                {onTarget} ok
+              <span className="text-slate-600">·</span>
+              <span className="flex items-center gap-1">
+                <span className="inline-block w-2 h-2 rounded-full bg-emerald-500" />
+                <span className="text-emerald-400">{onTarget} on target</span>
               </span>
             </div>
           </div>
