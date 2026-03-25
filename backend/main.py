@@ -4052,10 +4052,10 @@ async def import_data_xlsx(file: UploadFile = File(...)):
 
 import urllib.request as _urllib_req
 
-class SlackTestRequest(BaseModel):
+class SlackTestRequest(_BaseModel):
     webhook_url: str
 
-class SlackAlertRequest(BaseModel):
+class SlackAlertRequest(_BaseModel):
     webhook_url: str
     red_kpis: list[dict]          # [{key, name, value, target, pct_off}]
     company_name: str = "Your Company"
