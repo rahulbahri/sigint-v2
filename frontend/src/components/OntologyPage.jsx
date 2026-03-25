@@ -1295,6 +1295,17 @@ export default function OntologyPage() {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16, height: '100%' }}>
 
+      {/* Plain-English explainer */}
+      <div className="rounded-xl border border-slate-200 bg-slate-50 px-5 py-3 flex items-start gap-3 flex-shrink-0">
+        <span className="text-slate-400 text-lg flex-shrink-0">🔗</span>
+        <p className="text-xs text-slate-600 leading-relaxed">
+          <strong className="text-slate-800">How your KPIs are connected.</strong>{' '}
+          Every KPI in your business influences others — burn drives CAC payback, churn drives NRR, NRR drives revenue.
+          The map below shows those causal chains. The <strong>Top Leverage Points</strong> are the KPIs that, if improved,
+          create the most positive knock-on effects across your entire business. Click any node to explore its connections.
+        </p>
+      </div>
+
       {/* Stat cards */}
       {stats && (
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12 }}>
@@ -1365,7 +1376,7 @@ export default function OntologyPage() {
       {/* Tabs + Run Discovery */}
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
         <div style={{ display: 'flex', gap: 4 }}>
-          {[['graph', 'Knowledge Graph'], ['recs', `Signal Recommendations${recs.length ? ` (${recs.length})` : ''}`]].map(([id, label]) => (
+          {[['graph', 'Causal Map'], ['recs', `Actionable Insights${recs.length ? ` (${recs.length})` : ''}`]].map(([id, label]) => (
             <button key={id} onClick={() => setTab(id)}
               style={{ padding: '6px 16px', borderRadius: 6, fontSize: 13, display: 'inline-flex',
                 border: 'none', cursor: 'pointer', fontWeight: 600,

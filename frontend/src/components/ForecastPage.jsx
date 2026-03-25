@@ -399,7 +399,26 @@ export default function ForecastPage() {
   const histMedian = chartData[0]?.hist_p50
 
   return (
-    <div className="flex gap-5 h-full min-h-0">
+    <div className="flex flex-col gap-4 h-full min-h-0">
+
+      {/* ── Plain-English intro card ─────────────────────── */}
+      <div className="flex-shrink-0 rounded-xl border border-blue-100 bg-blue-50/60 px-5 py-4">
+        <div className="flex items-start gap-3">
+          <span className="text-blue-400 text-lg flex-shrink-0">📈</span>
+          <div>
+            <p className="text-sm font-semibold text-blue-900 mb-1">What this shows</p>
+            <p className="text-xs text-blue-700 leading-relaxed">
+              Select any KPI, set a time horizon, and run the projection. The chart shows three outcomes:
+              the <strong>most likely path</strong> (solid line), an <strong>optimistic scenario</strong> (upper band),
+              and a <strong>pessimistic scenario</strong> (lower band) — based on how this KPI has behaved historically.
+              Use <strong>Scenario Inputs</strong> to pin a KPI at a specific value and see how it changes the outlook
+              across connected metrics.
+            </p>
+          </div>
+        </div>
+      </div>
+
+      <div className="flex gap-5 flex-1 min-h-0">
 
       {/* ── Left: Controls ─────────────────────────────────── */}
       <div className="w-72 flex-shrink-0 flex flex-col gap-3 overflow-y-auto pb-2">
@@ -421,7 +440,7 @@ export default function ForecastPage() {
             <div className="space-y-1">
               <div className="flex items-center gap-2">
                 <span className="w-2 h-2 rounded-full bg-emerald-400" />
-                <span className="text-xs text-emerald-600 font-medium">Wasserstein regime-conditioned engine ready</span>
+                <span className="text-xs text-emerald-600 font-medium">Analysis engine ready</span>
               </div>
               <p className="text-[11px] text-slate-400">
                 {model.kpis?.length} KPIs · {new Date(model.trained_at).toLocaleDateString()}
@@ -643,7 +662,7 @@ export default function ForecastPage() {
                     {formatKpiKey(selectedKpi ?? '')} — {Math.round(horizonDays / 30)}-Month Projection
                   </h3>
                   <p className="text-xs text-slate-400 mt-0.5">
-                    Wasserstein regime-conditioned Monte Carlo · {nSamples} simulations · p10/p50/p90
+                    {nSamples} simulated paths · showing likely range (p10–p90) and most probable outcome (median)
                   </p>
                   {result?.regime_data?.available && (
                     <RegimeBadge regime={result.regime_data} />
@@ -767,6 +786,7 @@ export default function ForecastPage() {
           </div>
         )}
       </div>
+      </div>  {/* closes flex gap-5 flex-1 */}
     </div>
   )
 }

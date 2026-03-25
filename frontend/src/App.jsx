@@ -19,26 +19,50 @@ import OntologyPage from './components/OntologyPage.jsx'
 import BoardReady from './components/BoardReady.jsx'
 import ForecastPage from './components/ForecastPage.jsx'
 
-const TABS = [
-  { id: 'board',       label: 'Executive Signal',  Icon: Layers          },
-  { id: 'dashboard',   label: 'Command Center',    Icon: LayoutDashboard },
-  { id: 'fingerprint', label: 'Org Fingerprint',   Icon: Fingerprint     },
-  { id: 'trends',      label: 'Monthly Trends',    Icon: TrendingUp      },
-  { id: 'projection',  label: 'Bridge Analysis',   Icon: GitBranch       },
-  { id: 'ontology',    label: 'Data Ontology',     Icon: Network         },
-  { id: 'forecast',    label: 'Signals Forecast',  Icon: BarChart2       },
-  { id: 'upload',      label: 'Data Upload',       Icon: Upload          },
-  { id: 'api',         label: 'API Reference',     Icon: Code2           },
+// ── V2: Nav structured into labelled zones with business-friendly names ──────
+const NAV_GROUPS = [
+  {
+    label: 'Intelligence',
+    tabs: [
+      { id: 'board',    label: 'Executive Brief',   Icon: Layers    },
+      { id: 'forecast', label: 'Forward Signals',   Icon: BarChart2 },
+    ],
+  },
+  {
+    label: 'Analysis',
+    tabs: [
+      { id: 'dashboard',   label: 'Command Center',          Icon: LayoutDashboard },
+      { id: 'fingerprint', label: 'Performance Fingerprint', Icon: Fingerprint     },
+      { id: 'trends',      label: 'Trend Explorer',          Icon: TrendingUp      },
+      { id: 'projection',  label: 'Plan vs Actual',          Icon: GitBranch       },
+    ],
+  },
+  {
+    label: 'Knowledge',
+    tabs: [
+      { id: 'ontology', label: 'KPI Causal Map', Icon: Network },
+    ],
+  },
+  {
+    label: 'Settings',
+    tabs: [
+      { id: 'upload', label: 'Data Upload',    Icon: Upload },
+      { id: 'api',    label: 'API Reference',  Icon: Code2  },
+    ],
+  },
 ]
 
+// Flat list kept for places that need to iterate all tabs
+const TABS = NAV_GROUPS.flatMap(g => g.tabs)
+
 const PAGE_TITLES = {
-  board:       'Executive Signal',
-  dashboard:   'Actionable Intelligence Command Center',
-  fingerprint: 'Organisational Fingerprint',
-  trends:      'Monthly KPI Trends',
-  projection:  'Projection vs Actual — Bridge Analysis',
-  ontology:    'Data Ontology — KPI Knowledge Graph',
-  forecast:    'Signals Forecast — Markov Scenario Projection',
+  board:       'Executive Brief',
+  dashboard:   'Command Center',
+  fingerprint: 'Performance Fingerprint',
+  trends:      'Trend Explorer',
+  projection:  'Plan vs Actual',
+  ontology:    'KPI Causal Map',
+  forecast:    'Forward Signals — 90-Day Outlook',
   upload:      'Data Upload',
   api:         'API Reference',
 }
@@ -53,7 +77,7 @@ function kpiStatus(avg, target, direction) {
 }
 
 export default function App() {
-  const [tab, setTab]                             = useState('dashboard')
+  const [tab, setTab]                             = useState('board')
   const [summary, setSummary]                     = useState(null)
   const [kpiDefs, setKpiDefs]                     = useState([])
   const [monthly, setMonthly]                     = useState([])
@@ -257,12 +281,12 @@ export default function App() {
           <div className="flex items-center gap-3">
             <div className="w-8 h-8 rounded-lg bg-[#00AEEF]/20 border border-[#00AEEF]/40
                             flex items-center justify-center pulse-accent flex-shrink-0">
-              <span className="text-[#00AEEF] font-bold text-xs">SI</span>
+              <span className="text-[#00AEEF] font-bold text-xs">AX</span>
             </div>
             <div className="min-w-0">
-              <p className="text-white font-bold text-sm leading-none">Signals</p>
+              <p className="text-white font-bold text-sm leading-none">Axiom</p>
               <p className="text-[#00AEEF] text-[10px] mt-0.5 tracking-widest uppercase truncate">
-                Intelligence
+                Intelligence · V2
               </p>
             </div>
           </div>
@@ -313,33 +337,49 @@ export default function App() {
 
         {/* Navigation + AI Panel */}
         <div className="flex-1 flex flex-col min-h-0">
-          <nav className="flex-1 min-h-0 py-4 space-y-0.5 overflow-y-auto">
-            <p className="text-slate-500 text-[10px] uppercase tracking-wider font-medium px-6 mb-2">
-              Navigation
-            </p>
-            {TABS.map(({ id, label, Icon }) => (
-              <button
-                key={id}
-                onClick={() => setTab(id)}
-                className={`sidebar-link w-full text-left ${tab === id ? 'active' : ''} ${
-                  id === 'board' && tab !== 'board'
-                    ? 'border border-[#00AEEF]/30 bg-[#00AEEF]/10 !text-[#00AEEF] mb-1'
-                    : ''
-                }`}
-              >
-                <Icon size={15} className="flex-shrink-0" />
-                <span className="flex-1">{label}</span>
-                {id === 'board' && tab !== 'board' && (
-                  <span className="text-[8px] font-bold px-1.5 py-0.5 rounded bg-[#00AEEF]/20 text-[#00AEEF] uppercase tracking-wider">
-                    New
-                  </span>
-                )}
-                {tab === id && <ChevronRight size={12} className="text-[#00AEEF]" />}
-              </button>
+
+          {/* ── Anika co-pilot CTA — prominent, always visible ── */}
+          <div className="px-3 pt-3 pb-1">
+            <button
+              onClick={() => {
+                // Expand AI panel — find and click its toggle
+                document.querySelector('[data-anika-toggle]')?.click()
+              }}
+              className="w-full flex items-center gap-2 px-3 py-2 rounded-xl
+                         bg-gradient-to-r from-teal-500/20 to-blue-500/20
+                         border border-teal-400/30 hover:border-teal-400/60
+                         text-teal-300 hover:text-teal-200 transition-all group"
+            >
+              <span className="text-base">✦</span>
+              <span className="flex-1 text-left text-[11px] font-semibold tracking-wide">Ask Anika</span>
+              <span className="text-[9px] text-teal-400/70 font-medium bg-teal-500/10 px-1.5 py-0.5 rounded-full">
+                AI CFO Analyst
+              </span>
+            </button>
+          </div>
+
+          <nav className="flex-1 min-h-0 py-2 overflow-y-auto">
+            {NAV_GROUPS.map(group => (
+              <div key={group.label} className="mb-1">
+                <p className="text-slate-500 text-[9px] uppercase tracking-widest font-semibold px-5 py-1.5">
+                  {group.label}
+                </p>
+                {group.tabs.map(({ id, label, Icon }) => (
+                  <button
+                    key={id}
+                    onClick={() => setTab(id)}
+                    className={`sidebar-link w-full text-left ${tab === id ? 'active' : ''}`}
+                  >
+                    <Icon size={15} className="flex-shrink-0" />
+                    <span className="flex-1">{label}</span>
+                    {tab === id && <ChevronRight size={12} className="text-[#00AEEF]" />}
+                  </button>
+                ))}
+              </div>
             ))}
           </nav>
 
-          {/* AI Query Panel */}
+          {/* AI Query Panel — collapsed by default, opened via Anika CTA */}
           <AiQueryPanel
             bridgeData={filteredBridgeData}
             prefillQuestion={prefillQuestion}
@@ -404,6 +444,45 @@ export default function App() {
             availableYears={availableYears}
           />
         )}
+
+        {/* ── Anika proactive nudge bar — contextual, one insight per view ── */}
+        {!loading && !noData && filteredFingerprint.length > 0 && (() => {
+          const redCount = filteredFingerprint.filter(k => k.fy_status === 'red').length
+          const worstKpi = [...filteredFingerprint]
+            .filter(k => k.fy_status === 'red' && k.avg != null && k.target)
+            .sort((a, b) => {
+              const gA = a.direction === 'higher' ? a.avg / a.target : a.target / a.avg
+              const gB = b.direction === 'higher' ? b.avg / b.target : b.target / b.avg
+              return gA - gB
+            })[0]
+          const nudgeMap = {
+            board:       worstKpi ? `✦  ${worstKpi.name} is the deepest gap this period — ask Anika for a full breakdown` : '✦  Ask Anika anything about this period',
+            dashboard:   `✦  ${redCount} KPIs are critical — ask Anika which to fix first`,
+            fingerprint: '✦  Ask Anika to explain any pattern you see in the heatmap',
+            trends:      '✦  Ask Anika to identify the most important trend shift in this data',
+            projection:  '✦  Ask Anika why specific KPIs are behind plan',
+            ontology:    '✦  Ask Anika how your most influential KPI is affecting the rest of the business',
+            forecast:    '✦  Ask Anika to explain this forecast in plain English',
+            upload:      null,
+            api:         null,
+          }
+          const nudge = nudgeMap[tab]
+          if (!nudge) return null
+          return (
+            <div className="flex-shrink-0 mx-6 mb-0 mt-2">
+              <button
+                onClick={() => document.querySelector('[data-anika-toggle]')?.click()}
+                className="w-full flex items-center gap-2.5 px-4 py-2 rounded-xl
+                           bg-gradient-to-r from-teal-950/60 to-blue-950/60
+                           border border-teal-700/30 hover:border-teal-500/50
+                           text-teal-300/80 hover:text-teal-200 transition-all text-left"
+              >
+                <span className="text-[11px] flex-1">{nudge}</span>
+                <span className="text-[10px] text-teal-500/60 font-medium flex-shrink-0">Ask →</span>
+              </button>
+            </div>
+          )
+        })()}
 
         {/* Scrollable content */}
         <main className="flex-1 overflow-y-auto px-6 py-5">
