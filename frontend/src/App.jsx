@@ -3,7 +3,7 @@ import axios from 'axios'
 import {
   LayoutDashboard, Fingerprint, TrendingUp,
   Upload, Code2, RefreshCw, ChevronRight,
-  Activity, GitBranch, Network, Layers, BarChart2, BookOpen
+  Activity, GitBranch, Network, Layers, BarChart2, BookOpen, Bell
 } from 'lucide-react'
 import Scorecard from './components/Scorecard.jsx'
 import Fingerprint2 from './components/Fingerprint.jsx'
@@ -19,6 +19,8 @@ import OntologyPage from './components/OntologyPage.jsx'
 import BoardReady from './components/BoardReady.jsx'
 import ForecastPage from './components/ForecastPage.jsx'
 import DevDocs from './components/DevDocs.jsx'
+import SlackAlerts from './components/SlackAlerts.jsx'
+import OnboardingModal from './components/OnboardingModal.jsx'
 
 // ── V2: Nav structured into labelled zones with business-friendly names ──────
 const NAV_GROUPS = [
@@ -48,6 +50,7 @@ const NAV_GROUPS = [
     label: 'Settings',
     tabs: [
       { id: 'upload',  label: 'Data Upload',   Icon: Upload   },
+      { id: 'alerts',  label: 'Slack Alerts',  Icon: Bell     },
       { id: 'api',     label: 'API Reference', Icon: Code2    },
       { id: 'devdocs', label: 'Dev Docs',      Icon: BookOpen },
     ],
@@ -66,6 +69,7 @@ const PAGE_TITLES = {
   ontology:    'KPI Causal Map',
   forecast:    'Forward Signals — 90-Day Outlook',
   upload:      'Data Upload',
+  alerts:      'Slack Alerts',
   api:         'API Reference',
   devdocs:     'Developer Documentation',
 }
@@ -96,6 +100,7 @@ export default function App() {
   const [availableYears, setAvailableYears]       = useState([])
   const [companyStage, setCompanyStage]           = useState(() => localStorage.getItem('axiom_stage') || 'series_b')
   const [benchmarks, setBenchmarks]               = useState({})
+  const [showOnboarding, setShowOnboarding]       = useState(() => !localStorage.getItem('axiom_onboarded'))
 
   // ── Derived filter sets ───────────────────────────────────────────────────
   const yearSet  = useMemo(() => new Set(selectedYears),  [selectedYears])
@@ -600,6 +605,7 @@ export default function App() {
               {tab === 'ontology'    && <OntologyPage />}
               {tab === 'forecast'    && <ForecastPage />}
               {tab === 'upload'      && <CSVUpload onUploaded={loadAll}/>}
+              {tab === 'alerts'      && <SlackAlerts filteredFingerprint={filteredFingerprint}/>}
               {tab === 'api'         && <APIReference kpiDefs={kpiDefs}/>}
               {tab === 'devdocs'     && <DevDocs />}
             </>
@@ -608,6 +614,7 @@ export default function App() {
           {!loading && noData && tab === 'ontology'   && <OntologyPage />}
           {!loading && noData && tab === 'forecast'   && <ForecastPage />}
           {!loading && noData && tab === 'upload'     && <CSVUpload onUploaded={loadAll}/>}
+          {!loading && noData && tab === 'alerts'     && <SlackAlerts filteredFingerprint={[]}/>}
           {!loading && noData && tab === 'api'        && <APIReference kpiDefs={kpiDefs}/>}
           {!loading && noData && tab === 'devdocs'    && <DevDocs />}
           {!loading && noData && tab === 'projection' && (
@@ -624,6 +631,19 @@ export default function App() {
 
       {/* ── KPI Detail Panel (global, fixed overlay) ──────── */}
       <KpiDetailPanel kpi={selectedKpi} onClose={closeKpi} periodLabel={periodLabel} benchmarks={benchmarks} companyStage={companyStage}/>
+
+      {/* ── Onboarding Modal (first-run only) ─────────────── */}
+      {showOnboarding && (
+        <OnboardingModal
+          initialStage={companyStage}
+          onComplete={({ stage, mode }) => {
+            setCompanyStage(stage)
+            localStorage.setItem('axiom_stage', stage)
+            setShowOnboarding(false)
+            if (mode === 'load') setTab('upload')
+          }}
+        />
+      )}
     </div>
   )
 }

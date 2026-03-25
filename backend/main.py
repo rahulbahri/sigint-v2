@@ -4011,6 +4011,107 @@ async def import_data_xlsx(file: UploadFile = File(...)):
     return {"status": "ok", "rows_imported": len(records)}
 
 
+# ─── Slack Alerts ────────────────────────────────────────────────────────────
+
+import urllib.request as _urllib_req
+
+class SlackTestRequest(BaseModel):
+    webhook_url: str
+
+class SlackAlertRequest(BaseModel):
+    webhook_url: str
+    red_kpis: list[dict]          # [{key, name, value, target, pct_off}]
+    company_name: str = "Your Company"
+
+@app.post("/api/slack/test", tags=["Alerts"])
+async def slack_test(body: SlackTestRequest):
+    """Send a test Slack message to verify the webhook URL."""
+    payload = {
+        "text": "✅ *Axiom Intelligence* — Slack alerts connected successfully. You'll receive KPI threshold alerts here.",
+        "username": "Axiom Intelligence",
+        "icon_emoji": ":bar_chart:",
+    }
+    try:
+        data = json.dumps(payload).encode("utf-8")
+        req  = _urllib_req.Request(
+            body.webhook_url,
+            data=data,
+            headers={"Content-Type": "application/json"},
+        )
+        with _urllib_req.urlopen(req, timeout=8) as resp:
+            resp_text = resp.read().decode("utf-8")
+        if resp_text.strip() != "ok":
+            raise HTTPException(status_code=502, detail=f"Slack returned: {resp_text}")
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=str(exc))
+    return {"status": "sent"}
+
+
+@app.post("/api/slack/notify", tags=["Alerts"])
+async def slack_notify(body: SlackAlertRequest):
+    """Fire a KPI alert message to Slack for a batch of red KPIs."""
+    if not body.red_kpis:
+        return {"status": "no_alerts"}
+
+    blocks: list[dict] = [
+        {
+            "type": "header",
+            "text": {"type": "plain_text", "text": f"🚨 KPI Alert — {body.company_name}", "emoji": True},
+        },
+        {
+            "type": "section",
+            "text": {
+                "type": "mrkdwn",
+                "text": f"*{len(body.red_kpis)} KPI{'s' if len(body.red_kpis) > 1 else ''} below critical threshold* — immediate attention recommended.",
+            },
+        },
+        {"type": "divider"},
+    ]
+
+    for kpi in body.red_kpis[:8]:   # cap at 8 to avoid giant messages
+        pct  = abs(kpi.get("pct_off", 0))
+        val  = kpi.get("value", "–")
+        tgt  = kpi.get("target", "–")
+        name = kpi.get("name", kpi.get("key", "?"))
+        blocks.append({
+            "type": "section",
+            "text": {
+                "type": "mrkdwn",
+                "text": (
+                    f"*{name}*\n"
+                    f"Current: `{val}`   Target: `{tgt}`   Off by `{pct:.0f}%`"
+                ),
+            },
+        })
+
+    blocks.append({
+        "type": "context",
+        "elements": [
+            {
+                "type": "mrkdwn",
+                "text": "Sent by *Axiom Intelligence V2* · Open the platform for full narrative analysis",
+            }
+        ],
+    })
+
+    payload = {"blocks": blocks, "username": "Axiom Intelligence", "icon_emoji": ":bar_chart:"}
+    try:
+        data = json.dumps(payload).encode("utf-8")
+        req  = _urllib_req.Request(
+            body.webhook_url,
+            data=data,
+            headers={"Content-Type": "application/json"},
+        )
+        with _urllib_req.urlopen(req, timeout=8) as resp:
+            resp_text = resp.read().decode("utf-8")
+        if resp_text.strip() != "ok":
+            raise HTTPException(status_code=502, detail=f"Slack returned: {resp_text}")
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=str(exc))
+
+    return {"status": "sent", "alerts_fired": len(body.red_kpis)}
+
+
 # ─── Serve React Frontend ───────────────────────────────────────────────────
 
 STATIC_DIR = Path(__file__).parent.parent / "frontend" / "dist"
