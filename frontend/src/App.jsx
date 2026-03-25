@@ -21,47 +21,49 @@ import ForecastPage from './components/ForecastPage.jsx'
 import DevDocs from './components/DevDocs.jsx'
 import SlackAlerts from './components/SlackAlerts.jsx'
 import OnboardingModal from './components/OnboardingModal.jsx'
+import VarianceCommand from './components/VarianceCommand.jsx'
 
 // ── V2: Nav structured into labelled zones with business-friendly names ──────
 const NAV_GROUPS = [
   {
     label: 'Intelligence',
     tabs: [
-      { id: 'board',    label: 'Executive Brief',   Icon: Layers    },
-      { id: 'forecast', label: 'Forward Signals',   Icon: BarChart2 },
+      { id: 'board',    label: 'Executive Brief',       Icon: Layers    },
+      { id: 'variance', label: 'Variance Command',      Icon: Activity  },
     ],
   },
   {
     label: 'Analysis',
     tabs: [
-      { id: 'dashboard',   label: 'Command Center',          Icon: LayoutDashboard },
       { id: 'fingerprint', label: 'Performance Fingerprint', Icon: Fingerprint     },
       { id: 'trends',      label: 'Trend Explorer',          Icon: TrendingUp      },
+      { id: 'forecast',    label: 'Forward Signals',         Icon: BarChart2        },
       { id: 'projection',  label: 'Plan vs Actual',          Icon: GitBranch       },
-    ],
-  },
-  {
-    label: 'Knowledge',
-    tabs: [
-      { id: 'ontology', label: 'KPI Causal Map', Icon: Network },
     ],
   },
   {
     label: 'Settings',
     tabs: [
-      { id: 'upload',  label: 'Data Upload',   Icon: Upload   },
-      { id: 'alerts',  label: 'Slack Alerts',  Icon: Bell     },
-      { id: 'api',     label: 'API Reference', Icon: Code2    },
-      { id: 'devdocs', label: 'Dev Docs',      Icon: BookOpen },
+      { id: 'upload',  label: 'Data Upload',   Icon: Upload },
+      { id: 'alerts',  label: 'Slack Alerts',  Icon: Bell   },
     ],
   },
 ]
 
+// Advanced tabs — shown in collapsible section
+const ADVANCED_TABS = [
+  { id: 'dashboard', label: 'Command Center',  Icon: LayoutDashboard },
+  { id: 'ontology',  label: 'KPI Causal Map',  Icon: Network         },
+  { id: 'api',       label: 'API Reference',   Icon: Code2           },
+  { id: 'devdocs',   label: 'Dev Docs',        Icon: BookOpen        },
+]
+
 // Flat list kept for places that need to iterate all tabs
-const TABS = NAV_GROUPS.flatMap(g => g.tabs)
+const TABS = [...NAV_GROUPS.flatMap(g => g.tabs), ...ADVANCED_TABS]
 
 const PAGE_TITLES = {
   board:       'Executive Brief',
+  variance:    'Variance Command Center',
   dashboard:   'Command Center',
   fingerprint: 'Performance Fingerprint',
   trends:      'Trend Explorer',
@@ -74,7 +76,7 @@ const PAGE_TITLES = {
   devdocs:     'Developer Documentation',
 }
 
-const FILTER_TABS = new Set(['dashboard', 'fingerprint', 'trends', 'projection'])
+const FILTER_TABS = new Set(['variance', 'dashboard', 'fingerprint', 'trends', 'projection'])
 
 // Recompute a KPI's status from its filtered average
 function kpiStatus(avg, target, direction) {
@@ -84,7 +86,7 @@ function kpiStatus(avg, target, direction) {
 }
 
 export default function App() {
-  const [tab, setTab]                             = useState('board')
+  const [tab, setTab]                             = useState('variance')
   const [summary, setSummary]                     = useState(null)
   const [kpiDefs, setKpiDefs]                     = useState([])
   const [monthly, setMonthly]                     = useState([])
@@ -101,6 +103,7 @@ export default function App() {
   const [companyStage, setCompanyStage]           = useState(() => localStorage.getItem('axiom_stage') || 'series_b')
   const [benchmarks, setBenchmarks]               = useState({})
   const [showOnboarding, setShowOnboarding]       = useState(() => !localStorage.getItem('axiom_onboarded'))
+  const [advancedOpen, setAdvancedOpen]           = useState(false)
 
   // ── Derived filter sets ───────────────────────────────────────────────────
   const yearSet  = useMemo(() => new Set(selectedYears),  [selectedYears])
@@ -422,6 +425,26 @@ export default function App() {
                 ))}
               </div>
             ))}
+
+            {/* Advanced section */}
+            <div className="mt-2">
+              <button
+                onClick={() => setAdvancedOpen(!advancedOpen)}
+                className="flex items-center gap-2 w-full px-3 py-1.5 text-[10px] font-bold text-slate-400 uppercase tracking-widest hover:text-slate-500 transition-colors"
+              >
+                <ChevronRight size={10} className={`transition-transform ${advancedOpen ? 'rotate-90' : ''}`}/>
+                Advanced
+              </button>
+              {advancedOpen && ADVANCED_TABS.map(({ id, label, Icon }) => (
+                <button key={id} onClick={() => setTab(id)}
+                  className={`flex items-center gap-2.5 w-full px-4 py-2 rounded-xl text-[12px] font-medium transition-all duration-150 ${
+                    tab === id ? 'bg-[#0055A4] text-white shadow-md' : 'text-slate-500 hover:bg-slate-100 hover:text-slate-700'
+                  }`}>
+                  <Icon size={14}/>
+                  {label}
+                </button>
+              ))}
+            </div>
           </nav>
 
           {/* AI Query Panel — collapsed by default, opened via Anika CTA */}
@@ -556,6 +579,16 @@ export default function App() {
 
           {!loading && !noData && (
             <>
+              {tab === 'variance' && (
+                <VarianceCommand
+                  fingerprint={filteredFingerprint}
+                  bridgeData={filteredBridgeData}
+                  benchmarks={benchmarks}
+                  companyStage={companyStage}
+                  periodLabel={periodLabel}
+                  onKpiClick={openKpi}
+                />
+              )}
               {tab === 'board' && (
                 <BoardReady
                   fingerprint={filteredFingerprint}

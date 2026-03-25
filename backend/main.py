@@ -87,8 +87,24 @@ def init_db():
             updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
             UNIQUE(kpi_key, period)
         );
+        CREATE TABLE IF NOT EXISTS kpi_accountability (
+            kpi_key TEXT PRIMARY KEY,
+            owner TEXT DEFAULT '',
+            due_date TEXT DEFAULT '',
+            status TEXT DEFAULT 'open',
+            last_updated TEXT DEFAULT CURRENT_TIMESTAMP
+        );
     """)
     conn.commit()
+    # Migration: add version_label to projection tables if missing
+    cols = [r[1] for r in conn.execute("PRAGMA table_info(projection_uploads)").fetchall()]
+    if "version_label" not in cols:
+        conn.execute("ALTER TABLE projection_uploads ADD COLUMN version_label TEXT DEFAULT 'v1'")
+        conn.commit()
+    cols2 = [r[1] for r in conn.execute("PRAGMA table_info(projection_monthly_data)").fetchall()]
+    if "version_label" not in cols2:
+        conn.execute("ALTER TABLE projection_monthly_data ADD COLUMN version_label TEXT DEFAULT 'v1'")
+        conn.commit()
     # Seed default targets
     default_targets = [
         ("revenue_growth",      6.0,   "pct",    "higher"),
@@ -1373,8 +1389,8 @@ def seed_demo_projection():
 # ─── Projection Endpoints ────────────────────────────────────────────────────
 
 @app.post("/api/projection/upload", tags=["Projection"])
-async def upload_projection(file: UploadFile = File(...)):
-    """Upload a projection CSV (same format as actuals). Replaces any existing projection."""
+async def upload_projection(file: UploadFile = File(...), version_label: Optional[str] = None):
+    """Upload a projection CSV (same format as actuals). Replaces any existing projection with the same version label."""
     if not file.filename.endswith((".csv", ".CSV")):
         raise HTTPException(400, "Only CSV files are accepted.")
     content = await file.read()
@@ -1383,18 +1399,21 @@ async def upload_projection(file: UploadFile = File(...)):
     except Exception as e:
         raise HTTPException(400, f"Could not parse CSV: {e}")
 
+    vlabel = version_label or "v1"
     col_map     = normalize_columns(df)
     monthly_agg = aggregate_monthly(df, col_map)
 
     conn = get_db()
     try:
-        # Delete-before-insert: enforce single active projection
-        conn.execute("DELETE FROM projection_monthly_data")
-        conn.execute("DELETE FROM projection_uploads")
+        # Delete-before-insert: only remove rows with the same version_label
+        old_ids = [r["id"] for r in conn.execute("SELECT id FROM projection_uploads WHERE version_label=?", (vlabel,)).fetchall()]
+        for oid in old_ids:
+            conn.execute("DELETE FROM projection_monthly_data WHERE projection_upload_id=?", (oid,))
+        conn.execute("DELETE FROM projection_uploads WHERE version_label=?", (vlabel,))
 
         cur = conn.execute(
-            "INSERT INTO projection_uploads (filename, uploaded_at, row_count, detected_columns) VALUES (?,?,?,?)",
-            (file.filename, datetime.utcnow().isoformat(), len(df), json.dumps(col_map))
+            "INSERT INTO projection_uploads (filename, uploaded_at, row_count, detected_columns, version_label) VALUES (?,?,?,?,?)",
+            (file.filename, datetime.utcnow().isoformat(), len(df), json.dumps(col_map), vlabel)
         )
         upload_id = cur.lastrowid
 
@@ -1404,8 +1423,8 @@ async def upload_projection(file: UploadFile = File(...)):
             row_dict = {k: (None if (isinstance(v, float) and np.isnan(v)) else v)
                         for k, v in row.items() if k not in ("year", "month")}
             conn.execute(
-                "INSERT INTO projection_monthly_data (projection_upload_id, year, month, data_json) VALUES (?,?,?,?)",
-                (upload_id, yr, mo, json.dumps(row_dict))
+                "INSERT INTO projection_monthly_data (projection_upload_id, year, month, data_json, version_label) VALUES (?,?,?,?,?)",
+                (upload_id, yr, mo, json.dumps(row_dict), vlabel)
             )
         conn.commit()
     finally:
@@ -1418,7 +1437,8 @@ async def upload_projection(file: UploadFile = File(...)):
         "months_detected":  len(monthly_agg),
         "columns_detected": col_map,
         "kpis_computed":    [k for k in monthly_agg.columns if k not in ("year", "month")],
-        "message":          f"Projection uploaded: {len(df)} rows across {len(monthly_agg)} months.",
+        "version_label":    vlabel,
+        "message":          f"Projection uploaded: {len(df)} rows across {len(monthly_agg)} months (version: {vlabel}).",
     }
 
 
@@ -1458,6 +1478,14 @@ def delete_projection_upload(upload_id: int):
     conn.commit()
     conn.close()
     return {"deleted": upload_id}
+
+
+@app.get("/api/projection/versions", tags=["Projection"])
+def get_projection_versions():
+    conn = get_db()
+    rows = conn.execute("SELECT DISTINCT version_label, MIN(uploaded_at) as first_uploaded FROM projection_uploads GROUP BY version_label ORDER BY first_uploaded DESC").fetchall()
+    conn.close()
+    return {"versions": [{"label": r["version_label"] or "v1", "uploaded_at": r["first_uploaded"]} for r in rows]}
 
 
 @app.get("/api/bridge", tags=["Projection"])
@@ -4528,6 +4556,190 @@ def delete_annotation(annotation_id: int):
     conn.commit()
     conn.close()
     return {"status": "ok"}
+
+
+# ─── KPI Accountability ─────────────────────────────────────────────────────
+
+@app.get("/api/accountability", tags=["Accountability"])
+def get_accountability(kpi_key: Optional[str] = None):
+    conn = get_db()
+    if kpi_key:
+        rows = conn.execute("SELECT * FROM kpi_accountability WHERE kpi_key=?", (kpi_key,)).fetchall()
+    else:
+        rows = conn.execute("SELECT * FROM kpi_accountability").fetchall()
+    conn.close()
+    result = {}
+    for r in rows:
+        result[r["kpi_key"]] = {
+            "kpi_key": r["kpi_key"],
+            "owner": r["owner"],
+            "due_date": r["due_date"],
+            "status": r["status"],
+            "last_updated": r["last_updated"],
+        }
+    return {"accountability": result}
+
+@app.put("/api/accountability/{kpi_key}", tags=["Accountability"])
+def put_accountability(kpi_key: str, body: dict):
+    owner = body.get("owner", "")
+    due_date = body.get("due_date", "")
+    status = body.get("status", "open")
+    now = datetime.now().isoformat()
+    conn = get_db()
+    conn.execute("""
+        INSERT INTO kpi_accountability (kpi_key, owner, due_date, status, last_updated)
+        VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(kpi_key) DO UPDATE SET
+            owner = excluded.owner,
+            due_date = excluded.due_date,
+            status = excluded.status,
+            last_updated = excluded.last_updated
+    """, (kpi_key, owner, due_date, status, now))
+    conn.commit()
+    conn.close()
+    return {"status": "ok", "accountability": {"kpi_key": kpi_key, "owner": owner, "due_date": due_date, "status": status, "last_updated": now}}
+
+
+@app.get("/api/export/weekly-briefing.html", tags=["Board Deck"])
+def export_weekly_briefing(stage: str = "series_b"):
+    """Generate an HTML weekly briefing document."""
+    fp_data = _compute_fingerprint_data()
+    if not fp_data:
+        raise HTTPException(status_code=404, detail="No data available")
+
+    # Get benchmarks
+    bench = {}
+    for kpi_key, stages_data in BENCHMARKS.items():
+        if stage in stages_data:
+            bench[kpi_key] = stages_data[stage]
+
+    # Get accountability data
+    conn = get_db()
+    acct_rows = conn.execute("SELECT * FROM kpi_accountability").fetchall()
+    conn.close()
+    acct = {}
+    for r in acct_rows:
+        acct[r["kpi_key"]] = {"owner": r["owner"], "due_date": r["due_date"], "status": r["status"]}
+
+    # Categorise
+    green = [k for k in fp_data if k["fy_status"] == "green"]
+    yellow = [k for k in fp_data if k["fy_status"] == "yellow"]
+    red = [k for k in fp_data if k["fy_status"] == "red"]
+    total = len(fp_data)
+
+    # Sort red by gap magnitude
+    def gap_pct(k):
+        if k["avg"] is None or not k["target"]: return 0
+        raw = (k["avg"] / k["target"] - 1) * 100
+        return -raw if k["direction"] != "higher" else raw
+
+    red_sorted = sorted(red, key=lambda k: abs(gap_pct(k)), reverse=True)
+    yellow_sorted = sorted(yellow, key=lambda k: abs(gap_pct(k)), reverse=True)
+
+    stage_label = {"seed": "Seed", "series_a": "Series A", "series_b": "Series B", "series_c": "Series C+"}.get(stage, stage)
+    date_str = datetime.now().strftime("%B %d, %Y")
+
+    def fmt_val(val, unit):
+        if val is None: return "—"
+        if unit == "pct": return f"{val:.1f}%"
+        if unit == "days": return f"{val:.1f}d"
+        if unit == "months": return f"{val:.1f}mo"
+        if unit == "ratio": return f"{val:.2f}x"
+        return f"{val:.2f}"
+
+    # Get causation rules
+    causation = {}
+    try:
+        causation = globals().get("CAUSATION_RULES", {})
+    except:
+        pass
+
+    # Build HTML
+    html_parts = []
+    html_parts.append(f"""<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>Weekly Briefing — {date_str}</title>
+<style>
+  body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; max-width: 800px; margin: 40px auto; padding: 0 20px; color: #1e293b; line-height: 1.6; }}
+  h1 {{ color: #0f172a; font-size: 24px; border-bottom: 2px solid #0055A4; padding-bottom: 8px; }}
+  h2 {{ color: #334155; font-size: 18px; margin-top: 32px; }}
+  .summary {{ display: flex; gap: 16px; margin: 16px 0; }}
+  .stat {{ padding: 12px 20px; border-radius: 12px; text-align: center; flex: 1; }}
+  .stat-red {{ background: #fef2f2; border: 1px solid #fecaca; }}
+  .stat-yellow {{ background: #fffbeb; border: 1px solid #fde68a; }}
+  .stat-green {{ background: #f0fdf4; border: 1px solid #bbf7d0; }}
+  .stat .num {{ font-size: 28px; font-weight: 800; }}
+  .stat-red .num {{ color: #dc2626; }}
+  .stat-yellow .num {{ color: #d97706; }}
+  .stat-green .num {{ color: #059669; }}
+  .stat .label {{ font-size: 11px; color: #64748b; text-transform: uppercase; font-weight: 700; letter-spacing: 0.05em; }}
+  table {{ width: 100%; border-collapse: collapse; margin: 12px 0; font-size: 13px; }}
+  th {{ background: #0055A4; color: white; padding: 8px 12px; text-align: left; font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; }}
+  td {{ padding: 8px 12px; border-bottom: 1px solid #e2e8f0; }}
+  tr:nth-child(even) {{ background: #f8fafc; }}
+  .red {{ color: #dc2626; font-weight: 700; }}
+  .yellow {{ color: #d97706; font-weight: 700; }}
+  .green {{ color: #059669; font-weight: 700; }}
+  .owner {{ color: #0055A4; font-weight: 600; }}
+  .footer {{ margin-top: 40px; padding-top: 16px; border-top: 1px solid #e2e8f0; font-size: 11px; color: #94a3b8; }}
+  .action {{ background: #eff6ff; border-left: 3px solid #0055A4; padding: 8px 12px; margin: 4px 0; font-size: 12px; border-radius: 0 8px 8px 0; }}
+</style></head><body>
+<h1>Weekly Finance Briefing</h1>
+<p style="color:#64748b; font-size:13px;">{date_str} · {stage_label} stage · {total} KPIs tracked</p>
+
+<div class="summary">
+  <div class="stat stat-red"><div class="num">{len(red)}</div><div class="label">Critical</div></div>
+  <div class="stat stat-yellow"><div class="num">{len(yellow)}</div><div class="label">Watch</div></div>
+  <div class="stat stat-green"><div class="num">{len(green)}</div><div class="label">On Target</div></div>
+</div>
+""")
+
+    if red_sorted:
+        html_parts.append("<h2>🔴 Critical KPIs — Immediate Attention Required</h2>")
+        html_parts.append("<table><tr><th>KPI</th><th>Current</th><th>Target</th><th>Gap</th><th>Owner</th><th>Status</th></tr>")
+        for k in red_sorted:
+            gap = gap_pct(k)
+            a = acct.get(k["key"], {})
+            owner_str = a.get("owner", "—") or "—"
+            status_str = a.get("status", "unassigned") or "unassigned"
+            cause_data = causation.get(k["key"], {})
+            root = cause_data.get("root_causes", [""])[0] if isinstance(cause_data.get("root_causes"), list) else ""
+            fix = cause_data.get("corrective_actions", [""])[0] if isinstance(cause_data.get("corrective_actions"), list) else ""
+            html_parts.append(f'<tr><td><strong>{k["name"]}</strong></td><td>{fmt_val(k["avg"], k["unit"])}</td><td>{fmt_val(k["target"], k["unit"])}</td><td class="red">{gap:+.1f}%</td><td class="owner">{owner_str}</td><td>{status_str}</td></tr>')
+        html_parts.append("</table>")
+
+    if yellow_sorted:
+        html_parts.append("<h2>🟡 Watch Zone</h2>")
+        html_parts.append("<table><tr><th>KPI</th><th>Current</th><th>Target</th><th>Gap</th><th>Owner</th></tr>")
+        for k in yellow_sorted[:6]:
+            gap = gap_pct(k)
+            a = acct.get(k["key"], {})
+            owner_str = a.get("owner", "—") or "—"
+            html_parts.append(f'<tr><td>{k["name"]}</td><td>{fmt_val(k["avg"], k["unit"])}</td><td>{fmt_val(k["target"], k["unit"])}</td><td class="yellow">{gap:+.1f}%</td><td class="owner">{owner_str}</td></tr>')
+        html_parts.append("</table>")
+
+    if green[:5]:
+        html_parts.append("<h2>🟢 Bright Spots</h2>")
+        html_parts.append("<table><tr><th>KPI</th><th>Current</th><th>Target</th><th>Above Target</th></tr>")
+        for k in sorted(green, key=lambda k: gap_pct(k), reverse=True)[:5]:
+            gap = gap_pct(k)
+            html_parts.append(f'<tr><td>{k["name"]}</td><td>{fmt_val(k["avg"], k["unit"])}</td><td>{fmt_val(k["target"], k["unit"])}</td><td class="green">+{abs(gap):.1f}%</td></tr>')
+        html_parts.append("</table>")
+
+    html_parts.append(f"""
+<div class="footer">
+  Generated by Axiom Intelligence · {date_str}<br>
+  This briefing covers {total} KPIs for the {stage_label} stage.
+</div>
+</body></html>""")
+
+    html_content = "\n".join(html_parts)
+    buf = io.BytesIO(html_content.encode("utf-8"))
+    buf.seek(0)
+    return StreamingResponse(
+        buf,
+        media_type="text/html",
+        headers={"Content-Disposition": f'attachment; filename="weekly-briefing-{datetime.now().strftime("%Y%m%d")}.html"'}
+    )
 
 
 # ─── Serve React Frontend ───────────────────────────────────────────────────
