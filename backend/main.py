@@ -4267,10 +4267,14 @@ def _compute_fingerprint_data():
 
 @app.get("/api/export/board-deck.pptx", tags=["Board Deck"])
 def export_board_deck(stage: str = "series_b"):
-    """Generate a 5-slide PPTX board deck with KPI health, red alerts, benchmarks, and watch zones."""
+    """Generate a narrative-driven PPTX board deck with charts, executive summary, and data-backed actions."""
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    import matplotlib.ticker as mticker
+
     fp_data = _compute_fingerprint_data()
 
-    # Fetch benchmarks for the stage
     valid_stages = {"seed", "series_a", "series_b", "series_c"}
     if stage not in valid_stages:
         stage = "series_b"
@@ -4279,216 +4283,422 @@ def export_board_deck(stage: str = "series_b"):
         if stage in stages_data:
             bench[kpi_key] = stages_data[stage]
 
-    # Categorise KPIs
+    stage_label = {"seed": "Seed", "series_a": "Series A", "series_b": "Series B", "series_c": "Series C+"}.get(stage, stage)
+
     green_kpis = [k for k in fp_data if k["fy_status"] == "green"]
     yellow_kpis = [k for k in fp_data if k["fy_status"] == "yellow"]
     red_kpis = [k for k in fp_data if k["fy_status"] == "red"]
     total = len(green_kpis) + len(yellow_kpis) + len(red_kpis)
-    # Status summary (no composite score — just the facts)
-    status_summary = f"{len(red_kpis)} critical · {len(yellow_kpis)} watch · {len(green_kpis)} on target"
 
+    # Sort red by worst gap
+    def _gap_pct(k):
+        if k["avg"] is not None and k["target"] is not None and k["target"] != 0:
+            return abs((k["avg"] - k["target"]) / abs(k["target"]) * 100)
+        return 0
+    red_kpis.sort(key=_gap_pct, reverse=True)
+    yellow_kpis.sort(key=_gap_pct, reverse=True)
+
+    # ── Helper: generate a matplotlib chart as PNG bytes ─────────────────
+    def _make_trend_chart(kpis_list, title_text, max_kpis=5):
+        """Sparkline-style multi-KPI trend chart → PNG bytes."""
+        fig, ax = plt.subplots(figsize=(10, 4.5))
+        fig.patch.set_facecolor("#f8fafc")
+        ax.set_facecolor("#f8fafc")
+        colors_cycle = ["#dc2626", "#d97706", "#2563eb", "#059669", "#7c3aed", "#db2777"]
+        plotted = 0
+        for i, kpi in enumerate(kpis_list[:max_kpis]):
+            months = kpi.get("monthly", [])
+            if len(months) < 2:
+                continue
+            periods = [m["period"] for m in months]
+            values = [m["value"] for m in months]
+            color = colors_cycle[i % len(colors_cycle)]
+            ax.plot(periods, values, marker="o", markersize=4, linewidth=2, color=color, label=kpi["name"])
+            if kpi.get("target"):
+                ax.axhline(y=kpi["target"], color=color, linestyle="--", alpha=0.4, linewidth=1)
+            plotted += 1
+        if plotted == 0:
+            plt.close(fig)
+            return None
+        ax.set_title(title_text, fontsize=14, fontweight="bold", pad=12)
+        ax.legend(fontsize=9, loc="upper left", framealpha=0.9)
+        ax.grid(True, alpha=0.3)
+        # Show only every Nth x-tick to avoid crowding
+        labels = [m["period"] for m in kpis_list[0].get("monthly", [])] if kpis_list else []
+        if len(labels) > 12:
+            step = max(len(labels) // 8, 1)
+            ax.set_xticks(range(0, len(labels), step))
+            ax.set_xticklabels([labels[j] for j in range(0, len(labels), step)], fontsize=8, rotation=30)
+        else:
+            ax.tick_params(axis="x", labelsize=8, rotation=30)
+        ax.tick_params(axis="y", labelsize=9)
+        plt.tight_layout()
+        buf_png = io.BytesIO()
+        fig.savefig(buf_png, format="png", dpi=150, bbox_inches="tight")
+        plt.close(fig)
+        buf_png.seek(0)
+        return buf_png
+
+    def _make_status_donut():
+        """Donut chart of red/yellow/green distribution → PNG bytes."""
+        fig, ax = plt.subplots(figsize=(4, 4))
+        fig.patch.set_facecolor("white")
+        sizes = [len(red_kpis), len(yellow_kpis), len(green_kpis)]
+        colors_d = ["#dc2626", "#d97706", "#059669"]
+        labels = [f"Critical ({len(red_kpis)})", f"Watch ({len(yellow_kpis)})", f"On Target ({len(green_kpis)})"]
+        # Filter out zeros
+        filtered = [(s, c, l) for s, c, l in zip(sizes, colors_d, labels) if s > 0]
+        if not filtered:
+            plt.close(fig)
+            return None
+        f_sizes, f_colors, f_labels = zip(*filtered)
+        wedges, texts, autotexts = ax.pie(f_sizes, colors=f_colors, labels=f_labels,
+                                           autopct="%1.0f%%", startangle=90, pctdistance=0.78,
+                                           textprops={"fontsize": 11})
+        for at in autotexts:
+            at.set_fontsize(12)
+            at.set_fontweight("bold")
+            at.set_color("white")
+        centre_circle = plt.Circle((0, 0), 0.55, fc="white")
+        ax.add_artist(centre_circle)
+        ax.text(0, 0.08, str(total), ha="center", va="center", fontsize=28, fontweight="bold", color="#1e293b")
+        ax.text(0, -0.15, "KPIs", ha="center", va="center", fontsize=11, color="#64748b")
+        plt.tight_layout()
+        buf_png = io.BytesIO()
+        fig.savefig(buf_png, format="png", dpi=150, bbox_inches="tight")
+        plt.close(fig)
+        buf_png.seek(0)
+        return buf_png
+
+    def _make_benchmark_bar(kpis_to_show, bench_data):
+        """Horizontal bar chart: company value vs peer median → PNG bytes."""
+        names = []
+        company_vals = []
+        peer_vals = []
+        bar_colors = []
+        for k in kpis_to_show:
+            if k["key"] in bench_data and k["avg"] is not None:
+                b = bench_data[k["key"]]
+                names.append(k["name"][:25])
+                company_vals.append(k["avg"])
+                peer_vals.append(b["p50"])
+                bar_colors.append("#dc2626" if k["fy_status"] == "red" else "#d97706" if k["fy_status"] == "yellow" else "#059669")
+        if not names:
+            return None
+        fig, ax = plt.subplots(figsize=(10, max(len(names) * 0.55, 3)))
+        fig.patch.set_facecolor("#f8fafc")
+        ax.set_facecolor("#f8fafc")
+        y_pos = range(len(names))
+        ax.barh(y_pos, company_vals, height=0.35, color=bar_colors, label="Company", alpha=0.9)
+        ax.barh([y + 0.35 for y in y_pos], peer_vals, height=0.35, color="#94a3b8", label=f"Peer Median ({stage_label})", alpha=0.6)
+        ax.set_yticks([y + 0.175 for y in y_pos])
+        ax.set_yticklabels(names, fontsize=10)
+        ax.invert_yaxis()
+        ax.legend(fontsize=10, loc="lower right")
+        ax.set_title(f"Company vs {stage_label} Peer Median", fontsize=13, fontweight="bold", pad=10)
+        ax.grid(True, axis="x", alpha=0.3)
+        ax.tick_params(axis="x", labelsize=9)
+        plt.tight_layout()
+        buf_png = io.BytesIO()
+        fig.savefig(buf_png, format="png", dpi=150, bbox_inches="tight")
+        plt.close(fig)
+        buf_png.seek(0)
+        return buf_png
+
+    # ── Helper: add a text box with multi-paragraph rich text ──────────────
+    def _add_narrative(slide, left, top, width, height, paragraphs_list):
+        """paragraphs_list: [(text, font_size, bold, color_rgb), ...]"""
+        txBox = slide.shapes.add_textbox(Inches(left), Inches(top), Inches(width), Inches(height))
+        tf = txBox.text_frame
+        tf.word_wrap = True
+        for i, (text, fs, bold, color) in enumerate(paragraphs_list):
+            p = tf.paragraphs[0] if i == 0 else tf.add_paragraph()
+            p.text = text
+            p.font.size = Pt(fs)
+            p.font.name = "Calibri"
+            p.font.bold = bold
+            if color:
+                p.font.color.rgb = color
+            p.space_after = Pt(6)
+
+    # ── Build narrative sentences ─────────────────────────────────────────
+    def _kpi_sentence(k):
+        val = k["avg"]
+        tgt = k["target"]
+        if val is None or tgt is None or tgt == 0:
+            return f"{k['name']}: no data available."
+        gap = round((val - tgt) / abs(tgt) * 100, 1)
+        direction_word = "below" if gap < 0 else "above"
+        unit = k.get("unit", "")
+        val_fmt = f"{val:,.2f}" if isinstance(val, float) else str(val)
+        tgt_fmt = f"{tgt:,.2f}" if isinstance(tgt, float) else str(tgt)
+        sentence = f"{k['name']} is at {val_fmt} vs target {tgt_fmt} ({abs(gap):.0f}% {direction_word} target)."
+        # Add benchmark context
+        b = bench.get(k["key"])
+        if b:
+            if val < b["p25"]:
+                sentence += f" Below {stage_label} P25 ({b['p25']}) — bottom quartile."
+            elif val < b["p50"]:
+                sentence += f" Below {stage_label} median ({b['p50']})."
+            elif val >= b["p75"]:
+                sentence += f" Above {stage_label} P75 ({b['p75']}) — top quartile."
+        # Add causal context
+        rules = ALL_CAUSATION_RULES.get(k["key"], {})
+        if rules.get("root_causes"):
+            sentence += f" Likely driver: {rules['root_causes'][0].lower()}."
+        if rules.get("corrective_actions"):
+            sentence += f" Recommended action: {rules['corrective_actions'][0]}."
+        return sentence
+
+    # ── PPTX Generation ───────────────────────────────────────────────────
     prs = Presentation()
     prs.slide_width = Inches(13.333)
     prs.slide_height = Inches(7.5)
-    blank_layout = prs.slide_layouts[6]  # blank
+    blank_layout = prs.slide_layouts[6]
 
-    # ── Slide 1: Title ──────────────────────────────────────────────────────
+    # ── Slide 1: Title ────────────────────────────────────────────────────
     slide1 = prs.slides.add_slide(blank_layout)
     bg1 = slide1.background
     fill1 = bg1.fill
     fill1.solid()
     fill1.fore_color.rgb = _DECK_DARK_BLUE
 
-    txBox = slide1.shapes.add_textbox(Inches(1), Inches(2.2), Inches(11), Inches(1.5))
+    txBox = slide1.shapes.add_textbox(Inches(1), Inches(1.5), Inches(11), Inches(1.5))
     tf = txBox.text_frame
+    tf.word_wrap = True
     p = tf.paragraphs[0]
     p.text = "Board Intelligence Brief"
-    p.font.size = Pt(40)
+    p.font.size = Pt(44)
     p.font.name = "Calibri"
     p.font.bold = True
     p.font.color.rgb = _DECK_WHITE
     p.alignment = PP_ALIGN.CENTER
 
-    txBox2 = slide1.shapes.add_textbox(Inches(1), Inches(3.8), Inches(11), Inches(1))
-    tf2 = txBox2.text_frame
-    p2 = tf2.paragraphs[0]
-    p2.text = f"{datetime.now().strftime('%B %d, %Y')}  |  Generated by Axiom Intelligence"
-    p2.font.size = Pt(18)
-    p2.font.name = "Calibri"
-    p2.font.color.rgb = _DECK_WHITE
-    p2.alignment = PP_ALIGN.CENTER
+    # Date + status summary subtitle
+    _add_narrative(slide1, 1, 3.3, 11, 2, [
+        (f"{datetime.now().strftime('%B %d, %Y')}  ·  {stage_label} SaaS", 20, False, _DECK_WHITE),
+        ("", 8, False, None),
+        (f"{len(red_kpis)} critical  ·  {len(yellow_kpis)} watch  ·  {len(green_kpis)} on target  ·  {total} KPIs tracked", 22, True, _DECK_WHITE),
+    ])
+    # Center subtitle
+    for shape in slide1.shapes:
+        if hasattr(shape, "text_frame"):
+            for p in shape.text_frame.paragraphs:
+                p.alignment = PP_ALIGN.CENTER
 
-    # ── Slide 2: Business Health Summary ────────────────────────────────────
+    # ── Slide 2: Executive Summary (narrative + donut) ────────────────────
     slide2 = prs.slides.add_slide(blank_layout)
-    title2 = slide2.shapes.add_textbox(Inches(0.5), Inches(0.3), Inches(8), Inches(0.7))
-    tf_t2 = title2.text_frame
-    p_t2 = tf_t2.paragraphs[0]
-    p_t2.text = "Business Health Summary"
-    p_t2.font.size = Pt(28)
-    p_t2.font.name = "Calibri"
-    p_t2.font.bold = True
+    _add_narrative(slide2, 0.5, 0.3, 8, 0.7, [
+        ("Executive Summary", 28, True, _hex_to_rgb("1e293b")),
+    ])
 
-    # Status summary box
-    score_box = slide2.shapes.add_textbox(Inches(5), Inches(0.3), Inches(8), Inches(0.7))
-    tf_s = score_box.text_frame
-    p_s = tf_s.paragraphs[0]
-    p_s.text = status_summary
-    p_s.font.size = Pt(18)
-    p_s.font.name = "Calibri"
-    p_s.font.bold = True
-    p_s.font.color.rgb = _DECK_RED_FG if len(red_kpis) > len(green_kpis) else (_DECK_YELLOW_FG if len(yellow_kpis) > len(green_kpis) else _DECK_GREEN_FG)
-
-    # Summary table
-    tbl2 = slide2.shapes.add_table(2, 4, Inches(0.5), Inches(1.5), Inches(8), Inches(1)).table
-    _add_header_row(tbl2, ["Total KPIs", "Green", "Yellow", "Red"])
-    vals2 = [str(total), str(len(green_kpis)), str(len(yellow_kpis)), str(len(red_kpis))]
-    colors2 = [None, _DECK_GREEN_FG, _DECK_YELLOW_FG, _DECK_RED_FG]
-    for i, (v, c) in enumerate(zip(vals2, colors2)):
-        cell = tbl2.cell(1, i)
-        _set_cell_style(cell, v, font_size=14, bold=True, fg=c)
-
-    # ── Slide 3: Critical KPIs (Red) ───────────────────────────────────────
-    slide3 = prs.slides.add_slide(blank_layout)
-    title3 = slide3.shapes.add_textbox(Inches(0.5), Inches(0.3), Inches(8), Inches(0.7))
-    p_t3 = title3.text_frame.paragraphs[0]
-    p_t3.text = "Critical KPIs (Red)"
-    p_t3.font.size = Pt(28)
-    p_t3.font.name = "Calibri"
-    p_t3.font.bold = True
-
-    # Sort red KPIs by gap magnitude
-    red_rows = []
-    for k in red_kpis:
-        if k["avg"] is not None and k["target"] is not None and k["target"] != 0:
-            gap_pct = round((k["avg"] - k["target"]) / abs(k["target"]) * 100, 1)
-        else:
-            gap_pct = 0
-        red_rows.append((k["name"], k["avg"], k["target"], gap_pct, k["fy_status"]))
-    red_rows.sort(key=lambda r: abs(r[3]), reverse=True)
-
-    if red_rows:
-        n_rows = len(red_rows) + 1
-        tbl3 = slide3.shapes.add_table(n_rows, 5, Inches(0.5), Inches(1.3), Inches(12), Inches(min(n_rows * 0.5, 5.5))).table
-        _add_header_row(tbl3, ["KPI Name", "Current", "Target", "Gap %", "Status"])
-        for ri, (name, current, target, gap, status) in enumerate(red_rows, 1):
-            fg, bg = _status_colors(status)
-            _set_cell_style(tbl3.cell(ri, 0), name)
-            _set_cell_style(tbl3.cell(ri, 1), current)
-            _set_cell_style(tbl3.cell(ri, 2), target)
-            _set_cell_style(tbl3.cell(ri, 3), f"{gap:+.1f}%", fg=fg)
-            cell_status = tbl3.cell(ri, 4)
-            _set_cell_style(cell_status, status.upper(), bold=True, fg=fg)
-            if bg:
-                _set_cell_bg_rgb(cell_status, bg)
+    # Build the summary narrative
+    summary_paras = []
+    if red_kpis:
+        worst = red_kpis[0]
+        worst_gap = round(abs((worst["avg"] - worst["target"]) / abs(worst["target"]) * 100), 0) if worst["avg"] and worst["target"] and worst["target"] != 0 else 0
+        summary_paras.append(
+            (f"The business has {len(red_kpis)} KPIs in critical status and {len(yellow_kpis)} requiring attention. "
+             f"The most severe miss is {worst['name']} at {worst.get('avg', '?')} vs target {worst.get('target', '?')} "
+             f"({worst_gap:.0f}% off target).", 13, False, _hex_to_rgb("334155"))
+        )
     else:
-        no_red = slide3.shapes.add_textbox(Inches(0.5), Inches(2), Inches(8), Inches(1))
-        no_red.text_frame.paragraphs[0].text = "No critical (red) KPIs — all clear!"
-        no_red.text_frame.paragraphs[0].font.size = Pt(16)
-        no_red.text_frame.paragraphs[0].font.name = "Calibri"
+        summary_paras.append(
+            (f"All {total} KPIs are in green or watch status. No critical issues detected.", 13, False, _hex_to_rgb("334155"))
+        )
 
-    # ── Slide 4: Benchmark Comparison ───────────────────────────────────────
+    if red_kpis:
+        # Causal chain for worst
+        rules = ALL_CAUSATION_RULES.get(red_kpis[0]["key"], {})
+        downstream = rules.get("downstream_impact", [])
+        downstream_red = [k for k in fp_data if k["key"] in downstream and k["fy_status"] == "red"]
+        if downstream_red:
+            names_str = ", ".join(d["name"] for d in downstream_red[:3])
+            summary_paras.append(
+                (f"This is cascading: {red_kpis[0]['name']} directly impacts {names_str}, which are also in critical status. "
+                 f"Addressing the root cause would improve multiple metrics simultaneously.", 13, False, _hex_to_rgb("334155"))
+            )
+        if rules.get("corrective_actions"):
+            summary_paras.append(
+                (f"Priority action: {rules['corrective_actions'][0]}", 13, True, _DECK_RED_FG)
+            )
+
+    # Bright spots
+    if green_kpis:
+        top_green = green_kpis[:3]
+        bright_names = ", ".join(k["name"] for k in top_green)
+        summary_paras.append(
+            (f"Bright spots: {bright_names} are all on or above target.", 13, False, _DECK_GREEN_FG)
+        )
+
+    _add_narrative(slide2, 0.5, 1.2, 7.5, 5, summary_paras)
+
+    # Donut chart on the right
+    donut_png = _make_status_donut()
+    if donut_png:
+        slide2.shapes.add_picture(donut_png, Inches(8.8), Inches(1.2), Inches(4), Inches(4))
+
+    # ── Slide 3: Critical KPIs — Narrative Cards + Trend Chart ────────────
+    slide3 = prs.slides.add_slide(blank_layout)
+    _add_narrative(slide3, 0.5, 0.3, 8, 0.7, [
+        (f"Critical Items: {len(red_kpis)} KPIs Below Threshold", 28, True, _hex_to_rgb("1e293b")),
+    ])
+
+    if red_kpis:
+        # Left side: narrative cards for top 4 red KPIs
+        card_paras = []
+        for k in red_kpis[:4]:
+            card_paras.append((_kpi_sentence(k), 11, False, _hex_to_rgb("334155")))
+            card_paras.append(("", 6, False, None))  # spacer
+
+        _add_narrative(slide3, 0.5, 1.2, 6, 5.5, card_paras)
+
+        # Right side: trend chart of red KPIs
+        trend_png = _make_trend_chart(red_kpis, "Critical KPI Trends", max_kpis=4)
+        if trend_png:
+            slide3.shapes.add_picture(trend_png, Inches(6.8), Inches(1.2), Inches(6), Inches(4.5))
+    else:
+        _add_narrative(slide3, 0.5, 2, 8, 1, [
+            ("No critical KPIs — all metrics are within acceptable ranges.", 16, False, _DECK_GREEN_FG)
+        ])
+
+    # ── Slide 4: Benchmark Position — Bar Chart + Narrative ───────────────
     slide4 = prs.slides.add_slide(blank_layout)
-    title4 = slide4.shapes.add_textbox(Inches(0.5), Inches(0.3), Inches(8), Inches(0.7))
-    p_t4 = title4.text_frame.paragraphs[0]
-    p_t4.text = f"Benchmark Comparison ({stage.replace('_', ' ').title()})"
-    p_t4.font.size = Pt(28)
-    p_t4.font.name = "Calibri"
-    p_t4.font.bold = True
+    _add_narrative(slide4, 0.5, 0.3, 10, 0.7, [
+        (f"Peer Benchmark Position — {stage_label} SaaS", 28, True, _hex_to_rgb("1e293b")),
+    ])
 
-    bench_rows = []
+    # Show red + yellow KPIs in benchmark comparison
+    kpis_for_bench = (red_kpis + yellow_kpis)[:10]
+    bench_png = _make_benchmark_bar(kpis_for_bench, bench)
+    if bench_png:
+        slide4.shapes.add_picture(bench_png, Inches(0.5), Inches(1.3), Inches(8), Inches(5.5))
+
+    # Narrative on right: which KPIs are below P25
+    below_p25 = []
     for k in fp_data:
         if k["key"] in bench and k["avg"] is not None:
-            b = bench[k["key"]]
-            val = k["avg"]
-            if val >= b["p75"]:
-                pos = "Above P75"
-            elif val >= b["p50"]:
-                pos = "P50–P75"
-            elif val >= b["p25"]:
-                pos = "P25–P50"
-            else:
-                pos = "Below P25"
-            bench_rows.append((k["name"], val, b["p25"], b["p50"], b["p75"], pos))
+            if k["avg"] < bench[k["key"]]["p25"]:
+                below_p25.append(k)
+    bench_narrative = []
+    if below_p25:
+        bench_narrative.append(
+            (f"{len(below_p25)} KPIs are below the {stage_label} bottom quartile (P25):", 13, True, _DECK_RED_FG)
+        )
+        for bp in below_p25[:5]:
+            b = bench[bp["key"]]
+            bench_narrative.append(
+                (f"• {bp['name']}: {bp['avg']:.2f} vs P25 {b['p25']} (peer median: {b['p50']})", 11, False, _hex_to_rgb("334155"))
+            )
+    above_p75 = [k for k in fp_data if k["key"] in bench and k["avg"] is not None and k["avg"] >= bench[k["key"]]["p75"]]
+    if above_p75:
+        bench_narrative.append(("", 6, False, None))
+        bench_narrative.append(
+            (f"{len(above_p75)} KPIs are top quartile (above P75):", 13, True, _DECK_GREEN_FG)
+        )
+        for ap in above_p75[:5]:
+            b = bench[ap["key"]]
+            bench_narrative.append(
+                (f"• {ap['name']}: {ap['avg']:.2f} vs P75 {b['p75']}", 11, False, _hex_to_rgb("334155"))
+            )
+    if bench_narrative:
+        _add_narrative(slide4, 8.8, 1.3, 4.2, 5.5, bench_narrative)
 
-    if bench_rows:
-        n_br = len(bench_rows) + 1
-        tbl4 = slide4.shapes.add_table(n_br, 6, Inches(0.5), Inches(1.3), Inches(12), Inches(min(n_br * 0.5, 5.5))).table
-        _add_header_row(tbl4, ["KPI Name", "Current", "P25", "P50 (Median)", "P75", "Position"])
-        for ri, (name, val, p25, p50, p75, pos) in enumerate(bench_rows, 1):
-            _set_cell_style(tbl4.cell(ri, 0), name)
-            _set_cell_style(tbl4.cell(ri, 1), val)
-            _set_cell_style(tbl4.cell(ri, 2), p25)
-            _set_cell_style(tbl4.cell(ri, 3), p50)
-            _set_cell_style(tbl4.cell(ri, 4), p75)
-            pos_fg = _DECK_GREEN_FG if "P75" in pos else (_DECK_RED_FG if "Below" in pos else None)
-            _set_cell_style(tbl4.cell(ri, 5), pos, bold=True, fg=pos_fg)
-    else:
-        nb = slide4.shapes.add_textbox(Inches(0.5), Inches(2), Inches(8), Inches(1))
-        nb.text_frame.paragraphs[0].text = "No benchmark data available."
-        nb.text_frame.paragraphs[0].font.size = Pt(16)
-        nb.text_frame.paragraphs[0].font.name = "Calibri"
-
-    # ── Slide 5: Watch Zone + Bright Spots ──────────────────────────────────
-    slide5 = prs.slides.add_slide(blank_layout)
-    title5 = slide5.shapes.add_textbox(Inches(0.5), Inches(0.3), Inches(8), Inches(0.7))
-    p_t5 = title5.text_frame.paragraphs[0]
-    p_t5.text = "Watch Zone & Bright Spots"
-    p_t5.font.size = Pt(28)
-    p_t5.font.name = "Calibri"
-    p_t5.font.bold = True
-
-    y_offset = 1.3
-    # Yellow (watch) section
-    watch_label = slide5.shapes.add_textbox(Inches(0.5), Inches(y_offset), Inches(5), Inches(0.5))
-    wl_p = watch_label.text_frame.paragraphs[0]
-    wl_p.text = "Watch Zone (Yellow KPIs)"
-    wl_p.font.size = Pt(18)
-    wl_p.font.name = "Calibri"
-    wl_p.font.bold = True
-    wl_p.font.color.rgb = _DECK_YELLOW_FG
-    y_offset += 0.6
-
+    # ── Slide 5: Watch Zone — Narrative + Trend Chart ─────────────────────
     if yellow_kpis:
-        n_yw = len(yellow_kpis) + 1
-        tbl5y = slide5.shapes.add_table(n_yw, 3, Inches(0.5), Inches(y_offset), Inches(8), Inches(min(n_yw * 0.4, 2.5))).table
-        _add_header_row(tbl5y, ["KPI Name", "Current", "Target"])
-        for ri, k in enumerate(yellow_kpis, 1):
-            _set_cell_style(tbl5y.cell(ri, 0), k["name"])
-            _set_cell_style(tbl5y.cell(ri, 1), k["avg"], fg=_DECK_YELLOW_FG)
-            _set_cell_style(tbl5y.cell(ri, 2), k["target"])
-        y_offset += min(n_yw * 0.4, 2.5) + 0.3
-    else:
-        no_y = slide5.shapes.add_textbox(Inches(0.5), Inches(y_offset), Inches(8), Inches(0.4))
-        no_y.text_frame.paragraphs[0].text = "No yellow KPIs."
-        no_y.text_frame.paragraphs[0].font.size = Pt(14)
-        no_y.text_frame.paragraphs[0].font.name = "Calibri"
-        y_offset += 0.6
+        slide5 = prs.slides.add_slide(blank_layout)
+        _add_narrative(slide5, 0.5, 0.3, 8, 0.7, [
+            (f"Watch Zone: {len(yellow_kpis)} KPIs Approaching Threshold", 28, True, _hex_to_rgb("1e293b")),
+        ])
 
-    # Green (bright spots) section
-    bright_label = slide5.shapes.add_textbox(Inches(0.5), Inches(y_offset), Inches(5), Inches(0.5))
-    bl_p = bright_label.text_frame.paragraphs[0]
-    bl_p.text = "Bright Spots (Green KPIs)"
-    bl_p.font.size = Pt(18)
-    bl_p.font.name = "Calibri"
-    bl_p.font.bold = True
-    bl_p.font.color.rgb = _DECK_GREEN_FG
-    y_offset += 0.6
+        watch_paras = []
+        for k in yellow_kpis[:4]:
+            watch_paras.append((_kpi_sentence(k), 11, False, _hex_to_rgb("334155")))
+            watch_paras.append(("", 6, False, None))
 
+        watch_paras.append(("These KPIs are at risk of moving to critical status without intervention.", 12, True, _DECK_YELLOW_FG))
+        _add_narrative(slide5, 0.5, 1.2, 6, 5.5, watch_paras)
+
+        trend_yellow_png = _make_trend_chart(yellow_kpis, "Watch Zone Trends", max_kpis=4)
+        if trend_yellow_png:
+            slide5.shapes.add_picture(trend_yellow_png, Inches(6.8), Inches(1.2), Inches(6), Inches(4.5))
+
+    # ── Slide 6: Recommended Actions (top 5 priorities) ───────────────────
+    slide6 = prs.slides.add_slide(blank_layout)
+    _add_narrative(slide6, 0.5, 0.3, 10, 0.7, [
+        ("Recommended Actions — Priority Order", 28, True, _hex_to_rgb("1e293b")),
+    ])
+
+    action_paras = []
+    for i, k in enumerate(red_kpis[:5], 1):
+        rules = ALL_CAUSATION_RULES.get(k["key"], {})
+        actions = rules.get("corrective_actions", [])
+        causes = rules.get("root_causes", [])
+        val = k["avg"]
+        tgt = k["target"]
+        gap_str = ""
+        if val is not None and tgt is not None and tgt != 0:
+            gap = round(abs((val - tgt) / abs(tgt) * 100), 0)
+            gap_str = f" ({gap:.0f}% off target)"
+
+        action_paras.append((f"{i}. {k['name']}{gap_str}", 14, True, _DECK_RED_FG))
+        if causes:
+            action_paras.append((f"   Root cause: {causes[0]}", 11, False, _hex_to_rgb("475569")))
+        if actions:
+            for a in actions[:2]:
+                action_paras.append((f"   → {a}", 11, False, _hex_to_rgb("334155")))
+
+        # Add downstream impact context
+        downstream = rules.get("downstream_impact", [])
+        downstream_at_risk = [dk for dk in fp_data if dk["key"] in downstream and dk["fy_status"] in ("red", "yellow")]
+        if downstream_at_risk:
+            names_str = ", ".join(d["name"] for d in downstream_at_risk[:3])
+            action_paras.append((f"   Impact: fixing this also improves {names_str}", 11, True, _hex_to_rgb("2563eb")))
+        action_paras.append(("", 6, False, None))
+
+    if not action_paras:
+        action_paras.append(("No critical actions required — all KPIs are within tolerance.", 14, False, _DECK_GREEN_FG))
+
+    _add_narrative(slide6, 0.5, 1.2, 12, 5.5, action_paras)
+
+    # ── Slide 7: Closing — Bright Spots + Next Review ─────────────────────
+    slide7 = prs.slides.add_slide(blank_layout)
+    bg7 = slide7.background
+    fill7 = bg7.fill
+    fill7.solid()
+    fill7.fore_color.rgb = _DECK_DARK_BLUE
+
+    closing_paras = [
+        ("Key Takeaways", 32, True, _DECK_WHITE),
+        ("", 8, False, None),
+    ]
+    if red_kpis:
+        closing_paras.append(
+            (f"• {len(red_kpis)} metrics need immediate attention — {red_kpis[0]['name']} is the top priority", 16, False, _DECK_WHITE)
+        )
+    if yellow_kpis:
+        closing_paras.append(
+            (f"• {len(yellow_kpis)} metrics in watch zone — monitor weekly to prevent escalation", 16, False, _DECK_WHITE)
+        )
     if green_kpis:
-        n_gw = len(green_kpis) + 1
-        tbl5g = slide5.shapes.add_table(n_gw, 3, Inches(0.5), Inches(y_offset), Inches(8), Inches(min(n_gw * 0.4, 2.5))).table
-        _add_header_row(tbl5g, ["KPI Name", "Current", "Target"])
-        for ri, k in enumerate(green_kpis, 1):
-            _set_cell_style(tbl5g.cell(ri, 0), k["name"])
-            _set_cell_style(tbl5g.cell(ri, 1), k["avg"], fg=_DECK_GREEN_FG)
-            _set_cell_style(tbl5g.cell(ri, 2), k["target"])
-    else:
-        no_g = slide5.shapes.add_textbox(Inches(0.5), Inches(y_offset), Inches(8), Inches(0.4))
-        no_g.text_frame.paragraphs[0].text = "No green KPIs."
-        no_g.text_frame.paragraphs[0].font.size = Pt(14)
-        no_g.text_frame.paragraphs[0].font.name = "Calibri"
+        closing_paras.append(
+            (f"• {len(green_kpis)} metrics on target — maintain current trajectory", 16, False, _DECK_WHITE)
+        )
+    if below_p25:
+        closing_paras.append(
+            (f"• {len(below_p25)} metrics below {stage_label} industry bottom quartile", 16, False, _DECK_WHITE)
+        )
+    closing_paras.append(("", 12, False, None))
+    closing_paras.append(
+        (f"Generated {datetime.now().strftime('%B %d, %Y')}  ·  Axiom Intelligence  ·  {stage_label} Benchmarks", 14, False, _hex_to_rgb("94a3b8"))
+    )
+    _add_narrative(slide7, 1, 1.5, 11, 5, closing_paras)
+    for shape in slide7.shapes:
+        if hasattr(shape, "text_frame"):
+            for p in shape.text_frame.paragraphs:
+                p.alignment = PP_ALIGN.CENTER
 
-    # Serialize to bytes
+    # Serialize
     buf = io.BytesIO()
     prs.save(buf)
     buf.seek(0)
