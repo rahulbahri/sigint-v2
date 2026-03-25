@@ -3761,33 +3761,33 @@ def export_data_xlsx():
 
     # ── KPI metadata: key → (full_name, unit_label, direction, used_for) ──────
     KPI_META: dict[str, tuple[str, str, str, str]] = {
-        "revenue_growth":        ("Revenue Growth Rate",          "%",              "higher is better",  "BHI Score · Fingerprint · Signal Engine · Markov Forecast; feeds Revenue Momentum Index"),
-        "gross_margin":          ("Gross Margin %",               "%",              "higher is better",  "BHI Score · Fingerprint · Signal Engine · Markov Forecast; feeds Operating Margin, EBITDA Margin, Contribution Margin"),
-        "operating_margin":      ("Operating Margin %",           "%",              "higher is better",  "BHI Score · Fingerprint · Signal Engine; downstream of Gross Margin"),
-        "ebitda_margin":         ("EBITDA Margin %",              "%",              "higher is better",  "BHI Score · Fingerprint · Signal Engine; downstream of Operating Margin & Gross Margin"),
-        "cash_conv_cycle":       ("Cash Conversion Cycle",        "days",           "lower is better",   "BHI Score · Fingerprint · Signal Engine · Markov Forecast"),
-        "dso":                   ("Days Sales Outstanding",       "days",           "lower is better",   "BHI Score · Fingerprint · Signal Engine; component of Cash Conversion Cycle"),
-        "arr_growth":            ("ARR Growth Rate",              "%",              "higher is better",  "BHI Score · Fingerprint · Signal Engine · Markov Forecast; feeds Growth Efficiency Index, Revenue Momentum Index"),
-        "nrr":                   ("Net Revenue Retention",        "%",              "higher is better",  "BHI Score · Fingerprint · Signal Engine · Markov Forecast; feeds Revenue Fragility Index"),
-        "burn_multiple":         ("Burn Multiple",                "ratio (×)",      "lower is better",   "BHI Score · Fingerprint · Signal Engine · Markov Forecast; feeds Growth Efficiency Index, Burn Convexity"),
-        "opex_ratio":            ("Operating Expense Ratio",      "%",              "lower is better",   "BHI Score · Fingerprint · Signal Engine"),
-        "contribution_margin":   ("Contribution Margin %",        "%",              "higher is better",  "BHI Score · Fingerprint · Signal Engine; downstream of Gross Margin"),
-        "revenue_quality":       ("Revenue Quality Ratio",        "%",              "higher is better",  "BHI Score · Fingerprint · Signal Engine"),
-        "cac_payback":           ("CAC Payback Period",           "months",         "lower is better",   "BHI Score · Fingerprint · Signal Engine · Markov Forecast"),
-        "sales_efficiency":      ("Sales Efficiency Ratio",       "ratio (×)",      "higher is better",  "BHI Score · Fingerprint · Signal Engine; downstream of Pipeline Conversion"),
-        "customer_concentration":("Customer Concentration",       "%",              "lower is better",   "BHI Score · Fingerprint · Signal Engine; feeds Revenue Fragility Index"),
-        "recurring_revenue":     ("Recurring Revenue Ratio",      "%",              "higher is better",  "BHI Score · Fingerprint · Signal Engine"),
-        "churn_rate":            ("Monthly Churn Rate",           "%",              "lower is better",   "BHI Score · Fingerprint · Signal Engine · Markov Forecast; feeds Revenue Fragility Index, Customer Decay Curve Slope"),
-        "operating_leverage":    ("Operating Leverage Index",     "ratio (×)",      "higher is better",  "BHI Score · Fingerprint · Signal Engine"),
-        "pipeline_conversion":   ("Pipeline Conversion Rate",     "%",              "higher is better",  "BHI Score · Fingerprint · Signal Engine; feeds Sales Efficiency, ARR Growth"),
-        "customer_ltv":          ("Customer Lifetime Value",      "$ (thousands)",  "higher is better",  "BHI Score · Fingerprint · Signal Engine"),
-        "pricing_power_index":   ("Pricing Power Index",          "%",              "higher is better",  "BHI Score · Fingerprint · Signal Engine"),
-        "growth_efficiency":     ("Growth Efficiency Index",      "ratio (×)",      "higher is better",  "BHI Score · Fingerprint · Signal Engine; DERIVED = ARR Growth Rate ÷ Burn Multiple"),
-        "revenue_momentum":      ("Revenue Momentum Index",       "ratio (×)",      "higher is better",  "BHI Score · Fingerprint · Signal Engine; DERIVED = Current Rev Growth ÷ Annual Avg Rev Growth"),
-        "revenue_fragility":     ("Strategic Revenue Fragility",  "ratio (×)",      "lower is better",   "BHI Score · Fingerprint · Signal Engine; DERIVED = (Customer Concentration × Churn Rate) ÷ NRR"),
-        "burn_convexity":        ("Burn Convexity",               "ratio (×)",      "lower is better",   "BHI Score · Fingerprint · Signal Engine; DERIVED = Month-over-Month change in Burn Multiple"),
-        "margin_volatility":     ("Margin Volatility Index",      "%",              "lower is better",   "BHI Score · Fingerprint · Signal Engine; DERIVED = 6-Month rolling std dev of Gross Margin"),
-        "customer_decay_slope":  ("Customer Decay Curve Slope",   "%",              "lower is better",   "BHI Score · Fingerprint · Signal Engine; DERIVED = Month-over-Month change in Churn Rate"),
+        "revenue_growth":        ("Revenue Growth Rate",          "%",              "higher is better",  "Status Distribution · Fingerprint · Signal Engine · Markov Forecast; feeds Revenue Momentum Index"),
+        "gross_margin":          ("Gross Margin %",               "%",              "higher is better",  "Status Distribution · Fingerprint · Signal Engine · Markov Forecast; feeds Operating Margin, EBITDA Margin, Contribution Margin"),
+        "operating_margin":      ("Operating Margin %",           "%",              "higher is better",  "Status Distribution · Fingerprint · Signal Engine; downstream of Gross Margin"),
+        "ebitda_margin":         ("EBITDA Margin %",              "%",              "higher is better",  "Status Distribution · Fingerprint · Signal Engine; downstream of Operating Margin & Gross Margin"),
+        "cash_conv_cycle":       ("Cash Conversion Cycle",        "days",           "lower is better",   "Status Distribution · Fingerprint · Signal Engine · Markov Forecast"),
+        "dso":                   ("Days Sales Outstanding",       "days",           "lower is better",   "Status Distribution · Fingerprint · Signal Engine; component of Cash Conversion Cycle"),
+        "arr_growth":            ("ARR Growth Rate",              "%",              "higher is better",  "Status Distribution · Fingerprint · Signal Engine · Markov Forecast; feeds Growth Efficiency Index, Revenue Momentum Index"),
+        "nrr":                   ("Net Revenue Retention",        "%",              "higher is better",  "Status Distribution · Fingerprint · Signal Engine · Markov Forecast; feeds Revenue Fragility Index"),
+        "burn_multiple":         ("Burn Multiple",                "ratio (×)",      "lower is better",   "Status Distribution · Fingerprint · Signal Engine · Markov Forecast; feeds Growth Efficiency Index, Burn Convexity"),
+        "opex_ratio":            ("Operating Expense Ratio",      "%",              "lower is better",   "Status Distribution · Fingerprint · Signal Engine"),
+        "contribution_margin":   ("Contribution Margin %",        "%",              "higher is better",  "Status Distribution · Fingerprint · Signal Engine; downstream of Gross Margin"),
+        "revenue_quality":       ("Revenue Quality Ratio",        "%",              "higher is better",  "Status Distribution · Fingerprint · Signal Engine"),
+        "cac_payback":           ("CAC Payback Period",           "months",         "lower is better",   "Status Distribution · Fingerprint · Signal Engine · Markov Forecast"),
+        "sales_efficiency":      ("Sales Efficiency Ratio",       "ratio (×)",      "higher is better",  "Status Distribution · Fingerprint · Signal Engine; downstream of Pipeline Conversion"),
+        "customer_concentration":("Customer Concentration",       "%",              "lower is better",   "Status Distribution · Fingerprint · Signal Engine; feeds Revenue Fragility Index"),
+        "recurring_revenue":     ("Recurring Revenue Ratio",      "%",              "higher is better",  "Status Distribution · Fingerprint · Signal Engine"),
+        "churn_rate":            ("Monthly Churn Rate",           "%",              "lower is better",   "Status Distribution · Fingerprint · Signal Engine · Markov Forecast; feeds Revenue Fragility Index, Customer Decay Curve Slope"),
+        "operating_leverage":    ("Operating Leverage Index",     "ratio (×)",      "higher is better",  "Status Distribution · Fingerprint · Signal Engine"),
+        "pipeline_conversion":   ("Pipeline Conversion Rate",     "%",              "higher is better",  "Status Distribution · Fingerprint · Signal Engine; feeds Sales Efficiency, ARR Growth"),
+        "customer_ltv":          ("Customer Lifetime Value",      "$ (thousands)",  "higher is better",  "Status Distribution · Fingerprint · Signal Engine"),
+        "pricing_power_index":   ("Pricing Power Index",          "%",              "higher is better",  "Status Distribution · Fingerprint · Signal Engine"),
+        "growth_efficiency":     ("Growth Efficiency Index",      "ratio (×)",      "higher is better",  "Status Distribution · Fingerprint · Signal Engine; DERIVED = ARR Growth Rate ÷ Burn Multiple"),
+        "revenue_momentum":      ("Revenue Momentum Index",       "ratio (×)",      "higher is better",  "Status Distribution · Fingerprint · Signal Engine; DERIVED = Current Rev Growth ÷ Annual Avg Rev Growth"),
+        "revenue_fragility":     ("Strategic Revenue Fragility",  "ratio (×)",      "lower is better",   "Status Distribution · Fingerprint · Signal Engine; DERIVED = (Customer Concentration × Churn Rate) ÷ NRR"),
+        "burn_convexity":        ("Burn Convexity",               "ratio (×)",      "lower is better",   "Status Distribution · Fingerprint · Signal Engine; DERIVED = Month-over-Month change in Burn Multiple"),
+        "margin_volatility":     ("Margin Volatility Index",      "%",              "lower is better",   "Status Distribution · Fingerprint · Signal Engine; DERIVED = 6-Month rolling std dev of Gross Margin"),
+        "customer_decay_slope":  ("Customer Decay Curve Slope",   "%",              "lower is better",   "Status Distribution · Fingerprint · Signal Engine; DERIVED = Month-over-Month change in Churn Rate"),
     }
 
     conn = get_db()
@@ -4256,8 +4256,8 @@ def export_board_deck(stage: str = "series_b"):
     yellow_kpis = [k for k in fp_data if k["fy_status"] == "yellow"]
     red_kpis = [k for k in fp_data if k["fy_status"] == "red"]
     total = len(green_kpis) + len(yellow_kpis) + len(red_kpis)
-    bhi = round((len(green_kpis) * 100 + len(yellow_kpis) * 60) / total) if total else 0
-    bhi_verdict = "Healthy" if bhi >= 80 else ("Caution" if bhi >= 60 else "At Risk")
+    # Status summary (no composite score — just the facts)
+    status_summary = f"{len(red_kpis)} critical · {len(yellow_kpis)} watch · {len(green_kpis)} on target"
 
     prs = Presentation()
     prs.slide_width = Inches(13.333)
@@ -4300,17 +4300,15 @@ def export_board_deck(stage: str = "series_b"):
     p_t2.font.name = "Calibri"
     p_t2.font.bold = True
 
-    # BHI score box
-    score_box = slide2.shapes.add_textbox(Inches(9), Inches(0.3), Inches(4), Inches(0.7))
+    # Status summary box
+    score_box = slide2.shapes.add_textbox(Inches(5), Inches(0.3), Inches(8), Inches(0.7))
     tf_s = score_box.text_frame
     p_s = tf_s.paragraphs[0]
-    p_s.text = f"BHI Score: {bhi}  —  {bhi_verdict}"
-    p_s.font.size = Pt(20)
+    p_s.text = status_summary
+    p_s.font.size = Pt(18)
     p_s.font.name = "Calibri"
     p_s.font.bold = True
-    fg_bhi, _ = _status_colors("green" if bhi >= 80 else ("yellow" if bhi >= 60 else "red"))
-    if fg_bhi:
-        p_s.font.color.rgb = fg_bhi
+    p_s.font.color.rgb = _DECK_RED_FG if len(red_kpis) > len(green_kpis) else (_DECK_YELLOW_FG if len(yellow_kpis) > len(green_kpis) else _DECK_GREEN_FG)
 
     # Summary table
     tbl2 = slide2.shapes.add_table(2, 4, Inches(0.5), Inches(1.5), Inches(8), Inches(1)).table

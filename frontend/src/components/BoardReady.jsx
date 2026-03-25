@@ -196,34 +196,7 @@ function signalActions(signal) {
 }
 
 // ── Thesis sentence ───────────────────────────────────────────────────────────
-function buildThesis(fingerprint, bhi) {
-  if (!fingerprint?.length) return 'No data available.'
-  const red    = fingerprint.filter(k => k.fy_status === 'red')
-  const yellow = fingerprint.filter(k => k.fy_status === 'yellow')
-  const green  = fingerprint.filter(k => k.fy_status === 'green')
-  const hasRetentionRisk = fingerprint.some(k => {
-    const key = (k.key || '').toLowerCase()
-    return (key.includes('nrr') || key.includes('churn') || key.includes('retention')) && k.fy_status !== 'green'
-  })
-  const hasGrowthStrength = fingerprint.some(k => {
-    const key = (k.key || '').toLowerCase()
-    return (key.includes('revenue') || key.includes('arr')) && k.fy_status === 'green'
-  })
-  const worstStreak = fingerprint.map(k => redStreak(k)).reduce((a,b) => Math.max(a,b), 0)
-  if (bhi >= 80) {
-    if (hasRetentionRisk)
-      return `The business is performing strongly (BHI ${bhi}/100) but retention signals suggest the growth engine is not yet self-sustaining — a structural risk that will compound if not addressed.`
-    return `The business is in strong health with a BHI of ${bhi}/100, demonstrating broad-based performance across growth, retention, and efficiency — the fundamentals are sound.`
-  }
-  if (bhi >= 60) {
-    if (hasGrowthStrength && hasRetentionRisk)
-      return `Top-line momentum looks healthy, but the real story lies beneath: retention KPIs are flashing warnings that will constrain revenue within 2–3 quarters if not addressed — the P&L does not yet reflect this risk.`
-    if (red.length > 0 && worstStreak >= 3)
-      return `The business is at a critical inflection point — ${red.length} KPI${red.length > 1 ? 's are' : ' is'} in sustained decline (${worstStreak}+ consecutive months), suggesting structural rather than cyclical issues.`
-    return `Performance is mixed with a BHI of ${bhi}/100 — ${green.length} KPIs on target, but ${red.length + yellow.length} require focused intervention to prevent a broader deterioration.`
-  }
-  return `The business is under significant pressure (BHI ${bhi}/100) — ${red.length} critical KPI${red.length > 1 ? 's' : ''} and ${yellow.length} in the watch zone indicate systemic strain that demands board-level prioritisation.`
-}
+// buildThesis — removed; BHI composite score replaced with factual status distribution
 
 // ── Hidden signal detector ────────────────────────────────────────────────────
 function detectSignals(fingerprint) {
@@ -1026,9 +999,31 @@ export default function BoardReady({ fingerprint, bridgeData, onNavigate, period
   const yellowKpis = fp.filter(k => k.fy_status === 'yellow')
   const redKpis    = fp.filter(k => k.fy_status === 'red')
   const total      = fp.length
-  const bhi        = total > 0 ? Math.round((greenKpis.length * 100 + yellowKpis.length * 60) / total) : null
-  const bhiColor   = bhi == null ? '#94a3b8' : bhi >= 80 ? '#059669' : bhi >= 60 ? '#d97706' : '#dc2626'
-  const bhiLabel   = bhi == null ? 'No data' : bhi >= 80 ? 'Healthy' : bhi >= 60 ? 'Caution' : 'At Risk'
+  // ── Period-over-period status change tracking ─────────────────────────────
+  // Compute previous-period status for each KPI to detect zone transitions
+  const periodTransitions = useMemo(() => {
+    const allPeriods = [...new Set(fp.flatMap(k => (k.monthly || []).map(m => m.period)))].sort()
+    if (allPeriods.length < 2) return { recovered: [], worsened: [], prevRed: 0, prevYellow: 0, prevGreen: 0, hasPrev: false }
+    const lastP = allPeriods[allPeriods.length - 1]
+    const prevP = allPeriods[allPeriods.length - 2]
+    const recovered = [] // moved toward green
+    const worsened  = [] // moved toward red
+    let prevRed = 0, prevYellow = 0, prevGreen = 0
+    fp.forEach(kpi => {
+      const lastVal = kpi.monthly?.find(m => m.period === lastP)?.value
+      const prevVal = kpi.monthly?.find(m => m.period === prevP)?.value
+      const lastSt = cellStatus(lastVal, kpi.target, kpi.direction)
+      const prevSt = cellStatus(prevVal, kpi.target, kpi.direction)
+      if (prevSt === 'red') prevRed++
+      else if (prevSt === 'yellow') prevYellow++
+      else if (prevSt === 'green') prevGreen++
+      const rank = { red: 0, yellow: 1, green: 2, grey: -1 }
+      if (rank[lastSt] > rank[prevSt] && rank[prevSt] >= 0) recovered.push({ kpi, from: prevSt, to: lastSt })
+      if (rank[lastSt] < rank[prevSt] && rank[lastSt] >= 0) worsened.push({ kpi, from: prevSt, to: lastSt })
+    })
+    return { recovered, worsened, prevRed, prevYellow, prevGreen, hasPrev: true }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fingerprint])
 
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const signals = useMemo(() => detectSignals(fp), [fingerprint])
@@ -1048,7 +1043,7 @@ export default function BoardReady({ fingerprint, bridgeData, onNavigate, period
 
   const storyDomains = ['growth', 'retention', 'efficiency', 'cashflow'].filter(d => (domainGroups[d]?.length || 0) >= 1)
 
-  // ── BHI direction: compare declining streaks vs recovering KPIs ──────────
+  // ── Overall direction: compare declining streaks vs recovering KPIs ──────
   const declineCount    = fp.filter(k => redStreak(k) >= 2).length
   const recoveringCount = fp.filter(k => {
     if (k.fy_status === 'green') return false
@@ -1057,9 +1052,7 @@ export default function BoardReady({ fingerprint, bridgeData, onNavigate, period
     const last3 = vals.slice(-3)
     return k.direction === 'higher' ? last3[2] > last3[0] * 1.02 : last3[2] < last3[0] * 0.98
   }).length
-  const bhiTrend      = declineCount > recoveringCount ? 'declining' : recoveringCount > declineCount ? 'recovering' : 'steady'
-  const bhiTrendArrow = bhiTrend === 'declining' ? '↓' : bhiTrend === 'recovering' ? '↑' : '→'
-  const bhiTrendClr   = bhiTrend === 'declining' ? '#ef4444' : bhiTrend === 'recovering' ? '#10b981' : '#94a3b8'
+  const overallTrend      = declineCount > recoveringCount ? 'declining' : recoveringCount > declineCount ? 'recovering' : 'steady'
 
   // ── Domain health chips ───────────────────────────────────────────────────
   const domainChips = ['growth', 'retention', 'efficiency', 'cashflow'].map(d => {
@@ -1095,54 +1088,102 @@ export default function BoardReady({ fingerprint, bridgeData, onNavigate, period
   return (
     <div className="space-y-5 max-w-screen-xl">
 
-      {/* ── HEADER: BHI + period context + status summary ─────────────────── */}
-      <div className="flex items-center gap-5 flex-wrap bg-white border border-slate-200 rounded-2xl px-6 py-4 shadow-sm">
+      {/* ── HEADER: Status distribution + period delta ────────────────────── */}
+      <div className="bg-white border border-slate-200 rounded-2xl px-6 py-4 shadow-sm">
 
-        {/* BHI ring + label + period */}
-        <div className="flex items-center gap-4 flex-shrink-0">
-          <div className="relative w-14 h-14">
-            <svg width="56" height="56" viewBox="0 0 56 56">
-              <circle cx="28" cy="28" r="21" fill="none" stroke="#f1f5f9" strokeWidth="5"/>
-              <circle cx="28" cy="28" r="21" fill="none" stroke={bhiColor} strokeWidth="5"
-                strokeDasharray={`${((bhi ?? 0) / 100) * 131.9} 131.9`}
-                strokeLinecap="round" transform="rotate(-90 28 28)"/>
-            </svg>
-            <div className="absolute inset-0 flex items-center justify-center">
-              <span className="text-[14px] font-black leading-none" style={{ color: bhiColor }}>{bhi ?? '—'}</span>
+        <div className="flex items-center gap-5 flex-wrap">
+
+          {/* Status distribution bar + counts */}
+          <div className="flex-1 min-w-[280px]">
+            <div className="flex items-center justify-between mb-2">
+              <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">KPI Status Distribution</div>
+              <div className="text-[11px] text-slate-400">
+                Period: <span className="font-semibold text-slate-700">{periodDisplay}</span>
+              </div>
+            </div>
+
+            {/* Proportional status bar */}
+            <div className="flex h-3 rounded-full overflow-hidden mb-2.5">
+              {redKpis.length > 0 && (
+                <div className="bg-red-500 transition-all duration-500" style={{ width: `${(redKpis.length / total) * 100}%` }}/>
+              )}
+              {yellowKpis.length > 0 && (
+                <div className="bg-amber-400 transition-all duration-500" style={{ width: `${(yellowKpis.length / total) * 100}%` }}/>
+              )}
+              {greenKpis.length > 0 && (
+                <div className="bg-emerald-500 transition-all duration-500" style={{ width: `${(greenKpis.length / total) * 100}%` }}/>
+              )}
+            </div>
+
+            {/* Count pills */}
+            <div className="flex items-center gap-2 flex-wrap">
+              {[
+                { count: redKpis.length,    label: 'Critical',  bg: 'bg-red-50',     border: 'border-red-200',     dot: 'bg-red-500',     text: 'text-red-700',     sub: 'text-red-500',    pulse: true  },
+                { count: yellowKpis.length, label: 'Watch',     bg: 'bg-amber-50',   border: 'border-amber-200',   dot: 'bg-amber-400',   text: 'text-amber-700',   sub: 'text-amber-500',  pulse: false },
+                { count: greenKpis.length,  label: 'On Target', bg: 'bg-emerald-50', border: 'border-emerald-200', dot: 'bg-emerald-500', text: 'text-emerald-700', sub: 'text-emerald-500', pulse: false },
+              ].map(({ count, label, bg, border, dot, text, sub, pulse }) => (
+                <button key={label}
+                  onClick={() => document.getElementById('kpi-status-section')?.scrollIntoView({ behavior: 'smooth', block: 'start' })}
+                  className={`flex items-center gap-1.5 px-3 py-2 rounded-xl ${bg} ${border} border hover:opacity-80 transition-opacity cursor-pointer`}>
+                  <span className={`w-2 h-2 rounded-full ${dot} ${pulse ? 'animate-pulse' : ''}`}/>
+                  <span className={`text-[14px] font-black ${text}`}>{count}</span>
+                  <span className={`text-[11px] font-semibold ${sub}`}>{label}</span>
+                </button>
+              ))}
             </div>
           </div>
-          <div>
-            <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-0.5">Business Health Index</div>
-            <div className="flex items-center gap-1.5">
-              <span className="text-[20px] font-black leading-none" style={{ color: bhiColor }}>{bhiLabel}</span>
-              <span className="text-[18px] font-bold" style={{ color: bhiTrendClr }}>{bhiTrendArrow}</span>
-            </div>
-            <div className="text-[11px] text-slate-400 mt-0.5">
-              Period: <span className="font-semibold text-slate-700">{periodDisplay}</span>
-            </div>
+
+          <div className="w-px h-16 bg-slate-200 flex-shrink-0 hidden sm:block"/>
+
+          {/* Period-over-period delta */}
+          <div className="flex-shrink-0 min-w-[180px]">
+            {periodTransitions.hasPrev ? (
+              <div>
+                <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1.5">Since Last Period</div>
+                <div className="space-y-1">
+                  {periodTransitions.recovered.length > 0 && (
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-[13px]">↑</span>
+                      <span className="text-[12px] text-emerald-700 font-semibold">
+                        {periodTransitions.recovered.length} recovered
+                      </span>
+                      <span className="text-[10px] text-slate-400">
+                        ({periodTransitions.recovered.map(r => r.kpi.name.split(' ')[0]).join(', ')})
+                      </span>
+                    </div>
+                  )}
+                  {periodTransitions.worsened.length > 0 && (
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-[13px]">↓</span>
+                      <span className="text-[12px] text-red-600 font-semibold">
+                        {periodTransitions.worsened.length} worsened
+                      </span>
+                      <span className="text-[10px] text-slate-400">
+                        ({periodTransitions.worsened.map(w => w.kpi.name.split(' ')[0]).join(', ')})
+                      </span>
+                    </div>
+                  )}
+                  {periodTransitions.recovered.length === 0 && periodTransitions.worsened.length === 0 && (
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-[13px]">→</span>
+                      <span className="text-[12px] text-slate-500 font-semibold">No zone changes</span>
+                    </div>
+                  )}
+                  <div className="text-[10px] text-slate-400 mt-0.5">
+                    Was: {periodTransitions.prevRed} critical · {periodTransitions.prevYellow} watch · {periodTransitions.prevGreen} on target
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <div>
+                <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">Period Trend</div>
+                <div className="text-[11px] text-slate-400">Need 2+ periods for comparison</div>
+              </div>
+            )}
           </div>
         </div>
 
-        <div className="w-px h-12 bg-slate-200 flex-shrink-0 hidden sm:block"/>
-
-        {/* Status counts — clickable, scroll to KPI Status section */}
-        <div className="flex items-center gap-2 flex-wrap">
-          {[
-            { count: redKpis.length,    label: 'Critical',  bg: 'bg-red-50',     border: 'border-red-200',     dot: 'bg-red-500',     text: 'text-red-700',     sub: 'text-red-500',    pulse: true  },
-            { count: yellowKpis.length, label: 'Watch',     bg: 'bg-amber-50',   border: 'border-amber-200',   dot: 'bg-amber-400',   text: 'text-amber-700',   sub: 'text-amber-500',  pulse: false },
-            { count: greenKpis.length,  label: 'On Target', bg: 'bg-emerald-50', border: 'border-emerald-200', dot: 'bg-emerald-500', text: 'text-emerald-700', sub: 'text-emerald-500', pulse: false },
-          ].map(({ count, label, bg, border, dot, text, sub, pulse }) => (
-            <button key={label}
-              onClick={() => document.getElementById('kpi-status-section')?.scrollIntoView({ behavior: 'smooth', block: 'start' })}
-              className={`flex items-center gap-1.5 px-3 py-2 rounded-xl ${bg} ${border} border hover:opacity-80 transition-opacity cursor-pointer`}>
-              <span className={`w-2 h-2 rounded-full ${dot} ${pulse ? 'animate-pulse' : ''}`}/>
-              <span className={`text-[14px] font-black ${text}`}>{count}</span>
-              <span className={`text-[11px] font-semibold ${sub}`}>{label}</span>
-            </button>
-          ))}
-        </div>
-
-        <div className="ml-auto flex-shrink-0 flex items-center gap-2">
+        <div className="flex justify-end mt-3">
           <button onClick={() => {
               const a = document.createElement('a')
               a.href = `/api/export/board-deck.pptx?stage=${companyStage || 'series_b'}`
@@ -1208,7 +1249,7 @@ export default function BoardReady({ fingerprint, bridgeData, onNavigate, period
           : []
 
         // Trajectory descriptor
-        const trendWord = bhiTrend === 'declining' ? 'deteriorating' : bhiTrend === 'recovering' ? 'improving' : 'stable'
+        const trendWord = overallTrend === 'declining' ? 'deteriorating' : overallTrend === 'recovering' ? 'improving' : 'stable'
 
         // ── Chip helpers (all inherit text color — underline is the only click signal) ──
         const kpiChip = (kpi, label) => kpi ? (
@@ -1265,18 +1306,26 @@ export default function BoardReady({ fingerprint, bridgeData, onNavigate, period
         const paragraphs = []
 
         // — Opening: BHI + trajectory + count summary
-        const openingTone = bhi >= 80
+        const openingTone = redKpis.length === 0
           ? `performing strongly — ${greenKpis.length} of ${total} KPIs on or above target`
-          : bhi >= 60
+          : redKpis.length <= total * 0.25
           ? `under mixed pressure — ${redKpis.length} KPI${redKpis.length !== 1 ? 's' : ''} critical, ${yellowKpis.length} in the watch zone, ${greenKpis.length} on target`
           : `in significant distress — ${redKpis.length} of ${total} KPIs critically off-target, a broad-based failure pattern`
 
         paragraphs.push(
           <p key="opening" className="text-[13px] text-white/90 leading-relaxed">
             In {periodDisplay} the business is {openingTone}.{' '}
-            The Business Health Index stands at {bhi} and is {trendWord}
+            The overall trajectory is {trendWord}
             {declineCount > 0 ? `, with ${declineCount} KPI${declineCount !== 1 ? 's' : ''} in sustained multi-period decline` : ''}
             {recoveringCount > 0 ? ` and ${recoveringCount} showing recovery momentum` : ''}.
+            {periodTransitions.hasPrev && periodTransitions.recovered.length > 0 && (
+              <>{' '}Since last period, {periodTransitions.recovered.length} KPI{periodTransitions.recovered.length !== 1 ? 's' : ''} recovered
+                ({periodTransitions.recovered.map(r => r.kpi.name).join(', ')}).</>
+            )}
+            {periodTransitions.hasPrev && periodTransitions.worsened.length > 0 && (
+              <>{' '}{periodTransitions.worsened.length} KPI{periodTransitions.worsened.length !== 1 ? 's' : ''} worsened
+                ({periodTransitions.worsened.map(w => w.kpi.name).join(', ')}).</>
+            )}
           </p>
         )
 
