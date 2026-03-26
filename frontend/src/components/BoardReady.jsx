@@ -4,7 +4,7 @@ import {
   LineChart, Line, AreaChart, Area, ReferenceLine, Tooltip,
 } from 'recharts'
 import {
-  ChevronRight, Printer, TrendingUp, TrendingDown, Minus,
+  ChevronRight, TrendingUp, TrendingDown, Minus,
   AlertTriangle, CheckCircle2, Activity, Zap, Eye, Shield,
   Target, AlertCircle, BarChart3, Layers, ArrowUpRight,
   ArrowDownRight, Info, X, Maximize2, ExternalLink,
@@ -1193,10 +1193,7 @@ export default function BoardReady({ fingerprint, bridgeData, onNavigate, period
             className="flex items-center gap-1.5 px-3 py-2 bg-[#0055A4] hover:bg-[#003d80] border border-[#0055A4] rounded-xl text-[11px] text-white font-semibold transition-all">
             <ExternalLink size={12}/> Board Deck
           </button>
-          <button onClick={e => { e.stopPropagation(); window.print() }}
-            className="flex items-center gap-1.5 px-3 py-2 bg-slate-100 hover:bg-slate-200 border border-slate-200 rounded-xl text-[11px] text-slate-600 font-semibold transition-all">
-            <Printer size={12}/> Print
-          </button>
+          {/* Print button removed — screen capture was low quality and served no purpose */}
         </div>
       </div>
 

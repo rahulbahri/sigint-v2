@@ -4301,9 +4301,9 @@ def export_board_deck(stage: str = "series_b"):
     # ── Helper: generate a matplotlib chart as PNG bytes ─────────────────
     def _make_trend_chart(kpis_list, title_text, max_kpis=5):
         """Sparkline-style multi-KPI trend chart → PNG bytes."""
-        fig, ax = plt.subplots(figsize=(10, 4.5))
-        fig.patch.set_facecolor("#f8fafc")
-        ax.set_facecolor("#f8fafc")
+        fig, ax = plt.subplots(figsize=(11, 5.5))
+        fig.patch.set_facecolor("white")
+        ax.set_facecolor("white")
         colors_cycle = ["#dc2626", "#d97706", "#2563eb", "#059669", "#7c3aed", "#db2777"]
         plotted = 0
         for i, kpi in enumerate(kpis_list[:max_kpis]):
@@ -4320,8 +4320,8 @@ def export_board_deck(stage: str = "series_b"):
         if plotted == 0:
             plt.close(fig)
             return None
-        ax.set_title(title_text, fontsize=14, fontweight="bold", pad=12)
-        ax.legend(fontsize=9, loc="upper left", framealpha=0.9)
+        ax.set_title(title_text, fontsize=16, fontweight="bold", pad=16)
+        ax.legend(fontsize=10, loc="upper left", framealpha=0.9, fancybox=True, shadow=True)
         ax.grid(True, alpha=0.3)
         # Show only every Nth x-tick to avoid crowding
         labels = [m["period"] for m in kpis_list[0].get("monthly", [])] if kpis_list else []
@@ -4334,14 +4334,14 @@ def export_board_deck(stage: str = "series_b"):
         ax.tick_params(axis="y", labelsize=9)
         plt.tight_layout()
         buf_png = io.BytesIO()
-        fig.savefig(buf_png, format="png", dpi=150, bbox_inches="tight")
+        fig.savefig(buf_png, format="png", dpi=200, bbox_inches="tight")
         plt.close(fig)
         buf_png.seek(0)
         return buf_png
 
     def _make_status_donut():
         """Donut chart of red/yellow/green distribution → PNG bytes."""
-        fig, ax = plt.subplots(figsize=(4, 4))
+        fig, ax = plt.subplots(figsize=(5, 5))
         fig.patch.set_facecolor("white")
         sizes = [len(red_kpis), len(yellow_kpis), len(green_kpis)]
         colors_d = ["#dc2626", "#d97706", "#059669"]
@@ -4365,7 +4365,7 @@ def export_board_deck(stage: str = "series_b"):
         ax.text(0, -0.15, "KPIs", ha="center", va="center", fontsize=11, color="#64748b")
         plt.tight_layout()
         buf_png = io.BytesIO()
-        fig.savefig(buf_png, format="png", dpi=150, bbox_inches="tight")
+        fig.savefig(buf_png, format="png", dpi=200, bbox_inches="tight")
         plt.close(fig)
         buf_png.seek(0)
         return buf_png
@@ -4385,9 +4385,9 @@ def export_board_deck(stage: str = "series_b"):
                 bar_colors.append("#dc2626" if k["fy_status"] == "red" else "#d97706" if k["fy_status"] == "yellow" else "#059669")
         if not names:
             return None
-        fig, ax = plt.subplots(figsize=(10, max(len(names) * 0.55, 3)))
-        fig.patch.set_facecolor("#f8fafc")
-        ax.set_facecolor("#f8fafc")
+        fig, ax = plt.subplots(figsize=(11, max(len(names) * 0.65, 4)))
+        fig.patch.set_facecolor("white")
+        ax.set_facecolor("white")
         y_pos = range(len(names))
         ax.barh(y_pos, company_vals, height=0.35, color=bar_colors, label="Company", alpha=0.9)
         ax.barh([y + 0.35 for y in y_pos], peer_vals, height=0.35, color="#94a3b8", label=f"Peer Median ({stage_label})", alpha=0.6)
@@ -4400,7 +4400,7 @@ def export_board_deck(stage: str = "series_b"):
         ax.tick_params(axis="x", labelsize=9)
         plt.tight_layout()
         buf_png = io.BytesIO()
-        fig.savefig(buf_png, format="png", dpi=150, bbox_inches="tight")
+        fig.savefig(buf_png, format="png", dpi=200, bbox_inches="tight")
         plt.close(fig)
         buf_png.seek(0)
         return buf_png
@@ -4536,7 +4536,7 @@ def export_board_deck(stage: str = "series_b"):
     # Donut chart on the right
     donut_png = _make_status_donut()
     if donut_png:
-        slide2.shapes.add_picture(donut_png, Inches(8.8), Inches(1.2), Inches(4), Inches(4))
+        slide2.shapes.add_picture(donut_png, Inches(8.5), Inches(1), Inches(4.5), Inches(4.5))
 
     # ── Slide 3: Critical KPIs — Narrative Cards + Trend Chart ────────────
     slide3 = prs.slides.add_slide(blank_layout)
@@ -4556,7 +4556,7 @@ def export_board_deck(stage: str = "series_b"):
         # Right side: trend chart of red KPIs
         trend_png = _make_trend_chart(red_kpis, "Critical KPI Trends", max_kpis=4)
         if trend_png:
-            slide3.shapes.add_picture(trend_png, Inches(6.8), Inches(1.2), Inches(6), Inches(4.5))
+            slide3.shapes.add_picture(trend_png, Inches(6.5), Inches(1.2), Inches(6.5), Inches(5.2))
     else:
         _add_narrative(slide3, 0.5, 2, 8, 1, [
             ("No critical KPIs — all metrics are within acceptable ranges.", 16, False, _DECK_GREEN_FG)
@@ -4572,7 +4572,7 @@ def export_board_deck(stage: str = "series_b"):
     kpis_for_bench = (red_kpis + yellow_kpis)[:10]
     bench_png = _make_benchmark_bar(kpis_for_bench, bench)
     if bench_png:
-        slide4.shapes.add_picture(bench_png, Inches(0.5), Inches(1.3), Inches(8), Inches(5.5))
+        slide4.shapes.add_picture(bench_png, Inches(0.3), Inches(1.3), Inches(8.5), Inches(5.8))
 
     # Narrative on right: which KPIs are below P25
     below_p25 = []
@@ -4621,7 +4621,7 @@ def export_board_deck(stage: str = "series_b"):
 
         trend_yellow_png = _make_trend_chart(yellow_kpis, "Watch Zone Trends", max_kpis=4)
         if trend_yellow_png:
-            slide5.shapes.add_picture(trend_yellow_png, Inches(6.8), Inches(1.2), Inches(6), Inches(4.5))
+            slide5.shapes.add_picture(trend_yellow_png, Inches(6.5), Inches(1.2), Inches(6.5), Inches(5.2))
 
     # ── Slide 6: Recommended Actions (top 5 priorities) ───────────────────
     slide6 = prs.slides.add_slide(blank_layout)

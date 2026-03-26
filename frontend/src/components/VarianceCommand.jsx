@@ -536,10 +536,16 @@ function ExpandedDetail({ kpi, benchmarkCtx, recentTrend, smartActions, fingerpr
   const quantifiedProblem = sa?.quantified_problem || null
 
   // Build upstream causes from fingerprint if API didn't return them
-  const resolvedUpstream = upstreamCauses.length > 0 ? upstreamCauses : staticCauses.map(c => ({ explanation: c }))
-  const resolvedDownstream = downstreamImpact.length > 0 ? downstreamImpact : staticDownstream
+  const resolvedUpstream = upstreamCauses.length > 0 ? upstreamCauses : staticCauses.map(c => ({
+    explanation: typeof c === 'string' ? c : (c?.explanation || c?.description || String(c || '')),
+    kpi_key: null,
+    status: null,
+  }))
+  const resolvedDownstream = downstreamImpact.length > 0 ? downstreamImpact : (staticDownstream || []).map(d =>
+    typeof d === 'string' ? d : (d?.kpi_key || d?.key || d?.name || String(d || ''))
+  )
   const resolvedActions = actions.length > 0 ? actions : staticCorrective.map((a, i) => ({
-    action: typeof a === 'string' ? a : a.action || a.description || String(a),
+    action: typeof a === 'string' ? a : (a?.action || a?.description || String(a || '')),
     priority: 'medium',
     number: i + 1,
   }))
@@ -637,7 +643,7 @@ function ExpandedDetail({ kpi, benchmarkCtx, recentTrend, smartActions, fingerpr
                             )}
                           </div>
                         ) : null}
-                        <p className="text-[10px] text-slate-500 leading-relaxed">{cause.explanation || cause}</p>
+                        <p className="text-[10px] text-slate-500 leading-relaxed">{typeof cause === 'string' ? cause : (cause?.explanation || cause?.description || '')}</p>
                       </div>
                     )
                   })}
@@ -655,7 +661,7 @@ function ExpandedDetail({ kpi, benchmarkCtx, recentTrend, smartActions, fingerpr
                   {resolvedDownstream.map((d, i) => {
                     const dKey = typeof d === 'string' ? d : (d.kpi_key || d.key || d.kpi || d.name)
                     const dKpi = dKey ? fpLookup[dKey] : null
-                    const dName = dKpi?.name || (typeof d === 'string' ? d : d.name || d.kpi || d)
+                    const dName = dKpi?.name || (typeof d === 'string' ? d : (d?.name || d?.kpi || d?.kpi_key || String(d || '')))
                     return (
                       <div key={i} className="flex items-center justify-between px-2.5 py-1.5 rounded-md bg-red-50/60 border border-red-100">
                         <span className="text-[11px] text-red-700 font-medium">{dName}</span>
@@ -679,7 +685,7 @@ function ExpandedDetail({ kpi, benchmarkCtx, recentTrend, smartActions, fingerpr
                   {dataGaps.map((gap, i) => (
                     <div key={i} className="flex items-start gap-1.5 text-[10px] text-amber-700">
                       <FileQuestion size={11} className="mt-0.5 shrink-0 text-amber-400" />
-                      <span>{typeof gap === 'string' ? gap : gap.metric || gap.description || gap}</span>
+                      <span>{typeof gap === 'string' ? gap : (gap?.metric || gap?.description || String(gap || ''))}</span>
                     </div>
                   ))}
                 </div>
