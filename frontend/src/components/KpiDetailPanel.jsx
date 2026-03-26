@@ -1,4 +1,5 @@
 import { useEffect } from 'react'
+import AnnotationPanel from './AnnotationPanel.jsx'
 import {
   X, TrendingUp, TrendingDown, Minus,
   Target, FlaskConical, Calendar, Star, AlertTriangle,
@@ -625,6 +626,14 @@ export default function KpiDetailPanel({ kpi, onClose, periodLabel, benchmarks, 
                 </div>
               )
             })()}
+
+            {/* Annotations */}
+            <div className="mt-6 pt-5 border-t border-slate-100 px-5 pb-4">
+              <AnnotationPanel
+                kpiKey={kpi?.key}
+                periods={(kpi?.monthly || []).map(m => m.period)}
+              />
+            </div>
 
             {/* Bottom padding */}
             <div className="h-6"/>

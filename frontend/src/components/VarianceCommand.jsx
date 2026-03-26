@@ -195,7 +195,7 @@ export default function VarianceCommand({ fingerprint, bridgeData, benchmarks, c
       </div>
 
       {/* ── Summary Strip ───────────────────────────────────────────────── */}
-      <div className="grid grid-cols-3 gap-3">
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
         <SummaryCard count={redCount} label="require action" color="red" />
         <SummaryCard count={yellowCount} label="to monitor" color="yellow" />
         <SummaryCard count={greenCount} label="on target" color="green" />
@@ -205,7 +205,7 @@ export default function VarianceCommand({ fingerprint, bridgeData, benchmarks, c
       {activeKpis.length > 0 && (
         <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden">
           {/* Table Header */}
-          <div className="grid grid-cols-[24px_1.2fr_0.7fr_0.7fr_0.7fr_1.2fr_1fr_0.8fr_0.7fr_28px] gap-2 px-4 py-2.5 border-b border-slate-100 bg-slate-50/50">
+          <div className="hidden md:grid grid-cols-[24px_1.2fr_0.7fr_0.7fr_0.7fr_1.2fr_1fr_0.8fr_0.7fr_28px] gap-2 px-4 py-2.5 border-b border-slate-100 bg-slate-50/50">
             <div />
             <div className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider">KPI</div>
             <div className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider">Current</div>
@@ -269,9 +269,9 @@ export default function VarianceCommand({ fingerprint, bridgeData, benchmarks, c
           {showResolved && (
             <div className="border-t border-slate-100 opacity-60">
               {resolvedKpis.map((kpi, idx) => (
+                <React.Fragment key={kpi.key}>
                 <div
-                  key={kpi.key}
-                  className={`grid grid-cols-[24px_1.2fr_0.7fr_0.7fr_0.7fr_1.2fr_1fr_0.8fr_0.7fr_28px] gap-2 px-4 py-2.5 items-center ${
+                  className={`hidden md:grid grid-cols-[24px_1.2fr_0.7fr_0.7fr_0.7fr_1.2fr_1fr_0.8fr_0.7fr_28px] gap-2 px-4 py-2.5 items-center ${
                     idx % 2 === 0 ? 'bg-white' : 'bg-slate-50/30'
                   }`}
                 >
@@ -294,6 +294,14 @@ export default function VarianceCommand({ fingerprint, bridgeData, benchmarks, c
                   <span className="text-[10px] text-emerald-600 font-medium">resolved</span>
                   <div />
                 </div>
+                {/* Mobile resolved card */}
+                <div className={`md:hidden flex items-center gap-3 px-4 py-2.5 ${idx % 2 === 0 ? 'bg-white' : 'bg-slate-50/30'}`}>
+                  <span className={`w-2.5 h-2.5 rounded-full shrink-0 ${STATUS_STYLES[kpi.fy_status]?.dot || 'bg-slate-300'}`} />
+                  <span className="text-[12px] text-slate-500 line-through flex-1 truncate">{kpi.name}</span>
+                  <GapCell kpi={kpi} />
+                  <span className="text-[10px] text-emerald-600 font-medium ml-2">resolved</span>
+                </div>
+                </React.Fragment>
               ))}
             </div>
           )}
@@ -366,7 +374,7 @@ function KpiRow({ kpi, idx, accountability: acct, expanded, saving, benchmarkCtx
     <>
       {/* Main row */}
       <div
-        className={`grid grid-cols-[24px_1.2fr_0.7fr_0.7fr_0.7fr_1.2fr_1fr_0.8fr_0.7fr_28px] gap-2 px-4 py-2.5 items-center transition-colors ${
+        className={`hidden md:grid grid-cols-[24px_1.2fr_0.7fr_0.7fr_0.7fr_1.2fr_1fr_0.8fr_0.7fr_28px] gap-2 px-4 py-2.5 items-center transition-colors ${
           idx % 2 === 0 ? 'bg-white' : 'bg-slate-50/30'
         } ${expanded ? 'border-b border-slate-100' : ''}`}
       >
@@ -445,6 +453,35 @@ function KpiRow({ kpi, idx, accountability: acct, expanded, saving, benchmarkCtx
         </button>
       </div>
 
+
+      {/* Mobile card view (visible only on small screens) */}
+      <div
+        className={`md:hidden flex items-start gap-3 px-4 py-3 cursor-pointer ${
+          idx % 2 === 0 ? 'bg-white' : 'bg-slate-50/30'
+        } ${expanded ? 'border-b border-slate-100' : ''}`}
+        onClick={onToggle}
+      >
+        <span className={`mt-1 w-2.5 h-2.5 rounded-full shrink-0 ${style.dot}`} />
+        <div className="flex-1 min-w-0">
+          <button
+            onClick={e => { e.stopPropagation(); onKpiClick?.(kpi.key) }}
+            className="text-[13px] font-semibold text-slate-800 hover:text-blue-600 text-left transition-colors block truncate w-full"
+          >
+            {kpi.name}
+          </button>
+          <div className="flex items-center gap-3 mt-1 flex-wrap">
+            <span className="text-[11px] text-slate-600 font-medium">{fmt(kpi.avg, kpi.unit)}</span>
+            <span className="text-[10px] text-slate-400">target: {fmt(kpi.target, kpi.unit)}</span>
+            <GapCell kpi={kpi} />
+          </div>
+          {kpi.causation?.root_causes?.[0] && (
+            <p className="text-[10px] text-slate-400 mt-1 truncate">{kpi.causation.root_causes[0]}</p>
+          )}
+        </div>
+        <button onClick={e => { e.stopPropagation(); onToggle() }} className="text-slate-400 hover:text-slate-600 shrink-0 mt-0.5">
+          {expanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+        </button>
+      </div>
       {/* Expanded detail panel */}
       {expanded && (
         <SafeExpandedDetail
@@ -545,6 +582,19 @@ function SafeExpandedDetail(props) {
 
 // ── Expanded Detail Panel ────────────────────────────────────────────────────
 function ExpandedDetail({ kpi, benchmarkCtx, recentTrend, smartActions, fingerprint, accountability, onSave, idx }) {
+  const [trackedActions, setTrackedActions] = useState({})
+
+  const trackAction = async (actionText) => {
+    try {
+      const result = await axios.post(`/api/outcomes/${kpi.key}`, {
+        action_text: actionText,
+        before_value: kpi.avg,
+        before_status: kpi.fy_status,
+      })
+      setTrackedActions(prev => ({ ...prev, [actionText]: result.data.id }))
+    } catch {}
+  }
+
   // Fall back to static causation data if smart actions failed or haven't loaded
   const sa = smartActions?.data
   const loading = smartActions?.loading
@@ -818,6 +868,16 @@ function ExpandedDetail({ kpi, benchmarkCtx, recentTrend, smartActions, fingerpr
                                 </span>
                               )}
                             </div>
+                            {!trackedActions[actionText] ? (
+                              <button
+                                onClick={() => trackAction(actionText)}
+                                className="text-[9px] text-blue-500 hover:text-blue-700 underline mt-1"
+                              >
+                                Track this action →
+                              </button>
+                            ) : (
+                              <span className="text-[9px] text-emerald-500 mt-1">✓ Being tracked</span>
+                            )}
                           </div>
                         </div>
                       </div>

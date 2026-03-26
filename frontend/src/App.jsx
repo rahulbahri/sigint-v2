@@ -3,7 +3,8 @@ import axios from 'axios'
 import {
   LayoutDashboard, Fingerprint, TrendingUp,
   Upload, Code2, RefreshCw, ChevronRight,
-  Activity, GitBranch, Network, Layers, BarChart2, BookOpen, Bell
+  Activity, GitBranch, Network, Layers, BarChart2, BookOpen, Bell, Settings2, Target,
+  Shield, Menu, X
 } from 'lucide-react'
 import Scorecard from './components/Scorecard.jsx'
 import Fingerprint2 from './components/Fingerprint.jsx'
@@ -20,8 +21,12 @@ import BoardReady from './components/BoardReady.jsx'
 import ForecastPage from './components/ForecastPage.jsx'
 import DevDocs from './components/DevDocs.jsx'
 import SlackAlerts from './components/SlackAlerts.jsx'
+import CompanySettings from './components/CompanySettings.jsx'
 import OnboardingModal from './components/OnboardingModal.jsx'
 import VarianceCommand from './components/VarianceCommand.jsx'
+import TargetsEditor from './components/TargetsEditor.jsx'
+import AuditLog from './components/AuditLog.jsx'
+import OnboardingChecklist from './components/OnboardingChecklist.jsx'
 
 // ── V2: Nav structured into labelled zones with business-friendly names ──────
 const NAV_GROUPS = [
@@ -44,22 +49,25 @@ const NAV_GROUPS = [
   {
     label: 'Settings',
     tabs: [
-      { id: 'upload',  label: 'Data Upload',   Icon: Upload },
-      { id: 'alerts',  label: 'Slack Alerts',  Icon: Bell   },
+      { id: 'upload',  label: 'Data Upload',      Icon: Upload    },
+      { id: 'alerts',  label: 'Slack Alerts',     Icon: Bell      },
+      { id: 'targets', label: 'KPI Targets',      Icon: Target    },
+      { id: 'audit',   label: 'Audit Trail',      Icon: Shield    },
+      { id: 'company', label: 'Company Settings', Icon: Settings2 },
     ],
   },
 ]
 
 // Advanced tabs — shown in collapsible section
-const ADVANCED_TABS = [
+const ADVANCED_TABS_BASE = [
   { id: 'dashboard', label: 'Command Center',  Icon: LayoutDashboard },
   { id: 'ontology',  label: 'KPI Causal Map',  Icon: Network         },
   { id: 'api',       label: 'API Reference',   Icon: Code2           },
   { id: 'devdocs',   label: 'Dev Docs',        Icon: BookOpen        },
 ]
 
-// Flat list kept for places that need to iterate all tabs
-const TABS = [...NAV_GROUPS.flatMap(g => g.tabs), ...ADVANCED_TABS]
+// Flat list kept for places that need to iterate all tabs (ADVANCED_TABS is derived at runtime based on devMode)
+const TABS_BASE = [...NAV_GROUPS.flatMap(g => g.tabs), ...ADVANCED_TABS_BASE]
 
 const PAGE_TITLES = {
   board:       'Executive Brief',
@@ -72,8 +80,11 @@ const PAGE_TITLES = {
   forecast:    'Forward Signals — 90-Day Outlook',
   upload:      'Data Upload',
   alerts:      'Slack Alerts',
+  targets:     'KPI Targets',
   api:         'API Reference',
   devdocs:     'Developer Documentation',
+  company:     'Company Settings',
+  audit:       'Audit Trail',
 }
 
 const FILTER_TABS = new Set(['variance', 'dashboard', 'fingerprint', 'trends', 'projection'])
@@ -87,6 +98,7 @@ function kpiStatus(avg, target, direction) {
 
 export default function App() {
   const [tab, setTab]                             = useState('variance')
+  const [sidebarOpen, setSidebarOpen]             = useState(false)
   const [summary, setSummary]                     = useState(null)
   const [kpiDefs, setKpiDefs]                     = useState([])
   const [monthly, setMonthly]                     = useState([])
@@ -104,6 +116,13 @@ export default function App() {
   const [benchmarks, setBenchmarks]               = useState({})
   const [showOnboarding, setShowOnboarding]       = useState(() => !localStorage.getItem('axiom_onboarded'))
   const [advancedOpen, setAdvancedOpen]           = useState(false)
+  const [devMode]                                 = useState(() => localStorage.getItem('axiom_dev_mode') === 'true')
+  const [companySettings, setCompanySettings]     = useState({})
+
+  // Dev mode: filter DevDocs from advanced tabs unless dev mode is on
+  const ADVANCED_TABS = devMode
+    ? ADVANCED_TABS_BASE
+    : ADVANCED_TABS_BASE.filter(t => t.id !== 'devdocs')
 
   // ── Derived filter sets ───────────────────────────────────────────────────
   const yearSet  = useMemo(() => new Set(selectedYears),  [selectedYears])
@@ -271,7 +290,10 @@ export default function App() {
 
   const closeKpi = () => setSelectedKpi(null)
 
-  useEffect(() => { loadAll() }, []) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    loadAll()
+    axios.get('/api/company-settings').then(r => setCompanySettings(r.data)).catch(() => {})
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     axios.get(`/api/benchmarks?stage=${companyStage}`)
@@ -289,20 +311,34 @@ export default function App() {
   return (
     <div className="flex h-screen overflow-hidden">
 
+      {/* ── Mobile Overlay Backdrop ───────────────────────── */}
+      {sidebarOpen && (
+        <div
+          className="fixed inset-0 bg-black/30 z-40 md:hidden"
+          onClick={() => setSidebarOpen(false)}
+        />
+      )}
+
       {/* ── Left Sidebar ──────────────────────────────────── */}
-      <aside className="sidebar w-56 flex-shrink-0 flex flex-col h-full overflow-hidden">
+      <aside className={`sidebar w-56 flex-shrink-0 flex flex-col h-full overflow-hidden fixed inset-y-0 left-0 z-50 transform transition-transform ${sidebarOpen ? 'translate-x-0' : '-translate-x-full'} md:relative md:translate-x-0`}>
 
         {/* Logo */}
         <div className="px-5 py-5 border-b border-white/10">
           <div className="flex items-center gap-3">
+            <button className="md:hidden absolute top-3 right-3 text-slate-400 hover:text-white" onClick={() => setSidebarOpen(false)}><X size={16}/></button>
             <div className="w-8 h-8 rounded-lg bg-[#00AEEF]/20 border border-[#00AEEF]/40
-                            flex items-center justify-center pulse-accent flex-shrink-0">
-              <span className="text-[#00AEEF] font-bold text-xs">AX</span>
+                            flex items-center justify-center pulse-accent flex-shrink-0 overflow-hidden">
+              {companySettings.logo
+                ? <img src={companySettings.logo} alt="logo" className="w-full h-full object-cover rounded-lg"/>
+                : <span className="text-[#00AEEF] font-bold text-xs">AX</span>
+              }
             </div>
             <div className="min-w-0">
-              <p className="text-white font-bold text-sm leading-none">Axiom</p>
+              <p className="text-white font-bold text-sm leading-none">
+                {companySettings.company_name || 'Axiom'}
+              </p>
               <p className="text-[#00AEEF] text-[10px] mt-0.5 tracking-widest uppercase truncate">
-                Intelligence · V2
+                Intelligence
               </p>
             </div>
           </div>
@@ -364,6 +400,9 @@ export default function App() {
 
         {/* Navigation + AI Panel */}
         <div className="flex-1 flex flex-col min-h-0">
+
+          {/* ── Onboarding Checklist ──────────────────────────── */}
+          <OnboardingChecklist fingerprint={filteredFingerprint} onNavigate={setTab} />
 
           {/* ── Anika co-pilot CTA — prominent, always visible ── */}
           <div className="px-3 pt-3 pb-1">
@@ -443,12 +482,6 @@ export default function App() {
                        hover:border-white/25 transition-all">
             <RefreshCw size={11}/> Refresh
           </button>
-          <button onClick={seedDemo}
-            className="w-full flex items-center justify-center gap-2 py-2 rounded-lg
-                       text-xs bg-[#0055A4]/50 border border-[#00AEEF]/30 text-[#00AEEF]
-                       hover:bg-[#0055A4] transition-all">
-            <Activity size={11}/> Load Demo
-          </button>
           <a href="/api/docs" target="_blank"
              className="w-full flex items-center justify-center gap-2 py-2 rounded-lg
                         text-xs text-slate-500 hover:text-slate-300 transition-all">
@@ -458,11 +491,17 @@ export default function App() {
       </aside>
 
       {/* ── Main Content ──────────────────────────────────── */}
-      <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
+      <div className="flex-1 flex flex-col min-w-0 overflow-hidden w-full">
 
         {/* Topbar */}
         <header className="topbar flex-shrink-0 px-6 py-3.5 flex items-center justify-between">
           <div className="flex items-center gap-3">
+            <button
+              className="md:hidden mr-1 text-slate-500 hover:text-slate-700"
+              onClick={() => setSidebarOpen(v => !v)}
+            >
+              <Menu size={20}/>
+            </button>
             <h1 className="page-title">{PAGE_TITLES[tab]}</h1>
             {summary && (
               <span className="text-xs text-slate-400 hidden md:block">
@@ -542,14 +581,10 @@ export default function App() {
 
           {!loading && noData && (
             <div className="flex flex-col items-center justify-center h-64 gap-4">
-              <p className="text-slate-500 text-base">No data yet — load demo data or upload a CSV.</p>
+              <p className="text-slate-500 text-base">No data yet — upload a CSV to get started.</p>
               <div className="flex gap-3">
-                <button onClick={seedDemo}
-                  className="px-5 py-2 rounded-lg bg-[#0055A4] hover:bg-[#003d80] text-white text-sm font-medium transition-colors">
-                  Load Demo Data (5 Years)
-                </button>
                 <button onClick={() => setTab('upload')}
-                  className="px-5 py-2 rounded-lg border border-slate-300 hover:border-slate-400 text-slate-600 text-sm font-medium transition-colors">
+                  className="px-5 py-2 rounded-lg bg-[#0055A4] hover:bg-[#003d80] text-white text-sm font-medium transition-colors">
                   Upload CSV
                 </button>
               </div>
@@ -576,6 +611,7 @@ export default function App() {
                   periodLabel={periodLabel}
                   benchmarks={benchmarks}
                   companyStage={companyStage}
+                  companySettings={companySettings}
                 />
               )}
               {tab === 'dashboard'   && (
@@ -618,6 +654,9 @@ export default function App() {
               {tab === 'forecast'    && <ForecastPage />}
               {tab === 'upload'      && <CSVUpload onUploaded={loadAll}/>}
               {tab === 'alerts'      && <SlackAlerts filteredFingerprint={filteredFingerprint}/>}
+              {tab === 'targets'     && <TargetsEditor />}
+              {tab === 'audit'      && <AuditLog />}
+              {tab === 'company'     && <CompanySettings onSave={(updated) => setCompanySettings(prev => ({ ...prev, ...updated }))}/>}
               {tab === 'api'         && <APIReference kpiDefs={kpiDefs}/>}
               {tab === 'devdocs'     && <DevDocs />}
             </>
@@ -627,6 +666,9 @@ export default function App() {
           {!loading && noData && tab === 'forecast'   && <ForecastPage />}
           {!loading && noData && tab === 'upload'     && <CSVUpload onUploaded={loadAll}/>}
           {!loading && noData && tab === 'alerts'     && <SlackAlerts filteredFingerprint={[]}/>}
+          {!loading && noData && tab === 'targets'    && <TargetsEditor />}
+          {!loading && noData && tab === 'audit'     && <AuditLog />}
+          {!loading && noData && tab === 'company'    && <CompanySettings onSave={(updated) => setCompanySettings(prev => ({ ...prev, ...updated }))}/>}
           {!loading && noData && tab === 'api'        && <APIReference kpiDefs={kpiDefs}/>}
           {!loading && noData && tab === 'devdocs'    && <DevDocs />}
           {!loading && noData && tab === 'projection' && (

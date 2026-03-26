@@ -1,4 +1,4 @@
-from fastapi import FastAPI, UploadFile, File, HTTPException
+from fastapi import FastAPI, UploadFile, File, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, StreamingResponse
@@ -9,6 +9,8 @@ import anthropic
 from datetime import datetime
 from typing import Optional
 from pathlib import Path
+from collections import defaultdict
+import time as _time
 
 app = FastAPI(
     title="Axiom KPI Dashboard API",
@@ -25,6 +27,34 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# ── Simple in-memory rate limiter ─────────────────────────────────────────────
+_rate_limit_store: dict = defaultdict(list)
+
+def _rate_limit(client_ip: str, limit: int = 60, window: int = 60) -> bool:
+    """Returns True if request is allowed, False if rate limited."""
+    now = _time.time()
+    calls = _rate_limit_store[client_ip]
+    # Remove calls outside the window
+    _rate_limit_store[client_ip] = [t for t in calls if now - t < window]
+    if len(_rate_limit_store[client_ip]) >= limit:
+        return False
+    _rate_limit_store[client_ip].append(now)
+    return True
+
+@app.middleware("http")
+async def rate_limit_middleware(request: Request, call_next):
+    # Only rate-limit API routes, not static assets
+    if request.url.path.startswith("/api/"):
+        client_ip = request.client.host if request.client else "unknown"
+        # More strict limit for heavy endpoints
+        heavy = any(x in request.url.path for x in ["/forecast/build", "/ontology/discover", "/export/board-deck"])
+        limit = 10 if heavy else 120
+        if not _rate_limit(client_ip, limit=limit, window=60):
+            from fastapi.responses import JSONResponse
+            return JSONResponse(status_code=429, content={"detail": "Too many requests. Please slow down."})
+    return await call_next(request)
+
 
 DB_PATH = Path(__file__).parent / "uploads" / "axiom.db"
 UPLOADS_DIR = Path(__file__).parent / "uploads"
@@ -94,6 +124,50 @@ def init_db():
             status TEXT DEFAULT 'open',
             last_updated TEXT DEFAULT CURRENT_TIMESTAMP
         );
+        CREATE TABLE IF NOT EXISTS company_settings (
+            key   TEXT PRIMARY KEY,
+            value TEXT
+        );
+        CREATE TABLE IF NOT EXISTS audit_log (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            event_type  TEXT NOT NULL,
+            entity_type TEXT,
+            entity_id   TEXT,
+            description TEXT NOT NULL,
+            user        TEXT DEFAULT 'system',
+            ip_address  TEXT,
+            created_at  TEXT DEFAULT (datetime('now'))
+        );
+    """)
+    conn.commit()
+    # Annotations table
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS annotations (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            kpi_key     TEXT NOT NULL,
+            period      TEXT NOT NULL,
+            note        TEXT NOT NULL,
+            author      TEXT DEFAULT 'CFO',
+            created_at  TEXT DEFAULT (datetime('now')),
+            updated_at  TEXT DEFAULT (datetime('now'))
+        )
+    """)
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_annotations_kpi ON annotations(kpi_key, period)")
+    # Recommendation outcomes table
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS recommendation_outcomes (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            kpi_key         TEXT NOT NULL,
+            action_text     TEXT NOT NULL,
+            started_at      TEXT DEFAULT (datetime('now')),
+            resolved_at     TEXT,
+            before_value    REAL,
+            after_value     REAL,
+            before_status   TEXT,
+            after_status    TEXT,
+            outcome_notes   TEXT,
+            was_effective   INTEGER DEFAULT NULL
+        )
     """)
     conn.commit()
     # Migration: add version_label to projection tables if missing
@@ -1197,6 +1271,7 @@ async def upload_csv(file: UploadFile = File(...)):
                 "INSERT INTO monthly_data (upload_id, year, month, data_json) VALUES (?,?,?,?)",
                 (upload_id, yr, mo, json.dumps(row_dict))
             )
+        _audit(conn, "data_upload", "KPI data uploaded", "upload", str(upload_id))
         conn.commit()
     finally:
         conn.close()
@@ -1500,6 +1575,46 @@ def get_projection_versions():
     return {"versions": [{"label": r["version_label"] or "v1", "uploaded_at": r["first_uploaded"]} for r in rows]}
 
 
+
+@app.get("/api/projection/compare", tags=["Projection"])
+def compare_projection_versions(v1: int, v2: int):
+    conn = get_db()
+
+    def get_version_data(upload_id):
+        rows = conn.execute(
+            "SELECT year, month, data_json FROM projection_monthly_data WHERE projection_upload_id=? ORDER BY year, month",
+            (upload_id,)
+        ).fetchall()
+        result = {}
+        for r in rows:
+            key = f"{r['year']}-{r['month']:02d}"
+            result[key] = json.loads(r["data_json"])
+        return result
+
+    v1_data = get_version_data(v1)
+    v2_data = get_version_data(v2)
+    conn.close()
+
+    # Compute deltas for overlapping periods
+    deltas = {}
+    all_periods = sorted(set(list(v1_data.keys()) + list(v2_data.keys())))
+    for period in all_periods:
+        d1 = v1_data.get(period, {})
+        d2 = v2_data.get(period, {})
+        all_keys = set(list(d1.keys()) + list(d2.keys()))
+        period_delta = {}
+        for k in all_keys:
+            val1 = d1.get(k)
+            val2 = d2.get(k)
+            if val1 is not None and val2 is not None and val1 != 0:
+                pct_change = round((val2 - val1) / abs(val1) * 100, 1)
+                period_delta[k] = {"v1": val1, "v2": val2, "delta": round(val2 - val1, 3), "pct_change": pct_change}
+        if period_delta:
+            deltas[period] = period_delta
+
+    return {"v1_id": v1, "v2_id": v2, "deltas": deltas}
+
+
 @app.get("/api/bridge", tags=["Projection"])
 def bridge_analysis(year: Optional[int] = None):
     """
@@ -1620,11 +1735,15 @@ def bridge_analysis(year: Optional[int] = None):
 @app.put("/api/targets/{kpi_key}", tags=["Configuration"])
 def update_target(kpi_key: str, target_value: float):
     """Update the target value for a specific KPI."""
+    import re
+    if not re.match(r'^[a-z_]+$', kpi_key):
+        raise HTTPException(status_code=400, detail="Invalid KPI key format")
     match = next((k for k in KPI_DEFS if k["key"] == kpi_key), None)
     if not match:
         raise HTTPException(404, f"KPI '{kpi_key}' not found")
     conn = get_db()
     conn.execute("UPDATE kpi_targets SET target_value = ? WHERE kpi_key = ?", (target_value, kpi_key))
+    _audit(conn, "target_changed", f"Target for {kpi_key} updated to {target_value}", "kpi_target", kpi_key)
     conn.commit()
     conn.close()
     return {"kpi_key": kpi_key, "target_value": target_value}
@@ -4965,6 +5084,7 @@ def put_accountability(kpi_key: str, body: dict):
             status = excluded.status,
             last_updated = excluded.last_updated
     """, (kpi_key, owner, due_date, status, now))
+    _audit(conn, "accountability_update", f"Accountability updated for {kpi_key}", "accountability", kpi_key)
     conn.commit()
     conn.close()
     return {"status": "ok", "accountability": {"kpi_key": kpi_key, "owner": owner, "due_date": due_date, "status": status, "last_updated": now}}
@@ -5680,6 +5800,162 @@ def get_smart_actions(kpi_key: str, stage: str = "series_b"):
         )
 
     return result
+
+
+# ─── Annotations ────────────────────────────────────────────────────────────
+
+@app.get("/api/annotations/{kpi_key}", tags=["Annotations"])
+def get_annotations(kpi_key: str, period: str = None):
+    conn = get_db()
+    if period:
+        rows = conn.execute(
+            "SELECT * FROM annotations WHERE kpi_key=? AND period=? ORDER BY created_at DESC",
+            (kpi_key, period)
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT * FROM annotations WHERE kpi_key=? ORDER BY period DESC, created_at DESC",
+            (kpi_key,)
+        ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+@app.post("/api/annotations/{kpi_key}", tags=["Annotations"])
+async def add_annotation(kpi_key: str, request: Request):
+    body = await request.json()
+    note = body.get("note", "").strip()
+    if not note:
+        raise HTTPException(status_code=400, detail="Note cannot be empty")
+    period = body.get("period", "general")
+    author = body.get("author", "CFO")
+    conn = get_db()
+    cursor = conn.execute(
+        "INSERT INTO annotations (kpi_key, period, note, author) VALUES (?,?,?,?)",
+        (kpi_key, period, note, author)
+    )
+    ann_id = cursor.lastrowid
+    conn.commit()
+    conn.close()
+    return {"id": ann_id, "kpi_key": kpi_key, "period": period, "note": note, "author": author}
+
+@app.delete("/api/annotations/{annotation_id}", tags=["Annotations"])
+def delete_annotation(annotation_id: int):
+    conn = get_db()
+    conn.execute("DELETE FROM annotations WHERE id=?", (annotation_id,))
+    conn.commit()
+    conn.close()
+    return {"status": "deleted"}
+
+
+# ─── Recommendation Outcomes ─────────────────────────────────────────────────
+
+@app.get("/api/outcomes/{kpi_key}", tags=["Outcomes"])
+def get_outcomes(kpi_key: str):
+    conn = get_db()
+    rows = conn.execute(
+        "SELECT * FROM recommendation_outcomes WHERE kpi_key=? ORDER BY started_at DESC",
+        (kpi_key,)
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+@app.post("/api/outcomes/{kpi_key}", tags=["Outcomes"])
+async def record_outcome(kpi_key: str, request: Request):
+    body = await request.json()
+    conn = get_db()
+    cursor = conn.execute("""
+        INSERT INTO recommendation_outcomes
+        (kpi_key, action_text, before_value, before_status, outcome_notes)
+        VALUES (?,?,?,?,?)
+    """, (
+        kpi_key,
+        body.get("action_text", ""),
+        body.get("before_value"),
+        body.get("before_status"),
+        body.get("outcome_notes", "")
+    ))
+    conn.commit()
+    outcome_id = cursor.lastrowid
+    conn.close()
+    return {"id": outcome_id, "status": "recorded"}
+
+@app.put("/api/outcomes/{outcome_id}/resolve", tags=["Outcomes"])
+async def resolve_outcome(outcome_id: int, request: Request):
+    body = await request.json()
+    conn = get_db()
+    conn.execute("""
+        UPDATE recommendation_outcomes
+        SET resolved_at=datetime('now'), after_value=?, after_status=?,
+            was_effective=?, outcome_notes=?
+        WHERE id=?
+    """, (
+        body.get("after_value"),
+        body.get("after_status"),
+        1 if body.get("was_effective") else 0,
+        body.get("outcome_notes", ""),
+        outcome_id
+    ))
+    conn.commit()
+    conn.close()
+    return {"status": "resolved"}
+
+
+# ─── Audit Log ──────────────────────────────────────────────────────────────
+
+def _audit(conn, event_type: str, description: str, entity_type: str = None, entity_id: str = None, user: str = "system"):
+    conn.execute(
+        "INSERT INTO audit_log (event_type, entity_type, entity_id, description, user) VALUES (?,?,?,?,?)",
+        (event_type, entity_type, entity_id, description, user)
+    )
+
+@app.get("/api/audit-log", tags=["Audit"])
+def get_audit_log(limit: int = 100, event_type: str = None):
+    conn = get_db()
+    if event_type:
+        rows = conn.execute(
+            "SELECT * FROM audit_log WHERE event_type=? ORDER BY created_at DESC LIMIT ?",
+            (event_type, limit)
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT * FROM audit_log ORDER BY created_at DESC LIMIT ?",
+            (limit,)
+        ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+# ─── Company Settings ───────────────────────────────────────────────────────
+
+@app.get("/api/company-settings", tags=["Settings"])
+def get_company_settings():
+    conn = get_db()
+    rows = conn.execute("SELECT key, value FROM company_settings").fetchall()
+    conn.close()
+    return {r["key"]: r["value"] for r in rows}
+
+@app.put("/api/company-settings", tags=["Settings"])
+async def update_company_settings(request: Request):
+    body = await request.json()
+    conn = get_db()
+    for k, v in body.items():
+        conn.execute("INSERT OR REPLACE INTO company_settings (key, value) VALUES (?,?)", (k, str(v)))
+    conn.commit()
+    conn.close()
+    return {"status": "ok"}
+
+@app.post("/api/company-settings/logo", tags=["Settings"])
+async def upload_logo(file: UploadFile = File(...)):
+    import base64
+    contents = await file.read()
+    # Store as base64 data URL
+    mime = file.content_type or "image/png"
+    data_url = f"data:{mime};base64," + base64.b64encode(contents).decode()
+    conn = get_db()
+    conn.execute("INSERT OR REPLACE INTO company_settings (key, value) VALUES (?,?)", ("logo", data_url))
+    conn.commit()
+    conn.close()
+    return {"status": "ok", "logo": data_url}
 
 
 # ─── Serve React Frontend ───────────────────────────────────────────────────

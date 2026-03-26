@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import axios from 'axios'
 import {
   BarChart, Bar, ComposedChart, Line, XAxis, YAxis,
   Tooltip, ResponsiveContainer, Cell, ReferenceLine
@@ -599,6 +600,15 @@ function KpiBridgeCard({ kpiData, onAskAnika, onExpand, revenueBase }) {
 // ─── Main ProjectionBridge ───────────────────────────────────────────────────
 export default function ProjectionBridge({ bridgeData, projectionMonthly, onUploaded, onAskAnika, onNavigateToUpload }) {
   const [detailKpi, setDetailKpi] = useState(null)
+  const [versionInfo, setVersionInfo] = useState(null)
+
+  useEffect(() => {
+    axios.get('/api/projection/uploads').then(r => {
+      if (r.data && r.data.length > 0) {
+        setVersionInfo(r.data[0])
+      }
+    }).catch(() => {})
+  }, [bridgeData])
 
   const hasProjection = bridgeData?.has_projection
   const hasOverlap    = bridgeData?.has_overlap
@@ -631,7 +641,8 @@ export default function ProjectionBridge({ bridgeData, projectionMonthly, onUplo
           <GitBranch size={13} className="text-blue-500"/>
           {hasProjection
             ? <span className="text-xs text-slate-700 font-medium">
-                Projection loaded · <span className="text-slate-500 font-normal">active</span>
+                Comparing: {versionInfo ? <span className="text-slate-600 font-normal">{versionInfo.filename}</span> : 'active forecast'}
+                {versionInfo && <span className="text-slate-400 font-normal ml-1">· uploaded {new Date(versionInfo.uploaded_at + 'Z').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</span>}
               </span>
             : <span className="text-xs text-slate-500">No projection loaded</span>
           }
