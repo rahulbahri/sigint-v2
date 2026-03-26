@@ -134,6 +134,18 @@ def init_db():
         ("customer_decay_slope", 0.0,  "pct",   "lower"),
         ("customer_ltv",        80.0,  "usd",   "higher"),
         ("pricing_power_index",  3.0,  "pct",   "higher"),
+        ("cpl",                150.0,  "usd",   "lower"),
+        ("mql_sql_rate",        28.0,  "pct",   "higher"),
+        ("win_rate",            30.0,  "pct",   "higher"),
+        ("quota_attainment",    85.0,  "pct",   "higher"),
+        ("marketing_roi",        3.5,  "ratio", "higher"),
+        ("headcount_eff",        1.8,  "ratio", "higher"),
+        ("rev_per_employee",   180.0,  "usd",   "higher"),
+        ("ltv_cac",              4.0,  "ratio", "higher"),
+        ("expansion_rate",      22.0,  "pct",   "higher"),
+        ("health_score",        72.0,  "score", "higher"),
+        ("logo_retention",      90.0,  "pct",   "higher"),
+        ("payback_period",      14.0,  "months","lower"),
     ]
     for row in default_targets:
         conn.execute(
@@ -1969,6 +1981,18 @@ def seed_multiyear():
             "pipeline_conversion":   (2.5,  4.5,  0.3),
             "customer_ltv":          (32.0, 48.0, 1.5),
             "pricing_power_index":   (2.0,  5.0,  0.5),
+            "cpl":                   (320.0, 240.0, 18.0),
+            "mql_sql_rate":          (14.0,  20.0,  1.5),
+            "win_rate":              (16.0,  22.0,  1.5),
+            "quota_attainment":      (52.0,  64.0,  2.5),
+            "marketing_roi":         (1.2,   1.8,   0.15),
+            "headcount_eff":         (0.6,   0.9,   0.05),
+            "rev_per_employee":      (65.0,  95.0,  4.0),
+            "ltv_cac":               (1.2,   1.8,   0.12),
+            "expansion_rate":        (4.0,   9.0,   0.8),
+            "health_score":          (48.0,  58.0,  2.0),
+            "logo_retention":        (72.0,  80.0,  1.0),
+            "payback_period":        (38.0,  28.0,  1.5),
         },
         2022: {  # Series B — rapid scaling, margins climbing, team building
             "revenue_growth":        (16.0, 12.0,  1.2),
@@ -1992,6 +2016,18 @@ def seed_multiyear():
             "pipeline_conversion":   (5.0,  8.5,  0.3),
             "customer_ltv":          (52.0, 92.0, 2.0),
             "pricing_power_index":   (4.0,  8.5,  0.6),
+            "cpl":                   (220.0, 130.0, 12.0),
+            "mql_sql_rate":          (22.0,  31.0,  1.2),
+            "win_rate":              (24.0,  34.0,  1.2),
+            "quota_attainment":      (68.0,  88.0,  2.0),
+            "marketing_roi":         (2.2,   4.2,   0.2),
+            "headcount_eff":         (1.0,   1.6,   0.05),
+            "rev_per_employee":      (100.0, 165.0, 5.0),
+            "ltv_cac":               (2.2,   4.8,   0.2),
+            "expansion_rate":        (11.0,  26.0,  1.2),
+            "health_score":          (60.0,  76.0,  1.5),
+            "logo_retention":        (82.0,  92.0,  0.8),
+            "payback_period":        (26.0,  12.0,  1.2),
         },
         2023: {  # Plateau — growth stalls, team too large, efficiency slipping
             "revenue_growth":        (4.0,  1.2,   0.6),
@@ -2015,6 +2051,18 @@ def seed_multiyear():
             "pipeline_conversion":   (8.0,  5.5,  0.3),
             "customer_ltv":          (88.0, 82.0, 1.5),
             "pricing_power_index":   (3.5,  1.0,  0.5),
+            "cpl":                   (135.0, 168.0, 8.0),
+            "mql_sql_rate":          (30.0,  24.0,  1.0),
+            "win_rate":              (33.0,  26.0,  1.0),
+            "quota_attainment":      (86.0,  74.0,  1.8),
+            "marketing_roi":         (4.0,   2.8,   0.15),
+            "headcount_eff":         (1.6,   1.1,   0.04),
+            "rev_per_employee":      (162.0, 138.0, 4.0),
+            "ltv_cac":               (4.5,   3.2,   0.18),
+            "expansion_rate":        (24.0,  18.0,  1.0),
+            "health_score":          (74.0,  68.0,  1.2),
+            "logo_retention":        (91.0,  86.0,  0.6),
+            "payback_period":        (12.0,  17.0,  0.8),
         },
         2024: {  # Warning signals — churn uptick, margin squeeze, burn rising
             "revenue_growth":        (3.5, -1.5,   0.8),
@@ -2038,6 +2086,18 @@ def seed_multiyear():
             "pipeline_conversion":   (5.0,  2.8,  0.3),
             "customer_ltv":          (80.0, 52.0, 2.0),
             "pricing_power_index":   (0.5, -3.5,  0.5),
+            "cpl":                   (175.0, 268.0, 10.0),
+            "mql_sql_rate":          (22.0,  11.0,  0.8),
+            "win_rate":              (24.0,  14.0,  0.8),
+            "quota_attainment":      (72.0,  55.0,  1.5),
+            "marketing_roi":         (2.6,   1.4,   0.12),
+            "headcount_eff":         (1.1,   0.7,   0.04),
+            "rev_per_employee":      (135.0, 98.0,  3.5),
+            "ltv_cac":               (3.0,   1.8,   0.15),
+            "expansion_rate":        (17.0,  10.0,  0.8),
+            "health_score":          (66.0,  55.0,  1.5),
+            "logo_retention":        (85.0,  78.0,  0.7),
+            "payback_period":        (16.0,  24.0,  1.0),
         },
         2025: {  # Mixed recovery — volatile, fragile improvement
             "revenue_growth":        (1.8, 11.5,   1.0),
@@ -2061,6 +2121,18 @@ def seed_multiyear():
             "pipeline_conversion":   (3.0,  7.2,  0.35),
             "customer_ltv":          (55.0, 98.0, 2.5),
             "pricing_power_index":   (-2.0, 5.5,  0.5),
+            "cpl":                   (260.0, 175.0, 12.0),
+            "mql_sql_rate":          (13.0,  22.0,  1.0),
+            "win_rate":              (15.0,  24.0,  1.0),
+            "quota_attainment":      (58.0,  76.0,  2.0),
+            "marketing_roi":         (1.5,   2.8,   0.15),
+            "headcount_eff":         (0.75,  1.2,   0.05),
+            "rev_per_employee":      (102.0, 148.0, 4.0),
+            "ltv_cac":               (1.9,   3.2,   0.18),
+            "expansion_rate":        (11.0,  18.0,  1.0),
+            "health_score":          (56.0,  68.0,  1.5),
+            "logo_retention":        (79.0,  87.0,  0.7),
+            "payback_period":        (23.0,  16.0,  1.2),
         },
     }
 
@@ -2087,6 +2159,18 @@ def seed_multiyear():
         "pipeline_conversion":   (3.2,  3.8,  0.2),
         "customer_ltv":          (52.0, 55.0, 1.5),
         "pricing_power_index":   (-1.5, 1.5,  0.4),
+        "cpl":                   (182.0, 195.0, 8.0),
+        "mql_sql_rate":          (20.0,  21.5,  0.8),
+        "win_rate":              (22.0,  23.5,  0.8),
+        "quota_attainment":      (73.0,  75.0,  1.5),
+        "marketing_roi":         (2.6,   2.7,   0.12),
+        "headcount_eff":         (1.15,  1.18,  0.04),
+        "rev_per_employee":      (142.0, 148.0, 3.0),
+        "ltv_cac":               (3.0,   3.1,   0.12),
+        "expansion_rate":        (16.5,  17.0,  0.8),
+        "health_score":          (66.0,  67.5,  1.2),
+        "logo_retention":        (86.0,  87.0,  0.5),
+        "payback_period":        (17.5,  17.0,  0.8),
     }
 
     # 2021-2025 plan/budget projections (slightly more optimistic than actuals)
@@ -2115,6 +2199,18 @@ def seed_multiyear():
             "pipeline_conversion":   (3.0, 5.5, 0.25),
             "customer_ltv":          (35.0, 54.0, 1.2),
             "pricing_power_index":   (2.5, 6.0, 0.4),
+            "cpl":                   (290.0, 210.0, 15.0),
+            "mql_sql_rate":          (16.0,  23.0,  1.2),
+            "win_rate":              (18.0,  25.0,  1.2),
+            "quota_attainment":      (58.0,  72.0,  2.0),
+            "marketing_roi":         (1.4,   2.1,   0.12),
+            "headcount_eff":         (0.7,   1.05,  0.04),
+            "rev_per_employee":      (75.0,  110.0, 3.5),
+            "ltv_cac":               (1.4,   2.1,   0.10),
+            "expansion_rate":        (5.0,   10.5,  0.7),
+            "health_score":          (55.0,  66.0,  1.8),
+            "logo_retention":        (76.0,  85.0,  0.9),
+            "payback_period":        (34.0,  24.0,  1.3),
         },
         2022: {  # Series B plan — optimistic growth targets
             "revenue_growth":        (18.0, 15.0,  1.0),
@@ -2138,6 +2234,18 @@ def seed_multiyear():
             "pipeline_conversion":   (5.5, 9.5, 0.25),
             "customer_ltv":          (56.0, 98.0, 1.8),
             "pricing_power_index":   (5.0, 10.0, 0.5),
+            "cpl":                   (198.0, 116.0, 10.0),
+            "mql_sql_rate":          (25.0,  35.0,  1.0),
+            "win_rate":              (27.0,  38.0,  1.0),
+            "quota_attainment":      (76.0,  98.0,  1.8),
+            "marketing_roi":         (2.5,   4.8,   0.18),
+            "headcount_eff":         (1.15,  1.85,  0.04),
+            "rev_per_employee":      (115.0, 190.0, 4.5),
+            "ltv_cac":               (2.5,   5.5,   0.18),
+            "expansion_rate":        (13.0,  30.0,  1.0),
+            "health_score":          (68.0,  85.0,  1.3),
+            "logo_retention":        (88.0,  96.0,  0.7),
+            "payback_period":        (23.0,  10.0,  1.0),
         },
         2023: {  # Plateau plan — expected continued growth (too optimistic)
             "revenue_growth":        (8.0,  6.0,   0.5),
@@ -2161,6 +2269,18 @@ def seed_multiyear():
             "pipeline_conversion":   (9.0, 7.0, 0.25),
             "customer_ltv":          (92.0, 88.0, 1.2),
             "pricing_power_index":   (5.0, 3.0, 0.4),
+            "cpl":                   (120.0, 150.0, 7.0),
+            "mql_sql_rate":          (34.0,  28.0,  0.9),
+            "win_rate":              (37.0,  30.0,  0.9),
+            "quota_attainment":      (95.0,  83.0,  1.5),
+            "marketing_roi":         (4.6,   3.2,   0.13),
+            "headcount_eff":         (1.85,  1.28,  0.035),
+            "rev_per_employee":      (185.0, 160.0, 3.5),
+            "ltv_cac":               (5.2,   3.7,   0.16),
+            "expansion_rate":        (27.0,  21.0,  0.9),
+            "health_score":          (83.0,  77.0,  1.0),
+            "logo_retention":        (95.0,  91.0,  0.5),
+            "payback_period":        (10.5,  15.0,  0.7),
         },
         2024: {  # Warning year plan — expected mild improvement (missed badly)
             "revenue_growth":        (6.0,  3.0,   0.6),
@@ -2184,6 +2304,18 @@ def seed_multiyear():
             "pipeline_conversion":   (7.0, 5.0, 0.25),
             "customer_ltv":          (84.0, 62.0, 1.8),
             "pricing_power_index":   (2.5, 0.0, 0.4),
+            "cpl":                   (155.0, 238.0, 9.0),
+            "mql_sql_rate":          (26.0,  13.0,  0.7),
+            "win_rate":              (28.0,  16.0,  0.7),
+            "quota_attainment":      (83.0,  63.0,  1.3),
+            "marketing_roi":         (3.0,   1.6,   0.10),
+            "headcount_eff":         (1.26,  0.82,  0.035),
+            "rev_per_employee":      (155.0, 113.0, 3.0),
+            "ltv_cac":               (3.5,   2.1,   0.13),
+            "expansion_rate":        (20.0,  12.0,  0.7),
+            "health_score":          (76.0,  64.0,  1.3),
+            "logo_retention":        (90.0,  84.0,  0.6),
+            "payback_period":        (14.0,  21.0,  0.9),
         },
         2025: {  # Recovery plan — ambitious targets set after tough 2024
             "revenue_growth":        (5.0, 15.0,   0.8),
@@ -2207,6 +2339,18 @@ def seed_multiyear():
             "pipeline_conversion":   (5.0, 10.0, 0.3),
             "customer_ltv":          (62.0, 108.0, 2.2),
             "pricing_power_index":   (1.0, 7.0, 0.4),
+            "cpl":                   (232.0, 155.0, 10.0),
+            "mql_sql_rate":          (15.0,  25.0,  0.9),
+            "win_rate":              (17.0,  27.0,  0.9),
+            "quota_attainment":      (65.0,  85.0,  1.8),
+            "marketing_roi":         (1.75,  3.2,   0.13),
+            "headcount_eff":         (0.88,  1.4,   0.04),
+            "rev_per_employee":      (118.0, 170.0, 3.5),
+            "ltv_cac":               (2.2,   3.7,   0.16),
+            "expansion_rate":        (13.0,  21.0,  0.9),
+            "health_score":          (64.0,  78.0,  1.3),
+            "logo_retention":        (85.0,  93.0,  0.6),
+            "payback_period":        (26.0,  14.0,  1.0),
         },
     }
 
@@ -4226,27 +4370,39 @@ def _compute_fingerprint_data():
                 continue
             kpi_monthly.setdefault(kpi_key, {})[mo_key] = val
 
+    def _status(val, target, direction):
+        if val is None or target is None:
+            return "grey"
+        pct = val / target if target else 0
+        if direction == "higher":
+            return "green" if pct >= 0.98 else ("yellow" if pct >= 0.90 else "red")
+        else:
+            return "green" if pct <= 1.02 else ("yellow" if pct <= 1.10 else "red")
+
+    # Build lookup for all known KPI metadata (KPI_DEFS + EXTENDED_ONTOLOGY_METRICS)
+    all_kpi_meta = {kd["key"]: kd for kd in KPI_DEFS}
+    for em in EXTENDED_ONTOLOGY_METRICS:
+        if em["key"] not in all_kpi_meta:
+            all_kpi_meta[em["key"]] = em
+
+    # All KPIs that have both a target AND monthly data
+    keys_to_include = set(KPI_DEFS[i]["key"] for i in range(len(KPI_DEFS)))
+    for key in kpi_monthly:
+        if key in targets:
+            keys_to_include.add(key)
+
     fingerprint_out = []
-    for kdef in KPI_DEFS:
-        key = kdef["key"]
+    for key in keys_to_include:
+        kdef = all_kpi_meta.get(key, {"key": key, "name": key.replace("_", " ").title(), "unit": "ratio", "direction": "higher", "domain": "other"})
         vals = kpi_monthly.get(key, {})
         t = targets.get(key, {})
         tval = t.get("target")
-        dirn = t.get("direction", "higher")
-        unit = t.get("unit", kdef["unit"])
+        dirn = t.get("direction", kdef.get("direction", "higher"))
+        unit = t.get("unit", kdef.get("unit", "ratio"))
 
         monthly_list = [{"period": k, "value": v} for k, v in sorted(vals.items())]
         values = [m["value"] for m in monthly_list]
         avg = round(np.mean(values), 2) if values else None
-
-        def _status(val, target, direction):
-            if val is None or target is None:
-                return "grey"
-            pct = val / target if target else 0
-            if direction == "higher":
-                return "green" if pct >= 0.98 else ("yellow" if pct >= 0.90 else "red")
-            else:
-                return "green" if pct <= 1.02 else ("yellow" if pct <= 1.10 else "red")
 
         trend = None
         if len(values) >= 2:
@@ -4254,7 +4410,7 @@ def _compute_fingerprint_data():
 
         fingerprint_out.append({
             "key": key,
-            "name": kdef["name"],
+            "name": kdef.get("name", key.replace("_", " ").title()),
             "unit": unit,
             "target": tval,
             "direction": dirn,
@@ -4263,6 +4419,10 @@ def _compute_fingerprint_data():
             "fy_status": _status(avg, tval, dirn),
             "monthly": monthly_list,
         })
+
+    # Sort: KPI_DEFS order first, then extended KPIs alphabetically
+    kpi_def_order = {kd["key"]: i for i, kd in enumerate(KPI_DEFS)}
+    fingerprint_out.sort(key=lambda x: (kpi_def_order.get(x["key"], 9999), x["key"]))
     return fingerprint_out
 
 @app.get("/api/export/board-deck.pptx", tags=["Board Deck"])
@@ -4954,6 +5114,87 @@ def export_weekly_briefing(stage: str = "series_b"):
 
 # ─── Smart Actions Endpoint ─────────────────────────────────────────────────
 
+def _build_causal_chain(kpi_key: str, fp_lookup: dict, max_depth: int = 3) -> list:
+    """
+    Build a multi-hop causal chain starting from kpi_key.
+    Traces upstream red/yellow KPIs up to max_depth hops.
+    Returns a list of chain nodes with hop, kpi metadata, and label.
+    """
+    status_order = {"red": 0, "yellow": 1, "green": 2, "grey": 3}
+
+    def _gap_pct(kpi_data):
+        val = kpi_data.get("avg")
+        target = kpi_data.get("target")
+        direction = kpi_data.get("direction", "higher")
+        if val is None or target is None or target == 0:
+            return None
+        if direction == "higher":
+            return round((val - target) / abs(target) * 100, 1)
+        else:
+            return round((target - val) / abs(target) * 100, 1)
+
+    def _node(hop, key, kpi_data, label):
+        val = kpi_data.get("avg")
+        target = kpi_data.get("target")
+        status = kpi_data.get("fy_status", "grey")
+        return {
+            "hop": hop,
+            "kpi_key": key,
+            "kpi_name": kpi_data.get("name", key.replace("_", " ").title()),
+            "value": val,
+            "target": target,
+            "status": status,
+            "gap_pct": _gap_pct(kpi_data),
+            "label": label,
+        }
+
+    hop_labels = {0: "Surface symptom", 1: "Primary driver", 2: "Contributing cause", 3: "Root cause"}
+
+    chain = []
+    visited = set()
+
+    # Hop 0: the requested KPI itself
+    root_data = fp_lookup.get(kpi_key)
+    if root_data is None:
+        return chain
+    chain.append(_node(0, kpi_key, root_data, hop_labels[0]))
+    visited.add(kpi_key)
+
+    # BFS-style expansion up to max_depth
+    current_level_keys = [kpi_key]
+    for hop in range(1, max_depth + 1):
+        next_level_keys = []
+        hop_nodes = []
+        for parent_key in current_level_keys:
+            # Find upstream KPIs: those whose downstream_impact includes parent_key
+            for source_key, rules in ALL_CAUSATION_RULES.items():
+                if parent_key in rules.get("downstream_impact", []):
+                    if source_key in visited:
+                        continue
+                    source_data = fp_lookup.get(source_key)
+                    if source_data is None:
+                        continue
+                    status = source_data.get("fy_status", "grey")
+                    # Only include red/yellow in the chain
+                    if status in ("red", "yellow"):
+                        label = hop_labels.get(hop, f"Hop {hop} cause")
+                        hop_nodes.append(_node(hop, source_key, source_data, label))
+                        visited.add(source_key)
+                        next_level_keys.append(source_key)
+
+        # Sort each hop level: red first, then by gap magnitude (worst first)
+        hop_nodes.sort(key=lambda x: (
+            status_order.get(x["status"], 4),
+            -(abs(x["gap_pct"]) if x["gap_pct"] is not None else 0)
+        ))
+        chain.extend(hop_nodes)
+        current_level_keys = next_level_keys
+        if not current_level_keys:
+            break
+
+    return chain
+
+
 def _generate_smart_actions(kpi_key: str, fp_data: list, benchmarks_for_stage: dict, stage: str):
     """
     Generate data-backed, number-specific corrective action recommendations
@@ -5323,6 +5564,62 @@ def _generate_smart_actions(kpi_key: str, fp_data: list, benchmarks_for_stage: d
             f"At least 3 months are needed for reliable trend analysis."
         )
 
+    # ── Build multi-hop causal chain ──
+    causal_chain = _build_causal_chain(kpi_key, fp_lookup, max_depth=3)
+
+    # ── Analysis depth metadata ──
+    chain_kpi_keys = list({node["kpi_key"] for node in causal_chain})
+    max_hop_depth = max((node["hop"] for node in causal_chain), default=0)
+
+    # Total monthly data points across all KPIs in the chain
+    total_data_points = 0
+    for ck in chain_kpi_keys:
+        ck_fp = fp_lookup.get(ck)
+        if ck_fp and ck_fp.get("monthly"):
+            total_data_points += len([m for m in ck_fp["monthly"] if m.get("value") is not None])
+
+    # Build chain summary: hop-0 → hop-1 → ... names
+    chain_by_hop: dict = {}
+    for node in causal_chain:
+        chain_by_hop.setdefault(node["hop"], []).append(node["kpi_name"])
+    chain_summary_parts = []
+    for h in sorted(chain_by_hop.keys()):
+        chain_summary_parts.append(" / ".join(chain_by_hop[h]))
+    chain_summary = " → ".join(chain_summary_parts) if chain_summary_parts else kpi_name
+
+    analysis_depth = {
+        "total_data_points": total_data_points,
+        "kpis_in_chain": len(chain_kpi_keys),
+        "max_hop_depth": max_hop_depth,
+        "chain_summary": f"{max_hop_depth}-hop causal trace: {chain_summary}",
+    }
+
+    # ── Direction protection ──
+    wrong_action_map = {
+        "burn_multiple": "Increase S&M headcount or pressure sales team",
+        "arr_growth": "Increase S&M headcount or pressure sales team",
+        "revenue_growth": "Increase S&M headcount or pressure sales team",
+        "sales_efficiency": "Hire more sales reps or replace underperformers",
+        "win_rate": "Hire more sales reps or replace underperformers",
+        "churn_rate": "Assign more CSMs or offer discounts to retain accounts",
+        "nrr": "Assign more CSMs or offer discounts to retain accounts",
+        "gross_margin": "Reduce headcount or cut vendor contracts",
+        "contribution_margin": "Reduce headcount or cut vendor contracts",
+        "pipeline_conversion": "Increase demo volume or revise sales process",
+        "cpl": "Increase total marketing budget",
+        "marketing_roi": "Increase total marketing budget",
+    }
+    likely_wrong_action = wrong_action_map.get(kpi_key, "Address the surface symptom directly without tracing root cause")
+
+    root_cause_distance = max_hop_depth
+    is_deep_cause = root_cause_distance >= 2
+
+    direction_protected = {
+        "likely_wrong_action": likely_wrong_action,
+        "root_cause_distance": root_cause_distance,
+        "is_deep_cause": is_deep_cause,
+    }
+
     return {
         "kpi_key": kpi_key,
         "kpi_name": kpi_name,
@@ -5337,6 +5634,9 @@ def _generate_smart_actions(kpi_key: str, fp_data: list, benchmarks_for_stage: d
         "downstream_impact": downstream_impact,
         "actions": actions,
         "data_gaps": data_gaps,
+        "causal_chain": causal_chain,
+        "analysis_depth": analysis_depth,
+        "direction_protected": direction_protected,
     }
 
 

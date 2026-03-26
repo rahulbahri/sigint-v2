@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useCallback, Component } from 'react'
+import React, { useState, useEffect, useMemo, useCallback, Component } from 'react'
 import axios from 'axios'
 import {
   AlertCircle, AlertTriangle, CheckCircle2, User, Calendar,
@@ -630,6 +630,61 @@ function ExpandedDetail({ kpi, benchmarkCtx, recentTrend, smartActions, fingerpr
           </div>
         </div>
 
+        {/* ── Causal Chain Visualization ─────────────────────────────────── */}
+        {sa?.causal_chain?.length > 1 && (
+          <div className="px-5 pt-4 pb-3 border-b border-slate-100">
+            <h4 className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider mb-3">
+              Causal Chain — {sa.analysis_depth?.max_hop_depth || 0}-Hop Trace
+            </h4>
+            <div className="flex items-center gap-2 overflow-x-auto pb-1">
+              {sa.causal_chain.map((node, i) => {
+                const isRoot = i === sa.causal_chain.length - 1
+                const isSurface = i === 0
+                const color = node.status === 'red' ? 'border-red-400 bg-red-50' : node.status === 'yellow' ? 'border-amber-400 bg-amber-50' : 'border-emerald-400 bg-emerald-50'
+                const textColor = node.status === 'red' ? 'text-red-700' : node.status === 'yellow' ? 'text-amber-700' : 'text-emerald-700'
+                return (
+                  <React.Fragment key={node.kpi_key}>
+                    {i > 0 && <span className="text-slate-300 font-bold text-lg shrink-0">→</span>}
+                    <div className={`shrink-0 rounded-lg border-2 ${color} px-3 py-2 min-w-[120px] max-w-[160px]`}>
+                      {isRoot && (
+                        <span className="inline-block text-[8px] font-bold uppercase text-white bg-red-500 rounded px-1.5 py-0.5 mb-1">Root Cause</span>
+                      )}
+                      {isSurface && (
+                        <span className="inline-block text-[8px] font-bold uppercase text-slate-500 bg-slate-100 rounded px-1.5 py-0.5 mb-1">Surface</span>
+                      )}
+                      {!isRoot && !isSurface && (
+                        <span className="inline-block text-[8px] font-bold uppercase text-slate-400 bg-slate-50 rounded px-1.5 py-0.5 mb-1">Hop {node.hop}</span>
+                      )}
+                      <div className={`text-[11px] font-semibold ${textColor} leading-tight`}>{node.kpi_name}</div>
+                      <div className="text-[10px] text-slate-500 mt-0.5">
+                        {node.value != null ? node.value : '—'} {node.gap_pct != null && <span className={textColor}>({node.gap_pct > 0 ? '+' : ''}{node.gap_pct}%)</span>}
+                      </div>
+                    </div>
+                  </React.Fragment>
+                )
+              })}
+            </div>
+            {sa.analysis_depth?.chain_summary && (
+              <p className="text-[10px] text-slate-400 mt-2 italic">{sa.analysis_depth.chain_summary}</p>
+            )}
+          </div>
+        )}
+
+        {/* ── Direction Protected Callout ─────────────────────────────────── */}
+        {sa?.direction_protected?.is_deep_cause && (
+          <div className="mx-5 my-3 px-4 py-3 bg-amber-50 border border-amber-200 rounded-xl">
+            <div className="flex items-start gap-3">
+              <span className="text-amber-500 text-lg shrink-0">⚠</span>
+              <div>
+                <p className="text-[11px] font-semibold text-amber-800">Direction Protected</p>
+                <p className="text-[10px] text-amber-700 mt-0.5 leading-relaxed">
+                  Without this {sa.direction_protected.root_cause_distance}-hop trace, the likely intervention would have been: <em>"{sa.direction_protected.likely_wrong_action}"</em> — targeting the symptom, not the cause. The actual root cause is {sa.direction_protected.root_cause_distance} levels upstream. Acting on the symptom wastes resources and delays recovery.
+                </p>
+              </div>
+            </div>
+          </div>
+        )}
+
         <div className="grid grid-cols-2 gap-0 divide-x divide-slate-100">
           {/* ── Left Column: Causes + Downstream ─────────────────────────── */}
           <div className="p-4 space-y-4">
@@ -821,6 +876,35 @@ function ExpandedDetail({ kpi, benchmarkCtx, recentTrend, smartActions, fingerpr
             </div>
           </div>
         </div>
+
+        {/* ── Analysis Depth Card ─────────────────────────────────────────── */}
+        {sa?.analysis_depth && (
+          <div className="border-t border-slate-100 px-5 py-3 bg-slate-50/40">
+            <div className="flex items-center justify-between flex-wrap gap-4">
+              <div className="flex items-center gap-1.5">
+                <span className="text-[10px] font-semibold text-slate-500 uppercase tracking-wider">Analysis Depth</span>
+              </div>
+              <div className="flex items-center gap-6">
+                <div className="text-center">
+                  <div className="text-[18px] font-bold text-slate-700">{sa.analysis_depth.total_data_points}</div>
+                  <div className="text-[9px] text-slate-400 uppercase tracking-wide">Data Points</div>
+                </div>
+                <div className="text-center">
+                  <div className="text-[18px] font-bold text-slate-700">{sa.analysis_depth.kpis_in_chain}</div>
+                  <div className="text-[9px] text-slate-400 uppercase tracking-wide">KPIs Traced</div>
+                </div>
+                <div className="text-center">
+                  <div className="text-[18px] font-bold text-slate-700">{sa.analysis_depth.max_hop_depth}</div>
+                  <div className="text-[9px] text-slate-400 uppercase tracking-wide">Causal Hops</div>
+                </div>
+              </div>
+              <p className="text-[10px] text-slate-400 italic max-w-xs text-right">
+                A manual FP&A root cause analysis for this metric typically requires 2–4 hours and 3–5 hypothesis iterations. This trace ran across all causal paths simultaneously.
+              </p>
+            </div>
+          </div>
+        )}
+
       </div>
     </div>
   )
