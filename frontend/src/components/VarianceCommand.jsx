@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useCallback } from 'react'
+import { useState, useEffect, useMemo, useCallback, Component } from 'react'
 import axios from 'axios'
 import {
   AlertCircle, AlertTriangle, CheckCircle2, User, Calendar,
@@ -447,7 +447,7 @@ function KpiRow({ kpi, idx, accountability: acct, expanded, saving, benchmarkCtx
 
       {/* Expanded detail panel */}
       {expanded && (
-        <ExpandedDetail
+        <SafeExpandedDetail
           kpi={kpi}
           benchmarkCtx={benchmarkCtx}
           recentTrend={recentTrend}
@@ -503,7 +503,13 @@ function StatusTimeline({ history }) {
 
 // ── Priority Badge ───────────────────────────────────────────────────────────
 function PriorityBadge({ priority }) {
-  const p = (priority || 'medium').toLowerCase()
+  // priority may be a number (from API: 1,2,3) or string ("high","medium","low")
+  let p = 'medium'
+  if (typeof priority === 'number') {
+    p = priority <= 1 ? 'high' : priority <= 2 ? 'medium' : 'low'
+  } else if (typeof priority === 'string') {
+    p = priority.toLowerCase()
+  }
   const styles = {
     high:   'bg-red-100 text-red-700 border-red-200',
     medium: 'bg-amber-100 text-amber-700 border-amber-200',
@@ -514,6 +520,27 @@ function PriorityBadge({ priority }) {
       {p}
     </span>
   )
+}
+
+// ── Safe wrapper to prevent crashes from blanking the whole page ──────────────
+class ErrorCatcher extends Component {
+  constructor(props) { super(props); this.state = { hasError: false, error: null } }
+  static getDerivedStateFromError(error) { return { hasError: true, error } }
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="px-6 py-4 border-b border-slate-100 bg-red-50/40">
+          <p className="text-[12px] text-red-600 font-medium">Failed to load analysis panel</p>
+          <p className="text-[10px] text-red-400 mt-1">{this.state.error?.message || 'Unknown error'}</p>
+        </div>
+      )
+    }
+    return this.props.children
+  }
+}
+
+function SafeExpandedDetail(props) {
+  return <ErrorCatcher><ExpandedDetail {...props} /></ErrorCatcher>
 }
 
 // ── Expanded Detail Panel ────────────────────────────────────────────────────
