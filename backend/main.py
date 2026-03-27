@@ -173,7 +173,11 @@ class _PGConn:
             """, [tbl])
             self._last_cur = _PGCur(cur)
             return self._last_cur
-        pg_sql = _sql_translate(sql)
+        # DDL statements need full schema translation (AUTOINCREMENT → SERIAL etc.)
+        if re.match(r"\s*(CREATE|ALTER)\s+TABLE", sql, re.IGNORECASE):
+            pg_sql = _schema_translate(sql)
+        else:
+            pg_sql = _sql_translate(sql)
         cur = self._r.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
         try:
             cur.execute(pg_sql, params if params is not None else None)
