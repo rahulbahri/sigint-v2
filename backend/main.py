@@ -211,7 +211,7 @@ class _PGConn:
 
 def get_db():
     if _USE_PG:
-        conn = psycopg2.connect(DATABASE_URL)
+        conn = psycopg2.connect(DATABASE_URL, connect_timeout=10)
         return _PGConn(conn)
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
@@ -405,25 +405,32 @@ def init_db():
     conn.commit()
     conn.close()
 
-init_db()
+try:
+    init_db()
+except Exception as _init_err:
+    import traceback as _tb
+    print(f"[WARN] init_db failed ({_init_err}), server starting anyway")
+    _tb.print_exc()
 
 @app.on_event("startup")
 async def auto_seed():
     """Auto-seed full 27-KPI multi-year demo data on cold start if the database is empty."""
-    conn = get_db()
-    count     = conn.execute("SELECT COUNT(*) FROM monthly_data").fetchone()[0]
-    proj_count = conn.execute("SELECT COUNT(*) FROM projection_monthly_data").fetchone()[0]
-    conn.close()
-    if count == 0 or proj_count == 0:
-        # seed_multiyear seeds both actuals (27 KPIs, 2021–2026) and projections in one call
-        seed_multiyear()
+    try:
+        conn = get_db()
+        count      = conn.execute("SELECT COUNT(*) FROM monthly_data").fetchone()[0]
+        proj_count = conn.execute("SELECT COUNT(*) FROM projection_monthly_data").fetchone()[0]
+        conn.close()
+        if count == 0 or proj_count == 0:
+            seed_multiyear()
+    except Exception as _seed_err:
+        print(f"[WARN] auto_seed failed ({_seed_err}), continuing without seed data")
     # Initialize ontology tables once at startup instead of on every GET request (M2)
     try:
         conn_ont = get_db()
         _init_ontology_tables(conn_ont)
         conn_ont.close()
     except Exception:
-        pass  # Tables may not be defined yet on first cold start; discovery will create them
+        pass
 
 # ─── KPI Definitions ────────────────────────────────────────────────────────
 
