@@ -4,13 +4,49 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, StreamingResponse
 import pandas as pd
 import numpy as np
-import io, os, json, sqlite3
+import io, os, json, sqlite3, re, secrets, base64
 import anthropic
-from datetime import datetime
+import httpx
+from datetime import datetime, timedelta
 from typing import Optional
 from pathlib import Path
 from collections import defaultdict
 import time as _time
+from urllib.parse import urlencode
+
+# ── Environment Configuration ───────────────────────────────────────────────
+DATABASE_URL       = os.environ.get("DATABASE_URL", "")
+RESEND_API_KEY     = os.environ.get("RESEND_API_KEY", "")
+RESEND_FROM        = os.environ.get("RESEND_FROM_EMAIL", "rahul@axiomsync.ai")
+APP_URL            = os.environ.get("APP_URL", "https://sigint-v2.onrender.com")
+JWT_SECRET         = os.environ.get("JWT_SECRET", secrets.token_hex(32))
+STRIPE_SECRET      = os.environ.get("STRIPE_SECRET_KEY", "")
+STRIPE_PUB         = os.environ.get("STRIPE_PUBLISHABLE_KEY", "")
+STRIPE_WEBHOOK_SEC = os.environ.get("STRIPE_WEBHOOK_SECRET", "")
+QB_CLIENT_ID       = os.environ.get("INTUIT_CLIENT_ID", "")
+QB_CLIENT_SECRET   = os.environ.get("INTUIT_CLIENT_SECRET", "")
+QB_REDIRECT_URI    = os.environ.get("QB_REDIRECT_URI", "")
+ALLOWED_EMAILS     = [e.strip().lower() for e in os.environ.get("ALLOWED_EMAILS", "rahul@axiomsync.ai").split(",")]
+_USE_PG            = bool(DATABASE_URL)
+
+# ── Conditional imports ──────────────────────────────────────────────────────
+if _USE_PG:
+    import psycopg2, psycopg2.extras
+
+if STRIPE_SECRET:
+    try:
+        import stripe as _stripe
+        _stripe.api_key = STRIPE_SECRET
+    except ImportError:
+        _stripe = None
+else:
+    _stripe = None
+
+try:
+    import jwt as _jwt
+    _JWT_AVAILABLE = True
+except ImportError:
+    _JWT_AVAILABLE = False
 
 app = FastAPI(
     title="Axiom KPI Dashboard API",
@@ -60,19 +96,133 @@ DB_PATH = Path(__file__).parent / "uploads" / "axiom.db"
 UPLOADS_DIR = Path(__file__).parent / "uploads"
 UPLOADS_DIR.mkdir(exist_ok=True)
 
-# ─── Database ───────────────────────────────────────────────────────────────
+# ─── Database abstraction (SQLite local / PostgreSQL production) ─────────────
+
+def _sql_translate(sql: str) -> str:
+    """Translate SQLite SQL to PostgreSQL SQL."""
+    sql = sql.replace("?", "%s")
+    if re.search(r"INSERT\s+OR\s+IGNORE", sql, re.IGNORECASE):
+        sql = re.sub(r"INSERT\s+OR\s+IGNORE\s+INTO", "INSERT INTO", sql, flags=re.IGNORECASE)
+        sql = sql.rstrip().rstrip(";") + " ON CONFLICT DO NOTHING"
+    sql = re.sub(r"datetime\('now'\)", "NOW()", sql, flags=re.IGNORECASE)
+    sql = re.sub(r"date\('now'\)", "CURRENT_DATE", sql, flags=re.IGNORECASE)
+    return sql
+
+def _schema_translate(sql: str) -> str:
+    """Translate SQLite CREATE TABLE DDL to PostgreSQL DDL."""
+    sql = _sql_translate(sql)
+    sql = sql.replace("INTEGER PRIMARY KEY AUTOINCREMENT", "SERIAL PRIMARY KEY")
+    sql = re.sub(r"\bAUTOINCREMENT\b", "", sql)
+    sql = re.sub(r"DEFAULT CURRENT_TIMESTAMP", "DEFAULT NOW()", sql, flags=re.IGNORECASE)
+    return sql
+
+class _PGFakeRow(dict):
+    """Dict that also supports integer-index access (like sqlite3.Row)."""
+    def __getitem__(self, key):
+        if isinstance(key, int):
+            return list(self.values())[key]
+        return super().__getitem__(key)
+
+class _PGCur:
+    """Wraps psycopg2 cursor to behave like sqlite3 cursor."""
+    def __init__(self, cur):
+        self._c = cur
+    def fetchall(self):
+        try:
+            rows = self._c.fetchall() or []
+            return [_PGFakeRow(r) if isinstance(r, dict) else r for r in rows]
+        except Exception:
+            return []
+    def fetchone(self):
+        try:
+            r = self._c.fetchone()
+            return _PGFakeRow(r) if r else None
+        except Exception:
+            return None
+    @property
+    def lastrowid(self):
+        try:
+            self._c.execute("SELECT lastval()")
+            row = self._c.fetchone()
+            return row[0] if row else None
+        except Exception:
+            return None
+
+class _PGConn:
+    """Wraps psycopg2 connection to behave like sqlite3 connection."""
+    def __init__(self, raw):
+        self._r = raw
+        self._last_cur: Optional[_PGCur] = None
+
+    def execute(self, sql: str, params=None):
+        sql = sql.strip()
+        if re.match(r"PRAGMA\s+journal_mode", sql, re.IGNORECASE):
+            return _PGCur(self._r.cursor())
+        m = re.match(r"PRAGMA\s+table_info\((\w+)\)", sql, re.IGNORECASE)
+        if m:
+            tbl = m.group(1)
+            cur = self._r.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+            cur.execute("""
+                SELECT (ordinal_position-1) AS cid, column_name AS name,
+                       data_type AS type,
+                       CASE WHEN is_nullable='NO' THEN 1 ELSE 0 END AS notnull,
+                       column_default AS dflt_value, 0 AS pk
+                FROM information_schema.columns
+                WHERE table_name=%s ORDER BY ordinal_position
+            """, [tbl])
+            self._last_cur = _PGCur(cur)
+            return self._last_cur
+        pg_sql = _sql_translate(sql)
+        cur = self._r.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        try:
+            cur.execute(pg_sql, params if params is not None else None)
+            self._last_cur = _PGCur(cur)
+            return self._last_cur
+        except Exception:
+            self._r.rollback()
+            raise
+
+    def executescript(self, script: str):
+        script = _schema_translate(script)
+        cur = self._r.cursor()
+        for stmt in [s.strip() for s in script.split(";") if s.strip()]:
+            if re.match(r"PRAGMA", stmt, re.IGNORECASE):
+                continue
+            try:
+                cur.execute(stmt)
+                self._r.commit()
+            except Exception as e:
+                self._r.rollback()
+                err = str(e).lower()
+                if "already exists" not in err and "duplicate" not in err:
+                    pass  # silently skip schema conflicts on re-init
+
+    def commit(self):
+        self._r.commit()
+
+    def close(self):
+        self._r.close()
+
+    @property
+    def lastrowid(self):
+        if self._last_cur:
+            return self._last_cur.lastrowid
+        return None
 
 def get_db():
+    if _USE_PG:
+        conn = psycopg2.connect(DATABASE_URL)
+        return _PGConn(conn)
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     return conn
 
 def init_db():
     conn = get_db()
-    # WAL mode allows concurrent reads alongside the single write thread,
-    # preventing "database is locked" failures under background-thread writes.
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.commit()
+    if not _USE_PG:
+        # WAL mode for SQLite only
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.commit()
     conn.executescript("""
         CREATE TABLE IF NOT EXISTS uploads (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -171,14 +321,20 @@ def init_db():
     """)
     conn.commit()
     # Migration: add version_label to projection tables if missing
-    cols = [r[1] for r in conn.execute("PRAGMA table_info(projection_uploads)").fetchall()]
-    if "version_label" not in cols:
-        conn.execute("ALTER TABLE projection_uploads ADD COLUMN version_label TEXT DEFAULT 'v1'")
+    if _USE_PG:
+        # PostgreSQL supports ADD COLUMN IF NOT EXISTS
+        conn.execute("ALTER TABLE projection_uploads ADD COLUMN IF NOT EXISTS version_label TEXT DEFAULT 'v1'")
+        conn.execute("ALTER TABLE projection_monthly_data ADD COLUMN IF NOT EXISTS version_label TEXT DEFAULT 'v1'")
         conn.commit()
-    cols2 = [r[1] for r in conn.execute("PRAGMA table_info(projection_monthly_data)").fetchall()]
-    if "version_label" not in cols2:
-        conn.execute("ALTER TABLE projection_monthly_data ADD COLUMN version_label TEXT DEFAULT 'v1'")
-        conn.commit()
+    else:
+        cols = [r[1] for r in conn.execute("PRAGMA table_info(projection_uploads)").fetchall()]
+        if "version_label" not in cols:
+            conn.execute("ALTER TABLE projection_uploads ADD COLUMN version_label TEXT DEFAULT 'v1'")
+            conn.commit()
+        cols2 = [r[1] for r in conn.execute("PRAGMA table_info(projection_monthly_data)").fetchall()]
+        if "version_label" not in cols2:
+            conn.execute("ALTER TABLE projection_monthly_data ADD COLUMN version_label TEXT DEFAULT 'v1'")
+            conn.commit()
     # Seed default targets
     default_targets = [
         ("revenue_growth",      6.0,   "pct",    "higher"),
@@ -225,6 +381,27 @@ def init_db():
         conn.execute(
             "INSERT OR IGNORE INTO kpi_targets VALUES (?,?,?,?)", row
         )
+    conn.commit()
+    # Auth tables
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS magic_tokens (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            email       TEXT NOT NULL,
+            token       TEXT NOT NULL UNIQUE,
+            created_at  TEXT DEFAULT (datetime('now')),
+            expires_at  TEXT NOT NULL,
+            used        INTEGER DEFAULT 0
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS users (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            email       TEXT NOT NULL UNIQUE,
+            role        TEXT DEFAULT 'admin',
+            created_at  TEXT DEFAULT (datetime('now')),
+            last_login  TEXT
+        )
+    """)
     conn.commit()
     conn.close()
 
@@ -5956,6 +6133,400 @@ async def upload_logo(file: UploadFile = File(...)):
     conn.commit()
     conn.close()
     return {"status": "ok", "logo": data_url}
+
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# AUTH  ─ Magic Link
+# ═══════════════════════════════════════════════════════════════════════════
+
+from pydantic import BaseModel as _BM2
+
+class MagicLinkRequest(_BM2):
+    email: str
+
+class VerifyTokenRequest(_BM2):
+    token: str
+
+async def _send_magic_link_email(to_email: str, magic_url: str) -> bool:
+    if not RESEND_API_KEY:
+        return False
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.post(
+                "https://api.resend.com/emails",
+                headers={"Authorization": f"Bearer {RESEND_API_KEY}", "Content-Type": "application/json"},
+                json={
+                    "from": f"Axiom <{RESEND_FROM}>",
+                    "to": [to_email],
+                    "subject": "Your Axiom sign-in link",
+                    "html": f"""
+                    <div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+                                max-width:480px;margin:0 auto;padding:40px 24px;background:#fff">
+                      <div style="margin-bottom:32px">
+                        <span style="font-size:20px;font-weight:700;color:#6366f1">Axiom</span>
+                      </div>
+                      <h2 style="color:#0f172a;font-size:22px;margin:0 0 8px">Sign in to Axiom</h2>
+                      <p style="color:#64748b;margin:0 0 28px;line-height:1.6">
+                        Click the button below to sign in. This link expires in 15 minutes
+                        and can only be used once.
+                      </p>
+                      <a href="{magic_url}"
+                         style="background:#6366f1;color:#fff;padding:13px 28px;border-radius:8px;
+                                text-decoration:none;display:inline-block;font-weight:600;font-size:15px">
+                        Sign in to Axiom
+                      </a>
+                      <p style="color:#94a3b8;font-size:12px;margin-top:32px;line-height:1.5">
+                        If you didn't request this link, you can safely ignore this email.<br>
+                        This link will expire automatically.
+                      </p>
+                    </div>
+                    """
+                }
+            )
+            return resp.status_code in (200, 201)
+    except Exception:
+        return False
+
+async def _send_kpi_alert_email(to_email: str, alerts: list) -> bool:
+    if not RESEND_API_KEY or not alerts:
+        return False
+    rows_html = "".join([
+        f'<tr>'
+        f'<td style="padding:10px 12px;border-bottom:1px solid #f1f5f9;color:#1e293b">{a.get("kpi","")}</td>'
+        f'<td style="padding:10px 12px;border-bottom:1px solid #f1f5f9;color:#ef4444;font-weight:600">{a.get("status","")}</td>'
+        f'<td style="padding:10px 12px;border-bottom:1px solid #f1f5f9;color:#64748b">{a.get("value","")}</td>'
+        f'</tr>'
+        for a in alerts
+    ])
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            await client.post(
+                "https://api.resend.com/emails",
+                headers={"Authorization": f"Bearer {RESEND_API_KEY}", "Content-Type": "application/json"},
+                json={
+                    "from": f"Axiom Alerts <{RESEND_FROM}>",
+                    "to": [to_email],
+                    "subject": f"⚠️ {len(alerts)} KPI alert{'s' if len(alerts)>1 else ''} require attention",
+                    "html": f"""
+                    <div style="font-family:-apple-system,sans-serif;max-width:560px;margin:0 auto;padding:40px 24px">
+                      <h2 style="color:#0f172a;margin:0 0 6px">KPI Alert</h2>
+                      <p style="color:#64748b;margin:0 0 20px">
+                        {len(alerts)} metric{'s' if len(alerts)>1 else ''} require your attention:
+                      </p>
+                      <table style="width:100%;border-collapse:collapse;border:1px solid #e2e8f0;border-radius:8px;overflow:hidden">
+                        <thead>
+                          <tr style="background:#f8fafc">
+                            <th style="padding:10px 12px;text-align:left;color:#475569;font-size:12px;font-weight:600;text-transform:uppercase">KPI</th>
+                            <th style="padding:10px 12px;text-align:left;color:#475569;font-size:12px;font-weight:600;text-transform:uppercase">Status</th>
+                            <th style="padding:10px 12px;text-align:left;color:#475569;font-size:12px;font-weight:600;text-transform:uppercase">Value</th>
+                          </tr>
+                        </thead>
+                        <tbody>{rows_html}</tbody>
+                      </table>
+                      <a href="{APP_URL}"
+                         style="background:#6366f1;color:#fff;padding:11px 22px;border-radius:6px;
+                                text-decoration:none;display:inline-block;margin-top:24px;font-weight:600">
+                        Open Dashboard →
+                      </a>
+                    </div>
+                    """
+                }
+            )
+        return True
+    except Exception:
+        return False
+
+@app.post("/api/auth/request-link")
+async def request_magic_link(body: MagicLinkRequest, request: Request):
+    email = body.email.strip().lower()
+    if email not in ALLOWED_EMAILS:
+        raise HTTPException(status_code=403, detail="Email not authorized")
+    token = secrets.token_urlsafe(32)
+    expires = (datetime.utcnow() + timedelta(minutes=15)).isoformat()
+    conn = get_db()
+    try:
+        conn.execute(
+            "INSERT INTO magic_tokens (email, token, expires_at) VALUES (?,?,?)",
+            [email, token, expires]
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    magic_url = f"{APP_URL}?auth_token={token}"
+    sent = await _send_magic_link_email(email, magic_url)
+    return {"message": "Magic link sent" if sent else "Magic link generated (email not configured)", "sent": sent}
+
+@app.post("/api/auth/verify")
+async def verify_magic_token(body: VerifyTokenRequest):
+    conn = get_db()
+    try:
+        row = conn.execute(
+            "SELECT * FROM magic_tokens WHERE token=? AND used=0", [body.token]
+        ).fetchone()
+        if not row:
+            raise HTTPException(status_code=401, detail="Invalid or already-used token")
+        expires = datetime.fromisoformat(str(row["expires_at"]))
+        if datetime.utcnow() > expires:
+            raise HTTPException(status_code=401, detail="Token expired")
+        email = str(row["email"])
+        conn.execute("UPDATE magic_tokens SET used=1 WHERE token=?", [body.token])
+        conn.execute("INSERT OR IGNORE INTO users (email) VALUES (?)", [email])
+        conn.execute(
+            "UPDATE users SET last_login=? WHERE email=?",
+            [datetime.utcnow().isoformat(), email]
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    if not _JWT_AVAILABLE:
+        raise HTTPException(status_code=500, detail="JWT library not available")
+    payload = {
+        "email": email,
+        "role": "admin",
+        "exp": datetime.utcnow() + timedelta(days=30),
+        "iat": datetime.utcnow(),
+    }
+    token_str = _jwt.encode(payload, JWT_SECRET, algorithm="HS256")
+    return {"token": token_str, "email": email}
+
+@app.get("/api/auth/me")
+async def auth_me(request: Request):
+    auth_header = request.headers.get("Authorization", "")
+    token_str = auth_header.replace("Bearer ", "").strip()
+    if not token_str:
+        raise HTTPException(status_code=401, detail="No token provided")
+    if not _JWT_AVAILABLE:
+        raise HTTPException(status_code=500, detail="JWT library not available")
+    try:
+        payload = _jwt.decode(token_str, JWT_SECRET, algorithms=["HS256"])
+        return {"email": payload["email"], "role": payload.get("role", "admin"), "valid": True}
+    except Exception:
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
+
+@app.post("/api/alerts/send-kpi-alert")
+async def trigger_kpi_alert(request: Request):
+    """Manually trigger KPI alert email for all critical KPIs."""
+    conn = get_db()
+    targets = {r["kpi_key"]: r["target_value"] for r in conn.execute("SELECT * FROM kpi_targets").fetchall()}
+    conn.close()
+    alerts = []
+    try:
+        fingerprint = _compute_fingerprint_data(targets)
+        for kpi in fingerprint.get("kpis", []):
+            if kpi.get("fy_status") == "critical":
+                alerts.append({
+                    "kpi": kpi.get("name", kpi.get("key", "")),
+                    "status": "Critical",
+                    "value": str(kpi.get("avg", ""))
+                })
+    except Exception:
+        pass
+    if not alerts:
+        return {"message": "No critical KPIs to alert on", "sent": False}
+    recipient = ALLOWED_EMAILS[0] if ALLOWED_EMAILS else RESEND_FROM
+    sent = await _send_kpi_alert_email(recipient, alerts)
+    return {"message": f"Alert sent for {len(alerts)} KPIs" if sent else "Email not configured", "alerts": len(alerts), "sent": sent}
+
+@app.post("/api/alerts/test-email")
+async def test_email(request: Request):
+    """Send a test email to verify Resend configuration."""
+    if not RESEND_API_KEY:
+        return {"configured": False, "message": "RESEND_API_KEY not set"}
+    recipient = ALLOWED_EMAILS[0] if ALLOWED_EMAILS else RESEND_FROM
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.post(
+                "https://api.resend.com/emails",
+                headers={"Authorization": f"Bearer {RESEND_API_KEY}", "Content-Type": "application/json"},
+                json={
+                    "from": f"Axiom <{RESEND_FROM}>",
+                    "to": [recipient],
+                    "subject": "✅ Axiom email is configured",
+                    "html": "<p>Your Axiom email integration is working correctly.</p>"
+                }
+            )
+        return {"configured": True, "sent": resp.status_code in (200, 201), "status_code": resp.status_code}
+    except Exception as e:
+        return {"configured": True, "sent": False, "error": str(e)}
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# STRIPE  ─ Checkout + Webhook
+# ═══════════════════════════════════════════════════════════════════════════
+
+class CheckoutRequest(_BM2):
+    price_id: str
+    success_url: str = f"{APP_URL}?payment=success"
+    cancel_url: str  = f"{APP_URL}?payment=cancelled"
+
+@app.get("/api/stripe/config")
+async def stripe_config():
+    return {"publishable_key": STRIPE_PUB, "configured": bool(STRIPE_PUB)}
+
+@app.post("/api/stripe/create-checkout-session")
+async def create_checkout_session(body: CheckoutRequest):
+    if not _stripe:
+        raise HTTPException(status_code=503, detail="Stripe not configured")
+    try:
+        session = _stripe.checkout.Session.create(
+            payment_method_types=["card"],
+            line_items=[{"price": body.price_id, "quantity": 1}],
+            mode="subscription",
+            success_url=body.success_url + "&session_id={CHECKOUT_SESSION_ID}",
+            cancel_url=body.cancel_url,
+        )
+        return {"session_id": session.id, "url": session.url}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+@app.post("/api/stripe/webhook")
+async def stripe_webhook(request: Request):
+    payload = await request.body()
+    sig_header = request.headers.get("stripe-signature", "")
+    if _stripe and STRIPE_WEBHOOK_SEC:
+        try:
+            event = _stripe.Webhook.construct_event(payload, sig_header, STRIPE_WEBHOOK_SEC)
+        except Exception:
+            raise HTTPException(status_code=400, detail="Invalid webhook signature")
+    else:
+        try:
+            event = json.loads(payload)
+        except Exception:
+            raise HTTPException(status_code=400, detail="Invalid payload")
+    event_type = event.get("type", "")
+    if event_type == "checkout.session.completed":
+        sess = event.get("data", {}).get("object", {})
+        _audit("subscription_activated", "stripe", sess.get("id", ""),
+               f"New subscription: {sess.get('customer_email', 'unknown')}")
+    elif event_type == "customer.subscription.deleted":
+        sub = event.get("data", {}).get("object", {})
+        _audit("subscription_cancelled", "stripe", sub.get("id", ""), "Subscription cancelled")
+    return {"received": True}
+
+@app.get("/api/stripe/subscriptions")
+async def list_subscriptions():
+    if not _stripe:
+        return {"configured": False, "subscriptions": []}
+    try:
+        subs = _stripe.Subscription.list(limit=20)
+        return {
+            "configured": True,
+            "subscriptions": [
+                {"id": s.id, "status": s.status, "customer": s.customer,
+                 "current_period_end": s.current_period_end}
+                for s in subs.data
+            ]
+        }
+    except Exception as e:
+        return {"configured": True, "error": str(e), "subscriptions": []}
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# QUICKBOOKS  ─ OAuth 2.0
+# ═══════════════════════════════════════════════════════════════════════════
+from fastapi.responses import RedirectResponse as _RR
+
+_QB_AUTH_BASE  = "https://appcenter.intuit.com/connect/oauth2"
+_QB_TOKEN_URL  = "https://oauth.platform.intuit.com/oauth2/v1/tokens/bearer"
+_QB_SCOPE      = "com.intuit.quickbooks.accounting"
+_QB_API_BASE   = "https://quickbooks.api.intuit.com/v3"
+
+def _qb_redirect() -> str:
+    return QB_REDIRECT_URI or f"{APP_URL}/api/quickbooks/callback"
+
+@app.get("/api/quickbooks/auth-url")
+async def qb_auth_url():
+    if not QB_CLIENT_ID:
+        raise HTTPException(status_code=503, detail="QuickBooks not configured")
+    state = secrets.token_urlsafe(16)
+    params = urlencode({
+        "client_id": QB_CLIENT_ID,
+        "scope": _QB_SCOPE,
+        "redirect_uri": _qb_redirect(),
+        "response_type": "code",
+        "state": state,
+    })
+    return {"auth_url": f"{_QB_AUTH_BASE}?{params}", "state": state}
+
+@app.get("/api/quickbooks/callback")
+async def qb_callback(code: str = "", state: str = "", realmId: str = "", error: str = ""):
+    if error:
+        return _RR(f"{APP_URL}?qb_error={error}")
+    if not QB_CLIENT_ID or not code:
+        raise HTTPException(status_code=400, detail="Missing code or QuickBooks not configured")
+    creds = base64.b64encode(f"{QB_CLIENT_ID}:{QB_CLIENT_SECRET}".encode()).decode()
+    async with httpx.AsyncClient(timeout=15) as client:
+        resp = await client.post(
+            _QB_TOKEN_URL,
+            headers={
+                "Authorization": f"Basic {creds}",
+                "Accept": "application/json",
+                "Content-Type": "application/x-www-form-urlencoded",
+            },
+            data={
+                "grant_type": "authorization_code",
+                "code": code,
+                "redirect_uri": _qb_redirect(),
+            }
+        )
+    if resp.status_code != 200:
+        raise HTTPException(status_code=400, detail="Failed to exchange QuickBooks token")
+    tokens = resp.json()
+    conn = get_db()
+    try:
+        for key, val in [
+            ("qb_access_token",  tokens.get("access_token", "")),
+            ("qb_refresh_token", tokens.get("refresh_token", "")),
+            ("qb_realm_id",      realmId),
+            ("qb_token_type",    tokens.get("token_type", "bearer")),
+        ]:
+            conn.execute(
+                "INSERT OR IGNORE INTO company_settings (key, value) VALUES (?,?)", [key, ""]
+            )
+            conn.execute("UPDATE company_settings SET value=? WHERE key=?", [val, key])
+        conn.commit()
+    finally:
+        conn.close()
+    _audit("integration_connected", "quickbooks", realmId, "QuickBooks account connected")
+    return _RR(f"{APP_URL}?qb_connected=true")
+
+@app.get("/api/quickbooks/status")
+async def qb_status():
+    conn = get_db()
+    settings = {r["key"]: r["value"] for r in conn.execute("SELECT * FROM company_settings").fetchall()}
+    conn.close()
+    return {
+        "connected": bool(settings.get("qb_access_token")),
+        "realm_id": settings.get("qb_realm_id", ""),
+        "configured": bool(QB_CLIENT_ID),
+    }
+
+@app.post("/api/quickbooks/sync")
+async def qb_sync():
+    """Pull P&L data from QuickBooks and return summary."""
+    conn = get_db()
+    settings = {r["key"]: r["value"] for r in conn.execute("SELECT * FROM company_settings").fetchall()}
+    conn.close()
+    access_token = settings.get("qb_access_token", "")
+    realm_id = settings.get("qb_realm_id", "")
+    if not access_token or not realm_id:
+        raise HTTPException(status_code=400, detail="QuickBooks not connected. Please authorize first.")
+    async with httpx.AsyncClient(timeout=20) as client:
+        resp = await client.get(
+            f"{_QB_API_BASE}/company/{realm_id}/reports/ProfitAndLoss",
+            headers={
+                "Authorization": f"Bearer {access_token}",
+                "Accept": "application/json",
+            },
+            params={"date_macro": "Last Fiscal Year", "summarize_column_by": "Month"}
+        )
+    if resp.status_code == 401:
+        raise HTTPException(status_code=401, detail="QuickBooks token expired. Please reconnect.")
+    if resp.status_code != 200:
+        raise HTTPException(status_code=400, detail=f"QuickBooks API error: {resp.status_code}")
+    _audit("data_synced", "quickbooks", realm_id, "QuickBooks P&L data synced")
+    return {"synced": True, "data": resp.json()}
 
 
 # ─── Serve React Frontend ───────────────────────────────────────────────────

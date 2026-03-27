@@ -4,7 +4,7 @@ import {
   LayoutDashboard, Fingerprint, TrendingUp,
   Upload, Code2, RefreshCw, ChevronRight,
   Activity, GitBranch, Network, Layers, BarChart2, BookOpen, Bell, Settings2, Target,
-  Shield, Menu, X
+  Shield, Menu, X, Zap
 } from 'lucide-react'
 import Scorecard from './components/Scorecard.jsx'
 import Fingerprint2 from './components/Fingerprint.jsx'
@@ -27,6 +27,7 @@ import VarianceCommand from './components/VarianceCommand.jsx'
 import TargetsEditor from './components/TargetsEditor.jsx'
 import AuditLog from './components/AuditLog.jsx'
 import OnboardingChecklist from './components/OnboardingChecklist.jsx'
+import PricingPage from './components/PricingPage'
 
 // ── V2: Nav structured into labelled zones with business-friendly names ──────
 const NAV_GROUPS = [
@@ -118,6 +119,8 @@ export default function App() {
   const [advancedOpen, setAdvancedOpen]           = useState(false)
   const [devMode]                                 = useState(() => localStorage.getItem('axiom_dev_mode') === 'true')
   const [companySettings, setCompanySettings]     = useState({})
+  const [authToken, setAuthToken]                 = useState(() => localStorage.getItem('axiom_auth_token') || '')
+  const [showPricing, setShowPricing]             = useState(false)
 
   // Dev mode: filter DevDocs from advanced tabs unless dev mode is on
   const ADVANCED_TABS = devMode
@@ -289,6 +292,29 @@ export default function App() {
   }
 
   const closeKpi = () => setSelectedKpi(null)
+
+  // Handle auth token from magic link URL
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search)
+    const token = params.get('auth_token')
+    if (token) {
+      fetch('/api/auth/verify', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token })
+      })
+        .then(r => r.json())
+        .then(d => {
+          if (d.token) {
+            localStorage.setItem('axiom_auth_token', d.token)
+            setAuthToken(d.token)
+            // Clean URL
+            window.history.replaceState({}, '', window.location.pathname)
+          }
+        })
+        .catch(() => {})
+    }
+  }, [])
 
   useEffect(() => {
     loadAll()
@@ -476,6 +502,13 @@ export default function App() {
 
         {/* Footer */}
         <div className="px-4 py-4 border-t border-white/10 space-y-2">
+          <button
+            onClick={() => setShowPricing(true)}
+            className="w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-left text-[12px] font-medium text-indigo-300 hover:bg-indigo-500/15 transition-colors"
+          >
+            <Zap size={13} className="text-indigo-400" />
+            View Pricing
+          </button>
           <button onClick={loadAll}
             className="w-full flex items-center justify-center gap-2 py-2 rounded-lg
                        text-xs text-slate-400 hover:text-white border border-white/10
@@ -698,6 +731,9 @@ export default function App() {
           }}
         />
       )}
+
+      {/* ── Pricing Modal ──────────────────────────────────── */}
+      {showPricing && <PricingPage onClose={() => setShowPricing(false)} />}
     </div>
   )
 }
