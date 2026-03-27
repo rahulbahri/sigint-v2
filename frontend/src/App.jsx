@@ -28,6 +28,7 @@ import TargetsEditor from './components/TargetsEditor.jsx'
 import AuditLog from './components/AuditLog.jsx'
 import OnboardingChecklist from './components/OnboardingChecklist.jsx'
 import PricingPage from './components/PricingPage'
+import LoginPage from './components/LoginPage'
 
 // ── V2: Nav structured into labelled zones with business-friendly names ──────
 const NAV_GROUPS = [
@@ -333,6 +334,14 @@ export default function App() {
   const attention = sb.yellow || 0
   const onTarget  = sb.green  || 0
   const total     = critical + attention + onTarget
+
+  // ── Auth gate ───────────────────────────────────────────────────────────────
+  if (!authToken) {
+    return <LoginPage onAuthSuccess={(tok) => {
+      localStorage.setItem('axiom_auth_token', tok)
+      setAuthToken(tok)
+    }} />
+  }
 
   return (
     <div className="flex h-screen overflow-hidden">
