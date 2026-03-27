@@ -6266,7 +6266,7 @@ async def request_magic_link(body: MagicLinkRequest, request: Request):
     except Exception as _db_err:
         print(f"[WARN] Could not persist magic token ({_db_err}), using in-memory fallback")
         _MAGIC_TOKEN_CACHE[token] = {"email": email, "expires_at": expires}
-    magic_url = f"{APP_URL}?auth_token={token}"
+    magic_url = f"{APP_URL}/?auth_token={token}"
     sent = await _send_magic_link_email(email, magic_url)
     return {"message": "Magic link sent" if sent else "Magic link generated (email not configured)", "sent": sent}
 
