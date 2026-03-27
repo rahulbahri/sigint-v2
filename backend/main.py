@@ -6538,4 +6538,11 @@ if STATIC_DIR.exists():
     @app.get("/{full_path:path}", include_in_schema=False)
     def serve_spa(full_path: str):
         index = STATIC_DIR / "index.html"
-        return FileResponse(index)
+        return FileResponse(
+            index,
+            headers={
+                "Cache-Control": "no-cache, no-store, must-revalidate",
+                "Pragma": "no-cache",
+                "Expires": "0",
+            }
+        )
