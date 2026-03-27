@@ -66,6 +66,7 @@ app.add_middleware(
 
 # ── Simple in-memory rate limiter ─────────────────────────────────────────────
 _rate_limit_store: dict = defaultdict(list)
+_MAGIC_TOKEN_CACHE: dict = {}  # in-memory fallback when DB is unavailable
 
 def _rate_limit(client_ip: str, limit: int = 60, window: int = 60) -> bool:
     """Returns True if request is allowed, False if rate limited."""
@@ -211,8 +212,11 @@ class _PGConn:
 
 def get_db():
     if _USE_PG:
-        conn = psycopg2.connect(DATABASE_URL, connect_timeout=10)
-        return _PGConn(conn)
+        try:
+            conn = psycopg2.connect(DATABASE_URL, connect_timeout=10)
+            return _PGConn(conn)
+        except Exception as _pg_err:
+            print(f"[WARN] PostgreSQL unavailable ({_pg_err}), falling back to SQLite")
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     return conn
@@ -6248,44 +6252,59 @@ async def _send_kpi_alert_email(to_email: str, alerts: list) -> bool:
 async def request_magic_link(body: MagicLinkRequest, request: Request):
     email = body.email.strip().lower()
     if email not in ALLOWED_EMAILS:
-        raise HTTPException(status_code=403, detail="Email not authorized")
+        raise HTTPException(status_code=403, detail="Email not authorized. Contact your administrator.")
     token = secrets.token_urlsafe(32)
     expires = (datetime.utcnow() + timedelta(minutes=15)).isoformat()
-    conn = get_db()
     try:
+        conn = get_db()
         conn.execute(
             "INSERT INTO magic_tokens (email, token, expires_at) VALUES (?,?,?)",
             [email, token, expires]
         )
         conn.commit()
-    finally:
         conn.close()
+    except Exception as _db_err:
+        print(f"[WARN] Could not persist magic token ({_db_err}), using in-memory fallback")
+        _MAGIC_TOKEN_CACHE[token] = {"email": email, "expires_at": expires}
     magic_url = f"{APP_URL}?auth_token={token}"
     sent = await _send_magic_link_email(email, magic_url)
     return {"message": "Magic link sent" if sent else "Magic link generated (email not configured)", "sent": sent}
 
 @app.post("/api/auth/verify")
 async def verify_magic_token(body: VerifyTokenRequest):
-    conn = get_db()
-    try:
-        row = conn.execute(
-            "SELECT * FROM magic_tokens WHERE token=? AND used=0", [body.token]
-        ).fetchone()
-        if not row:
-            raise HTTPException(status_code=401, detail="Invalid or already-used token")
-        expires = datetime.fromisoformat(str(row["expires_at"]))
+    email = None
+    # Check in-memory cache first (DB-unavailable fallback)
+    if body.token in _MAGIC_TOKEN_CACHE:
+        cached = _MAGIC_TOKEN_CACHE.pop(body.token)
+        expires = datetime.fromisoformat(cached["expires_at"])
         if datetime.utcnow() > expires:
             raise HTTPException(status_code=401, detail="Token expired")
-        email = str(row["email"])
-        conn.execute("UPDATE magic_tokens SET used=1 WHERE token=?", [body.token])
-        conn.execute("INSERT OR IGNORE INTO users (email) VALUES (?)", [email])
-        conn.execute(
-            "UPDATE users SET last_login=? WHERE email=?",
-            [datetime.utcnow().isoformat(), email]
-        )
-        conn.commit()
-    finally:
-        conn.close()
+        email = cached["email"]
+    else:
+        try:
+            conn = get_db()
+            row = conn.execute(
+                "SELECT * FROM magic_tokens WHERE token=? AND used=0", [body.token]
+            ).fetchone()
+            if not row:
+                raise HTTPException(status_code=401, detail="Invalid or already-used token")
+            expires = datetime.fromisoformat(str(row["expires_at"]))
+            if datetime.utcnow() > expires:
+                raise HTTPException(status_code=401, detail="Token expired")
+            email = str(row["email"])
+            conn.execute("UPDATE magic_tokens SET used=1 WHERE token=?", [body.token])
+            try:
+                conn.execute("INSERT OR IGNORE INTO users (email) VALUES (?)", [email])
+                conn.execute("UPDATE users SET last_login=? WHERE email=?",
+                             [datetime.utcnow().isoformat(), email])
+            except Exception:
+                pass
+            conn.commit()
+            conn.close()
+        except HTTPException:
+            raise
+        except Exception as _ve:
+            raise HTTPException(status_code=500, detail=f"Verification error: {_ve}")
     if not _JWT_AVAILABLE:
         raise HTTPException(status_code=500, detail="JWT library not available")
     payload = {
