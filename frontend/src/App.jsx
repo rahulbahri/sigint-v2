@@ -120,8 +120,24 @@ export default function App() {
   const [advancedOpen, setAdvancedOpen]           = useState(false)
   const [devMode]                                 = useState(() => localStorage.getItem('axiom_dev_mode') === 'true')
   const [companySettings, setCompanySettings]     = useState({})
-  const [authToken, setAuthToken]                 = useState(() => localStorage.getItem('axiom_auth_token') || '')
+  const [authToken, setAuthToken]                 = useState('')
+  const [authChecked, setAuthChecked]             = useState(false)
   const [showPricing, setShowPricing]             = useState(false)
+
+  // ── Validate stored token with backend on every load ─────────────────────
+  useEffect(() => {
+    const stored = localStorage.getItem('axiom_auth_token') || ''
+    if (!stored) { setAuthChecked(true); return }
+    fetch('/api/auth/me', {
+      headers: { 'Authorization': `Bearer ${stored}` }
+    })
+      .then(r => {
+        if (r.ok) { setAuthToken(stored) }
+        else { localStorage.removeItem('axiom_auth_token') }
+      })
+      .catch(() => { localStorage.removeItem('axiom_auth_token') })
+      .finally(() => setAuthChecked(true))
+  }, [])
 
   // Dev mode: filter DevDocs from advanced tabs unless dev mode is on
   const ADVANCED_TABS = devMode
@@ -336,6 +352,13 @@ export default function App() {
   const total     = critical + attention + onTarget
 
   // ── Auth gate ───────────────────────────────────────────────────────────────
+  if (!authChecked) {
+    return (
+      <div className="min-h-screen bg-slate-950 flex items-center justify-center">
+        <div className="w-8 h-8 border-2 border-indigo-500 border-t-transparent rounded-full animate-spin" />
+      </div>
+    )
+  }
   if (!authToken) {
     return <LoginPage onAuthSuccess={(tok) => {
       localStorage.setItem('axiom_auth_token', tok)
