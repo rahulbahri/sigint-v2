@@ -4,7 +4,7 @@ import {
   LayoutDashboard, Fingerprint, TrendingUp,
   Upload, Code2, RefreshCw, ChevronRight,
   Activity, GitBranch, Network, Layers, BarChart2, BookOpen, Bell, Settings2, Target,
-  Shield, Menu, X, Zap, LogOut, User
+  Shield, Menu, X, Zap, LogOut, User, ShieldCheck
 } from 'lucide-react'
 import Scorecard from './components/Scorecard.jsx'
 import Fingerprint2 from './components/Fingerprint.jsx'
@@ -29,6 +29,8 @@ import AuditLog from './components/AuditLog.jsx'
 import OnboardingChecklist from './components/OnboardingChecklist.jsx'
 import PricingPage from './components/PricingPage'
 import LoginPage from './components/LoginPage'
+import AdminPanel from './components/AdminPanel.jsx'
+import LegalPage from './components/LegalPage.jsx'
 
 // ── V2: Nav structured into labelled zones with business-friendly names ──────
 const NAV_GROUPS = [
@@ -87,6 +89,7 @@ const PAGE_TITLES = {
   devdocs:     'Developer Documentation',
   company:     'Company Settings',
   audit:       'Audit Trail',
+  admin:       'Admin Panel',
 }
 
 const FILTER_TABS = new Set(['variance', 'dashboard', 'fingerprint', 'trends', 'projection'])
@@ -123,6 +126,7 @@ export default function App() {
   const [authToken, setAuthToken]                 = useState('')
   const [authChecked, setAuthChecked]             = useState(false)
   const [showPricing, setShowPricing]             = useState(false)
+  const [showLegal, setShowLegal]                 = useState(false)
 
   // ── Validate stored token with backend on every load ─────────────────────
   useEffect(() => {
@@ -147,6 +151,13 @@ export default function App() {
     setAuthToken('')
     setAuthChecked(true)
   }
+
+  // ── Decode user email from JWT ────────────────────────────────────────────
+  const userEmail = useMemo(() => {
+    if (!authToken) return ''
+    try { return JSON.parse(atob(authToken.split('.')[1])).email || '' } catch { return '' }
+  }, [authToken])
+  const isAdmin = userEmail === 'rahul@axiomsync.ai'
 
   // Dev mode: filter DevDocs from advanced tabs unless dev mode is on
   const ADVANCED_TABS = devMode
@@ -524,6 +535,23 @@ export default function App() {
               </div>
             ))}
 
+            {/* Admin tab — only for rahul@axiomsync.ai */}
+            {isAdmin && (
+              <div className="mb-1">
+                <p className="text-slate-500 text-[9px] uppercase tracking-widest font-semibold px-5 py-1.5">
+                  Platform
+                </p>
+                <button
+                  onClick={() => setTab('admin')}
+                  className={`sidebar-link w-full text-left ${tab === 'admin' ? 'active' : ''}`}
+                >
+                  <ShieldCheck size={15} className="flex-shrink-0" />
+                  <span className="flex-1">Admin Panel</span>
+                  {tab === 'admin' && <ChevronRight size={12} className="text-[#00AEEF]" />}
+                </button>
+              </div>
+            )}
+
             {/* Advanced section */}
             <div className="mt-2">
               <button
@@ -564,23 +592,32 @@ export default function App() {
             View Pricing
           </button>
           {/* Logged-in user + logout */}
-          {authToken && (() => {
-            let userEmail = ''
-            try {
-              const payload = JSON.parse(atob(authToken.split('.')[1]))
-              userEmail = payload.email || ''
-            } catch {}
-            return (
-              <div className="flex items-center gap-2 px-2 py-1.5 rounded-lg bg-white/5">
-                <User size={11} className="text-slate-400 shrink-0"/>
-                <span className="text-[11px] text-slate-400 truncate flex-1">{userEmail}</span>
-                <button onClick={handleLogout} title="Sign out"
-                  className="text-slate-500 hover:text-red-400 transition-colors shrink-0">
-                  <LogOut size={11}/>
-                </button>
-              </div>
-            )
-          })()}
+          {authToken && (
+            <div className="flex items-center gap-2 px-2 py-1.5 rounded-lg bg-white/5">
+              <User size={11} className="text-slate-400 shrink-0"/>
+              <span className="text-[11px] text-slate-400 truncate flex-1">{userEmail}</span>
+              <button onClick={handleLogout} title="Sign out"
+                className="text-slate-500 hover:text-red-400 transition-colors shrink-0">
+                <LogOut size={11}/>
+              </button>
+            </div>
+          )}
+          {/* Legal links */}
+          <div className="flex items-center justify-center gap-3 pt-1">
+            <button
+              onClick={() => setShowLegal(true)}
+              className="text-[10px] text-slate-600 hover:text-slate-400 transition-colors"
+            >
+              Terms
+            </button>
+            <span className="text-slate-700 text-[10px]">·</span>
+            <button
+              onClick={() => setShowLegal(true)}
+              className="text-[10px] text-slate-600 hover:text-slate-400 transition-colors"
+            >
+              Privacy
+            </button>
+          </div>
           <button onClick={loadAll}
             className="w-full flex items-center justify-center gap-2 py-2 rounded-lg
                        text-xs text-slate-400 hover:text-white border border-white/10
@@ -764,6 +801,7 @@ export default function App() {
               {tab === 'company'     && <CompanySettings onSave={(updated) => setCompanySettings(prev => ({ ...prev, ...updated }))}/>}
               {tab === 'api'         && <APIReference kpiDefs={kpiDefs}/>}
               {tab === 'devdocs'     && <DevDocs />}
+              {tab === 'admin'       && isAdmin && <AdminPanel />}
             </>
           )}
 
@@ -776,6 +814,7 @@ export default function App() {
           {!loading && noData && tab === 'company'    && <CompanySettings onSave={(updated) => setCompanySettings(prev => ({ ...prev, ...updated }))}/>}
           {!loading && noData && tab === 'api'        && <APIReference kpiDefs={kpiDefs}/>}
           {!loading && noData && tab === 'devdocs'    && <DevDocs />}
+          {!loading && tab === 'admin' && isAdmin     && <AdminPanel />}
           {!loading && noData && tab === 'projection' && (
             <ProjectionBridge
               bridgeData={filteredBridgeData}
@@ -806,6 +845,9 @@ export default function App() {
 
       {/* ── Pricing Modal ──────────────────────────────────── */}
       {showPricing && <PricingPage onClose={() => setShowPricing(false)} />}
+
+      {/* ── Legal Modal (ToS + Privacy Policy) ─────────────── */}
+      {showLegal && <LegalPage onClose={() => setShowLegal(false)} />}
     </div>
   )
 }

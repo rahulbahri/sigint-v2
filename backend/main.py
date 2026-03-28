@@ -77,16 +77,52 @@ app = FastAPI(
     openapi_url="/api/openapi.json",
 )
 
+_ALLOWED_ORIGINS = [
+    "https://app.axiomsync.ai",
+    "http://localhost:5173",
+    "http://localhost:5174",
+    "http://localhost:3000",
+]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_ALLOWED_ORIGINS,
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
+# ── Security headers middleware ───────────────────────────────────────────────
+@app.middleware("http")
+async def security_headers_middleware(request: Request, call_next):
+    response = await call_next(request)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
+    if "text/html" in response.headers.get("content-type", ""):
+        response.headers["Content-Security-Policy"] = (
+            "default-src 'self'; "
+            "script-src 'self' 'unsafe-inline' 'unsafe-eval'; "
+            "style-src 'self' 'unsafe-inline'; "
+            "img-src 'self' data: blob:; "
+            "connect-src 'self' https://api.anthropic.com; "
+            "frame-ancestors 'none';"
+        )
+    return response
+
 # ── Simple in-memory rate limiter ─────────────────────────────────────────────
 _rate_limit_store: dict = defaultdict(list)
+_MAGIC_LINK_RATE: dict = defaultdict(list)
 _MAGIC_TOKEN_CACHE: dict = {}  # in-memory fallback when DB is unavailable
+
+def _check_magic_link_rate(email: str) -> bool:
+    """Max 5 magic link requests per email per hour."""
+    now = _time.time()
+    _MAGIC_LINK_RATE[email] = [t for t in _MAGIC_LINK_RATE[email] if now - t < 3600]
+    if len(_MAGIC_LINK_RATE[email]) >= 5:
+        return False
+    _MAGIC_LINK_RATE[email].append(now)
+    return True
 
 def _rate_limit(client_ip: str, limit: int = 60, window: int = 60) -> bool:
     """Returns True if request is allowed, False if rate limited."""
@@ -1519,13 +1555,17 @@ async def upload_csv(request: Request, file: UploadFile = File(...)):
     Returns column mapping detected and KPI preview.
     """
     workspace_id = _get_workspace(request)
-    if not file.filename.endswith((".csv", ".CSV")):
-        raise HTTPException(400, "Only CSV files are accepted.")
+    _allowed_exts = {".csv", ".CSV", ".xlsx", ".xls"}
+    _ext = os.path.splitext(file.filename or "")[1]
+    if _ext not in _allowed_exts:
+        raise HTTPException(400, f"Unsupported file type '{_ext}'. Please upload a CSV or Excel file.")
     content = await file.read()
+    if len(content) > 10 * 1024 * 1024:
+        raise HTTPException(413, "File too large. Maximum upload size is 10 MB.")
     try:
         df = pd.read_csv(io.StringIO(content.decode("utf-8", errors="replace")))
     except Exception as e:
-        raise HTTPException(400, f"Could not parse CSV: {e}")
+        raise HTTPException(400, "Could not parse file. Please ensure it is a valid CSV with column headers.")
 
     col_map      = normalize_columns(df)
     monthly_agg  = aggregate_monthly(df, col_map)
@@ -6389,6 +6429,8 @@ async def request_magic_link(body: MagicLinkRequest, request: Request):
     email = body.email.strip().lower()
     if not _is_work_email(email):
         raise HTTPException(status_code=403, detail="Please use your work email address. Free email providers (Gmail, Yahoo, etc.) are not supported.")
+    if not _check_magic_link_rate(email):
+        raise HTTPException(status_code=429, detail="Too many sign-in requests. Please wait an hour before trying again.")
     token = secrets.token_urlsafe(32)
     expires = (datetime.utcnow() + timedelta(minutes=15)).isoformat()
     try:
@@ -6440,7 +6482,7 @@ async def verify_magic_token(body: VerifyTokenRequest):
         except HTTPException:
             raise
         except Exception as _ve:
-            raise HTTPException(status_code=500, detail=f"Verification error: {_ve}")
+            raise HTTPException(status_code=500, detail="Verification failed. Please request a new sign-in link.")
     if not _JWT_AVAILABLE:
         raise HTTPException(status_code=500, detail="JWT library not available")
     payload = {
@@ -6531,6 +6573,39 @@ async def logout():
     response.delete_cookie("axiom_session", path="/")
     return response
 
+@app.delete("/api/workspace/data", tags=["Settings"])
+async def delete_workspace_data(request: Request):
+    """Delete ALL data for the current workspace. Irreversible."""
+    workspace_id = _get_workspace(request)
+    if not workspace_id:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    conn = get_db()
+    try:
+        for tbl in ["monthly_data", "uploads", "kpi_targets", "projection_monthly_data",
+                    "projection_uploads", "kpi_accountability", "annotations",
+                    "recommendation_outcomes", "audit_log", "company_settings"]:
+            conn.execute(f"DELETE FROM {tbl} WHERE workspace_id=?", [workspace_id])
+        conn.commit()
+        conn.close()
+        return {"message": "All workspace data deleted successfully"}
+    except Exception:
+        conn.close()
+        raise HTTPException(status_code=500, detail="Failed to delete workspace data")
+
+@app.exception_handler(Exception)
+async def generic_error_handler(request: Request, exc: Exception):
+    """Catch-all — never expose internal details to clients."""
+    import traceback
+    print(f"[ERROR] Unhandled on {request.url.path}: {exc}")
+    traceback.print_exc()
+    from fastapi.responses import JSONResponse
+    if isinstance(exc, HTTPException):
+        return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
+    return JSONResponse(
+        status_code=500,
+        content={"detail": "An internal error occurred. Please try again or contact support."}
+    )
+
 @app.post("/api/alerts/send-kpi-alert")
 async def trigger_kpi_alert(request: Request):
     """Manually trigger KPI alert email for all critical KPIs."""
@@ -6582,6 +6657,91 @@ async def test_email(request: Request):
 # ═══════════════════════════════════════════════════════════════════════════
 # STRIPE  ─ Checkout + Webhook
 # ═══════════════════════════════════════════════════════════════════════════
+
+ADMIN_EMAIL = os.environ.get("ADMIN_EMAIL", "rahul@axiomsync.ai")
+
+def _require_admin(request: Request) -> str:
+    workspace = _get_workspace(request)
+    if workspace != ADMIN_EMAIL:
+        raise HTTPException(status_code=403, detail="Admin access required")
+    return workspace
+
+@app.get("/api/admin/stats", tags=["Admin"])
+async def admin_stats(request: Request):
+    _require_admin(request)
+    conn = get_db()
+    try:
+        total_workspaces = conn.execute("SELECT COUNT(DISTINCT workspace_id) FROM monthly_data WHERE workspace_id != ''").fetchone()[0]
+        total_uploads    = conn.execute("SELECT COUNT(*) FROM uploads").fetchone()[0]
+        total_datapoints = conn.execute("SELECT COUNT(*) FROM monthly_data").fetchone()[0]
+        total_users      = conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
+        recent_raw       = conn.execute("SELECT email, last_login FROM users WHERE last_login IS NOT NULL ORDER BY last_login DESC LIMIT 5").fetchall()
+        conn.close()
+        return {
+            "total_workspaces": total_workspaces,
+            "total_uploads": total_uploads,
+            "total_data_points": total_datapoints,
+            "total_users": total_users,
+            "recent_logins": [{"email": str(r["email"]), "last_login": str(r["last_login"])} for r in recent_raw],
+        }
+    except Exception:
+        conn.close()
+        raise HTTPException(status_code=500, detail="Failed to fetch stats")
+
+@app.get("/api/admin/workspaces", tags=["Admin"])
+async def admin_list_workspaces(request: Request):
+    _require_admin(request)
+    conn = get_db()
+    try:
+        ws_rows = conn.execute("SELECT DISTINCT workspace_id FROM monthly_data WHERE workspace_id != ''").fetchall()
+        users_raw = conn.execute("SELECT email, role, created_at, last_login FROM users").fetchall()
+        users_map = {str(u["email"]): u for u in users_raw}
+        result = []
+        seen = set()
+        for row in ws_rows:
+            ws = str(row["workspace_id"])
+            seen.add(ws)
+            dp  = conn.execute("SELECT COUNT(*) FROM monthly_data WHERE workspace_id=?", [ws]).fetchone()[0]
+            upl = conn.execute("SELECT COUNT(*) FROM uploads WHERE workspace_id=?", [ws]).fetchone()[0]
+            last_upl = conn.execute("SELECT uploaded_at FROM uploads WHERE workspace_id=? ORDER BY id DESC LIMIT 1", [ws]).fetchone()
+            audit_ct = conn.execute("SELECT COUNT(*) FROM audit_log WHERE workspace_id=?", [ws]).fetchone()[0]
+            u = users_map.get(ws, {})
+            result.append({"email": ws, "data_points": dp, "uploads": upl,
+                           "last_upload": str(last_upl["uploaded_at"]) if last_upl else None,
+                           "last_login": str(u.get("last_login","")) if u else "",
+                           "created_at": str(u.get("created_at","")) if u else "",
+                           "role": str(u.get("role","user")) if u else "user",
+                           "audit_events": audit_ct})
+        for email, u in users_map.items():
+            if email not in seen:
+                result.append({"email": email, "data_points": 0, "uploads": 0,
+                               "last_upload": None, "last_login": str(u.get("last_login","")),
+                               "created_at": str(u.get("created_at","")),
+                               "role": str(u.get("role","user")), "audit_events": 0})
+        conn.close()
+        return {"workspaces": result, "total": len(result)}
+    except Exception:
+        conn.close()
+        raise HTTPException(status_code=500, detail="Failed to fetch workspaces")
+
+@app.delete("/api/admin/workspace/{email}", tags=["Admin"])
+async def admin_delete_workspace(email: str, request: Request):
+    _require_admin(request)
+    if email == ADMIN_EMAIL:
+        raise HTTPException(status_code=400, detail="Cannot delete the admin workspace")
+    conn = get_db()
+    try:
+        for tbl in ["monthly_data","uploads","kpi_targets","projection_monthly_data",
+                    "projection_uploads","kpi_accountability","annotations",
+                    "recommendation_outcomes","audit_log","company_settings"]:
+            conn.execute(f"DELETE FROM {tbl} WHERE workspace_id=?", [email])
+        conn.execute("DELETE FROM users WHERE email=?", [email])
+        conn.commit()
+        conn.close()
+        return {"message": f"Workspace {email} deleted"}
+    except Exception:
+        conn.close()
+        raise HTTPException(status_code=500, detail="Failed to delete workspace")
 
 class CheckoutRequest(_BM2):
     price_id: str
