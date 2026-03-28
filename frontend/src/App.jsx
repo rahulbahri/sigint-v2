@@ -4,7 +4,7 @@ import {
   LayoutDashboard, Fingerprint, TrendingUp,
   Upload, Code2, RefreshCw, ChevronRight,
   Activity, GitBranch, Network, Layers, BarChart2, BookOpen, Bell, Settings2, Target,
-  Shield, Menu, X, Zap
+  Shield, Menu, X, Zap, LogOut, User
 } from 'lucide-react'
 import Scorecard from './components/Scorecard.jsx'
 import Fingerprint2 from './components/Fingerprint.jsx'
@@ -138,6 +138,15 @@ export default function App() {
       .catch(() => { localStorage.removeItem('axiom_auth_token') })
       .finally(() => setAuthChecked(true))
   }, [])
+
+  // ── Logout ───────────────────────────────────────────────────────────────
+  function handleLogout() {
+    fetch('/api/auth/logout', { method: 'POST' }).catch(() => {})
+    localStorage.removeItem('axiom_auth_token')
+    document.cookie = 'axiom_session=; path=/; max-age=0'
+    setAuthToken('')
+    setAuthChecked(true)
+  }
 
   // Dev mode: filter DevDocs from advanced tabs unless dev mode is on
   const ADVANCED_TABS = devMode
@@ -317,9 +326,10 @@ export default function App() {
       const jwt = hash.slice(5)
       if (jwt) {
         localStorage.setItem('axiom_auth_token', jwt)
+        // Also set as cookie so backend can read workspace from every request
+        document.cookie = `axiom_session=${jwt}; path=/; max-age=${30*24*3600}; SameSite=Lax; Secure`
         setAuthToken(jwt)
         setAuthChecked(true)
-        // Clean URL — remove hash
         window.history.replaceState({}, '', window.location.pathname)
       }
     }
@@ -553,6 +563,24 @@ export default function App() {
             <Zap size={13} className="text-indigo-400" />
             View Pricing
           </button>
+          {/* Logged-in user + logout */}
+          {authToken && (() => {
+            let userEmail = ''
+            try {
+              const payload = JSON.parse(atob(authToken.split('.')[1]))
+              userEmail = payload.email || ''
+            } catch {}
+            return (
+              <div className="flex items-center gap-2 px-2 py-1.5 rounded-lg bg-white/5">
+                <User size={11} className="text-slate-400 shrink-0"/>
+                <span className="text-[11px] text-slate-400 truncate flex-1">{userEmail}</span>
+                <button onClick={handleLogout} title="Sign out"
+                  className="text-slate-500 hover:text-red-400 transition-colors shrink-0">
+                  <LogOut size={11}/>
+                </button>
+              </div>
+            )
+          })()}
           <button onClick={loadAll}
             className="w-full flex items-center justify-center gap-2 py-2 rounded-lg
                        text-xs text-slate-400 hover:text-white border border-white/10

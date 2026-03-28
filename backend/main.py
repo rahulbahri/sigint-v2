@@ -29,6 +29,26 @@ QB_REDIRECT_URI    = os.environ.get("QB_REDIRECT_URI", "")
 ALLOWED_EMAILS     = [e.strip().lower() for e in os.environ.get("ALLOWED_EMAILS", "rahul@axiomsync.ai").split(",")]
 _USE_PG            = bool(DATABASE_URL)
 
+# ── Work-email validator ─────────────────────────────────────────────────────
+_FREE_EMAIL_DOMAINS = {
+    "gmail.com","googlemail.com","yahoo.com","yahoo.co.uk","yahoo.fr","yahoo.de",
+    "yahoo.es","yahoo.it","yahoo.ca","yahoo.com.au","hotmail.com","hotmail.co.uk",
+    "hotmail.fr","hotmail.de","hotmail.es","hotmail.it","outlook.com","live.com",
+    "live.co.uk","msn.com","aol.com","aol.co.uk","icloud.com","me.com","mac.com",
+    "protonmail.com","proton.me","pm.me","mail.com","inbox.com","gmx.com","gmx.net",
+    "gmx.de","yandex.com","yandex.ru","zoho.com","rediffmail.com","qq.com",
+    "163.com","126.com","sina.com","tutanota.com","guerrillamail.com","tempmail.com",
+    "throwaway.email","mailinator.com","sharklasers.com","guerrillamailblock.com",
+}
+
+def _is_work_email(email: str) -> bool:
+    """Returns True if email is from a non-free domain."""
+    try:
+        domain = email.strip().lower().split("@")[1]
+        return domain not in _FREE_EMAIL_DOMAINS
+    except Exception:
+        return False
+
 # ── Conditional imports ──────────────────────────────────────────────────────
 if _USE_PG:
     import psycopg2, psycopg2.extras
@@ -225,6 +245,23 @@ def get_db():
     conn.row_factory = sqlite3.Row
     return conn
 
+def _get_workspace(request: Request) -> str:
+    """Extract workspace_id (email) from JWT in Authorization header or cookie."""
+    token_str = ""
+    auth_header = request.headers.get("Authorization", "")
+    if auth_header.startswith("Bearer "):
+        token_str = auth_header[7:].strip()
+    if not token_str:
+        token_str = request.cookies.get("axiom_session", "")
+    if not token_str:
+        return ""
+    try:
+        import jwt as _j
+        payload = _j.decode(token_str, JWT_SECRET, algorithms=["HS256"])
+        return payload.get("email", "")
+    except Exception:
+        return ""
+
 def init_db():
     conn = get_db()
     if not _USE_PG:
@@ -237,34 +274,40 @@ def init_db():
             filename TEXT,
             uploaded_at TEXT,
             row_count INTEGER,
-            detected_columns TEXT
+            detected_columns TEXT,
+            workspace_id TEXT DEFAULT ''
         );
         CREATE TABLE IF NOT EXISTS monthly_data (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             upload_id INTEGER,
             year INTEGER,
             month INTEGER,
-            data_json TEXT
+            data_json TEXT,
+            workspace_id TEXT DEFAULT ''
         );
         CREATE TABLE IF NOT EXISTS kpi_targets (
-            kpi_key TEXT PRIMARY KEY,
+            kpi_key TEXT,
             target_value REAL,
             unit TEXT,
-            direction TEXT
+            direction TEXT,
+            workspace_id TEXT DEFAULT '',
+            PRIMARY KEY (kpi_key, workspace_id)
         );
         CREATE TABLE IF NOT EXISTS projection_uploads (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             filename TEXT,
             uploaded_at TEXT,
             row_count INTEGER,
-            detected_columns TEXT
+            detected_columns TEXT,
+            workspace_id TEXT DEFAULT ''
         );
         CREATE TABLE IF NOT EXISTS projection_monthly_data (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             projection_upload_id INTEGER,
             year INTEGER,
             month INTEGER,
-            data_json TEXT
+            data_json TEXT,
+            workspace_id TEXT DEFAULT ''
         );
         CREATE TABLE IF NOT EXISTS kpi_annotations (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -276,15 +319,19 @@ def init_db():
             UNIQUE(kpi_key, period)
         );
         CREATE TABLE IF NOT EXISTS kpi_accountability (
-            kpi_key TEXT PRIMARY KEY,
+            kpi_key TEXT,
             owner TEXT DEFAULT '',
             due_date TEXT DEFAULT '',
             status TEXT DEFAULT 'open',
-            last_updated TEXT DEFAULT CURRENT_TIMESTAMP
+            last_updated TEXT DEFAULT CURRENT_TIMESTAMP,
+            workspace_id TEXT DEFAULT '',
+            PRIMARY KEY (kpi_key, workspace_id)
         );
         CREATE TABLE IF NOT EXISTS company_settings (
-            key   TEXT PRIMARY KEY,
-            value TEXT
+            key   TEXT,
+            value TEXT,
+            workspace_id TEXT DEFAULT '',
+            PRIMARY KEY (key, workspace_id)
         );
         CREATE TABLE IF NOT EXISTS audit_log (
             id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -294,7 +341,8 @@ def init_db():
             description TEXT NOT NULL,
             user        TEXT DEFAULT 'system',
             ip_address  TEXT,
-            created_at  TEXT DEFAULT (datetime('now'))
+            created_at  TEXT DEFAULT (datetime('now')),
+            workspace_id TEXT DEFAULT ''
         );
     """)
     conn.commit()
@@ -307,7 +355,8 @@ def init_db():
             note        TEXT NOT NULL,
             author      TEXT DEFAULT 'CFO',
             created_at  TEXT DEFAULT (datetime('now')),
-            updated_at  TEXT DEFAULT (datetime('now'))
+            updated_at  TEXT DEFAULT (datetime('now')),
+            workspace_id TEXT DEFAULT ''
         )
     """)
     conn.execute("CREATE INDEX IF NOT EXISTS idx_annotations_kpi ON annotations(kpi_key, period)")
@@ -324,10 +373,29 @@ def init_db():
             before_status   TEXT,
             after_status    TEXT,
             outcome_notes   TEXT,
-            was_effective   INTEGER DEFAULT NULL
+            was_effective   INTEGER DEFAULT NULL,
+            workspace_id    TEXT DEFAULT ''
         )
     """)
     conn.commit()
+    # ALTER TABLE migrations for existing tables (add workspace_id if missing)
+    for tbl in ["uploads","monthly_data","kpi_targets","projection_uploads",
+                "projection_monthly_data","kpi_accountability","annotations",
+                "recommendation_outcomes","audit_log","company_settings"]:
+        try:
+            conn.execute(f"ALTER TABLE {tbl} ADD COLUMN workspace_id TEXT DEFAULT ''")
+            conn.commit()
+        except Exception:
+            pass  # Column already exists
+    # Workspace indexes
+    for tbl in ["uploads","monthly_data","kpi_targets","projection_uploads",
+                "projection_monthly_data","kpi_accountability","annotations",
+                "recommendation_outcomes","audit_log","company_settings"]:
+        try:
+            conn.execute(f"CREATE INDEX IF NOT EXISTS idx_{tbl}_workspace ON {tbl}(workspace_id)")
+            conn.commit()
+        except Exception:
+            pass
     # Migration: add version_label to projection tables if missing
     if _USE_PG:
         # PostgreSQL supports ADD COLUMN IF NOT EXISTS
@@ -387,7 +455,8 @@ def init_db():
     ]
     for row in default_targets:
         conn.execute(
-            "INSERT OR IGNORE INTO kpi_targets VALUES (?,?,?,?)", row
+            "INSERT OR IGNORE INTO kpi_targets (kpi_key, target_value, unit, direction, workspace_id) VALUES (?,?,?,?,?)",
+            row + ("",)
         )
     conn.commit()
     # Auth tables
@@ -422,16 +491,22 @@ except Exception as _init_err:
 
 @app.on_event("startup")
 async def auto_seed():
-    """Auto-seed full 27-KPI multi-year demo data on cold start if the database is empty."""
+    """Auto-seed full multi-year demo data for rahul@axiomsync.ai on cold start."""
     try:
         conn = get_db()
-        count      = conn.execute("SELECT COUNT(*) FROM monthly_data").fetchone()[0]
-        proj_count = conn.execute("SELECT COUNT(*) FROM projection_monthly_data").fetchone()[0]
+        count = conn.execute(
+            "SELECT COUNT(*) FROM monthly_data WHERE workspace_id=?",
+            ["rahul@axiomsync.ai"]
+        ).fetchone()[0]
+        proj_count = conn.execute(
+            "SELECT COUNT(*) FROM projection_monthly_data WHERE workspace_id=?",
+            ["rahul@axiomsync.ai"]
+        ).fetchone()[0]
         conn.close()
         if count == 0 or proj_count == 0:
-            seed_multiyear()
+            seed_multiyear(workspace_id="rahul@axiomsync.ai")
     except Exception as _seed_err:
-        print(f"[WARN] auto_seed failed ({_seed_err}), continuing without seed data")
+        print(f"[WARN] auto_seed failed: {_seed_err}")
     # Initialize ontology tables once at startup instead of on every GET request (M2)
     try:
         conn_ont = get_db()
@@ -1265,13 +1340,14 @@ def kpi_definition(kpi_key: str):
     return match
 
 @app.get("/api/monthly", tags=["KPIs"])
-def monthly_kpis(year: Optional[int] = None):
+def monthly_kpis(request: Request, year: Optional[int] = None):
     """Return computed monthly KPI values. Optionally filter by year."""
+    workspace_id = _get_workspace(request)
     conn = get_db()
-    query = "SELECT * FROM monthly_data"
-    params = []
+    query = "SELECT * FROM monthly_data WHERE workspace_id=?"
+    params: list = [workspace_id]
     if year:
-        query += " WHERE year = ?"
+        query += " AND year = ?"
         params.append(year)
     rows = conn.execute(query, params).fetchall()
     conn.close()
@@ -1282,16 +1358,20 @@ def monthly_kpis(year: Optional[int] = None):
     return sorted(result, key=lambda x: (x["year"], x["month"]))
 
 @app.get("/api/fingerprint", tags=["Analytics"])
-def fingerprint(year: Optional[int] = None):
+def fingerprint(request: Request, year: Optional[int] = None):
     """
     Returns the 12-month KPI fingerprint for the organisation.
     Each KPI shows its monthly values, target, trend direction, and status (green/yellow/red).
     """
+    workspace_id = _get_workspace(request)
     conn = get_db()
-    query = "SELECT * FROM monthly_data" + (" WHERE year = ?" if year else "")
-    rows = conn.execute(query, [year] if year else []).fetchall()
+    if year:
+        query = "SELECT * FROM monthly_data WHERE workspace_id=? AND year=?"
+        rows = conn.execute(query, [workspace_id, year]).fetchall()
+    else:
+        rows = conn.execute("SELECT * FROM monthly_data WHERE workspace_id=?", [workspace_id]).fetchall()
     targets = {r["kpi_key"]: {"target": r["target_value"], "direction": r["direction"], "unit": r["unit"]}
-               for r in conn.execute("SELECT * FROM kpi_targets").fetchall()}
+               for r in conn.execute("SELECT * FROM kpi_targets WHERE workspace_id=?", [workspace_id]).fetchall()}
     conn.close()
 
     # Organise by KPI
@@ -1347,16 +1427,19 @@ def fingerprint(year: Optional[int] = None):
     return fingerprint_out
 
 @app.get("/api/summary", tags=["Analytics"])
-def summary(year: Optional[int] = None):
+def summary(request: Request, year: Optional[int] = None):
     """High-level dashboard summary: upload count, KPI coverage, status breakdown."""
+    workspace_id = _get_workspace(request)
     conn = get_db()
-    uploads = conn.execute("SELECT COUNT(*) as c FROM uploads").fetchone()["c"]
+    uploads = conn.execute("SELECT COUNT(*) as c FROM uploads WHERE workspace_id=?", [workspace_id]).fetchone()["c"]
     # Filter by year when provided so status counts match the fingerprint tab
-    query = "SELECT * FROM monthly_data" + (" WHERE year = ?" if year else "")
-    monthly_rows = conn.execute(query, [year] if year else []).fetchall()
-    all_rows_count = conn.execute("SELECT COUNT(*) as c FROM monthly_data").fetchone()["c"]
+    if year:
+        monthly_rows = conn.execute("SELECT * FROM monthly_data WHERE workspace_id=? AND year=?", [workspace_id, year]).fetchall()
+    else:
+        monthly_rows = conn.execute("SELECT * FROM monthly_data WHERE workspace_id=?", [workspace_id]).fetchall()
+    all_rows_count = conn.execute("SELECT COUNT(*) as c FROM monthly_data WHERE workspace_id=?", [workspace_id]).fetchone()["c"]
     targets = {r["kpi_key"]: {"target": r["target_value"], "direction": r["direction"]}
-               for r in conn.execute("SELECT * FROM kpi_targets").fetchall()}
+               for r in conn.execute("SELECT * FROM kpi_targets WHERE workspace_id=?", [workspace_id]).fetchall()}
     conn.close()
 
     all_kpis: dict = {}
@@ -1392,10 +1475,11 @@ def summary(year: Optional[int] = None):
     }
 
 @app.get("/api/available-years", tags=["Analytics"])
-def available_years():
+def available_years(request: Request):
     """Return distinct years that have monthly KPI data."""
+    workspace_id = _get_workspace(request)
     conn = get_db()
-    rows = conn.execute("SELECT DISTINCT year FROM monthly_data ORDER BY year").fetchall()
+    rows = conn.execute("SELECT DISTINCT year FROM monthly_data WHERE workspace_id=? ORDER BY year", [workspace_id]).fetchall()
     conn.close()
     return [r["year"] for r in rows]
 
@@ -1414,7 +1498,7 @@ def get_benchmarks(stage: str = "series_b"):
     return {"stage": stage, "benchmarks": result}
 
 @app.post("/api/upload", tags=["Data Ingestion"])
-async def upload_csv(file: UploadFile = File(...)):
+async def upload_csv(request: Request, file: UploadFile = File(...)):
     """
     Upload a CSV file to update KPI data.
 
@@ -1434,6 +1518,7 @@ async def upload_csv(file: UploadFile = File(...)):
 
     Returns column mapping detected and KPI preview.
     """
+    workspace_id = _get_workspace(request)
     if not file.filename.endswith((".csv", ".CSV")):
         raise HTTPException(400, "Only CSV files are accepted.")
     content = await file.read()
@@ -1448,8 +1533,8 @@ async def upload_csv(file: UploadFile = File(...)):
     conn = get_db()
     try:
         cur  = conn.execute(
-            "INSERT INTO uploads (filename, uploaded_at, row_count, detected_columns) VALUES (?,?,?,?)",
-            (file.filename, datetime.utcnow().isoformat(), len(df), json.dumps(col_map))
+            "INSERT INTO uploads (filename, uploaded_at, row_count, detected_columns, workspace_id) VALUES (?,?,?,?,?)",
+            (file.filename, datetime.utcnow().isoformat(), len(df), json.dumps(col_map), workspace_id)
         )
         upload_id = cur.lastrowid
 
@@ -1460,8 +1545,8 @@ async def upload_csv(file: UploadFile = File(...)):
                         for k, v in row.items() if k not in ("year", "month")}
             # Remove NaN
             conn.execute(
-                "INSERT INTO monthly_data (upload_id, year, month, data_json) VALUES (?,?,?,?)",
-                (upload_id, yr, mo, json.dumps(row_dict))
+                "INSERT INTO monthly_data (upload_id, year, month, data_json, workspace_id) VALUES (?,?,?,?,?)",
+                (upload_id, yr, mo, json.dumps(row_dict), workspace_id)
             )
         _audit(conn, "data_upload", "KPI data uploaded", "upload", str(upload_id))
         conn.commit()
@@ -1479,10 +1564,11 @@ async def upload_csv(file: UploadFile = File(...)):
     }
 
 @app.get("/api/uploads", tags=["Data Ingestion"])
-def list_uploads():
+def list_uploads(request: Request):
     """List all previously uploaded files."""
+    workspace_id = _get_workspace(request)
     conn = get_db()
-    rows = conn.execute("SELECT * FROM uploads ORDER BY id DESC").fetchall()
+    rows = conn.execute("SELECT * FROM uploads WHERE workspace_id=? ORDER BY id DESC", [workspace_id]).fetchall()
     conn.close()
     return [{"id": r["id"], "filename": r["filename"], "uploaded_at": r["uploaded_at"],
              "row_count": r["row_count"], "columns": json.loads(r["detected_columns"])} for r in rows]
@@ -1668,8 +1754,9 @@ def seed_demo_projection():
 # ─── Projection Endpoints ────────────────────────────────────────────────────
 
 @app.post("/api/projection/upload", tags=["Projection"])
-async def upload_projection(file: UploadFile = File(...), version_label: Optional[str] = None):
+async def upload_projection(request: Request, file: UploadFile = File(...), version_label: Optional[str] = None):
     """Upload a projection CSV (same format as actuals). Replaces any existing projection with the same version label."""
+    workspace_id = _get_workspace(request)
     if not file.filename.endswith((".csv", ".CSV")):
         raise HTTPException(400, "Only CSV files are accepted.")
     content = await file.read()
@@ -1684,15 +1771,17 @@ async def upload_projection(file: UploadFile = File(...), version_label: Optiona
 
     conn = get_db()
     try:
-        # Delete-before-insert: only remove rows with the same version_label
-        old_ids = [r["id"] for r in conn.execute("SELECT id FROM projection_uploads WHERE version_label=?", (vlabel,)).fetchall()]
+        # Delete-before-insert: only remove rows with the same version_label for this workspace
+        old_ids = [r["id"] for r in conn.execute(
+            "SELECT id FROM projection_uploads WHERE version_label=? AND workspace_id=?", (vlabel, workspace_id)
+        ).fetchall()]
         for oid in old_ids:
             conn.execute("DELETE FROM projection_monthly_data WHERE projection_upload_id=?", (oid,))
-        conn.execute("DELETE FROM projection_uploads WHERE version_label=?", (vlabel,))
+        conn.execute("DELETE FROM projection_uploads WHERE version_label=? AND workspace_id=?", (vlabel, workspace_id))
 
         cur = conn.execute(
-            "INSERT INTO projection_uploads (filename, uploaded_at, row_count, detected_columns, version_label) VALUES (?,?,?,?,?)",
-            (file.filename, datetime.utcnow().isoformat(), len(df), json.dumps(col_map), vlabel)
+            "INSERT INTO projection_uploads (filename, uploaded_at, row_count, detected_columns, version_label, workspace_id) VALUES (?,?,?,?,?,?)",
+            (file.filename, datetime.utcnow().isoformat(), len(df), json.dumps(col_map), vlabel, workspace_id)
         )
         upload_id = cur.lastrowid
 
@@ -1702,8 +1791,8 @@ async def upload_projection(file: UploadFile = File(...), version_label: Optiona
             row_dict = {k: (None if (isinstance(v, float) and np.isnan(v)) else v)
                         for k, v in row.items() if k not in ("year", "month")}
             conn.execute(
-                "INSERT INTO projection_monthly_data (projection_upload_id, year, month, data_json, version_label) VALUES (?,?,?,?,?)",
-                (upload_id, yr, mo, json.dumps(row_dict), vlabel)
+                "INSERT INTO projection_monthly_data (projection_upload_id, year, month, data_json, version_label, workspace_id) VALUES (?,?,?,?,?,?)",
+                (upload_id, yr, mo, json.dumps(row_dict), vlabel, workspace_id)
             )
         conn.commit()
     finally:
@@ -1722,13 +1811,14 @@ async def upload_projection(file: UploadFile = File(...), version_label: Optiona
 
 
 @app.get("/api/projection/monthly", tags=["Projection"])
-def projection_monthly_kpis(year: Optional[int] = None):
+def projection_monthly_kpis(request: Request, year: Optional[int] = None):
     """Return projected monthly KPI values. Optionally filter by year."""
+    workspace_id = _get_workspace(request)
     conn = get_db()
-    query  = "SELECT * FROM projection_monthly_data"
-    params = []
+    query  = "SELECT * FROM projection_monthly_data WHERE workspace_id=?"
+    params: list = [workspace_id]
     if year:
-        query += " WHERE year = ?"
+        query += " AND year = ?"
         params.append(year)
     rows = conn.execute(query, params).fetchall()
     conn.close()
@@ -1739,10 +1829,11 @@ def projection_monthly_kpis(year: Optional[int] = None):
 
 
 @app.get("/api/projection/uploads", tags=["Projection"])
-def list_projection_uploads():
+def list_projection_uploads(request: Request):
     """List all projection uploads."""
+    workspace_id = _get_workspace(request)
     conn = get_db()
-    rows = conn.execute("SELECT * FROM projection_uploads ORDER BY id DESC").fetchall()
+    rows = conn.execute("SELECT * FROM projection_uploads WHERE workspace_id=? ORDER BY id DESC", [workspace_id]).fetchall()
     conn.close()
     return [{"id": r["id"], "filename": r["filename"], "uploaded_at": r["uploaded_at"],
              "row_count": r["row_count"], "columns": json.loads(r["detected_columns"])} for r in rows]
@@ -1760,9 +1851,13 @@ def delete_projection_upload(upload_id: int):
 
 
 @app.get("/api/projection/versions", tags=["Projection"])
-def get_projection_versions():
+def get_projection_versions(request: Request):
+    workspace_id = _get_workspace(request)
     conn = get_db()
-    rows = conn.execute("SELECT DISTINCT version_label, MIN(uploaded_at) as first_uploaded FROM projection_uploads GROUP BY version_label ORDER BY first_uploaded DESC").fetchall()
+    rows = conn.execute(
+        "SELECT DISTINCT version_label, MIN(uploaded_at) as first_uploaded FROM projection_uploads WHERE workspace_id=? GROUP BY version_label ORDER BY first_uploaded DESC",
+        [workspace_id]
+    ).fetchall()
     conn.close()
     return {"versions": [{"label": r["version_label"] or "v1", "uploaded_at": r["first_uploaded"]} for r in rows]}
 
@@ -1808,18 +1903,19 @@ def compare_projection_versions(v1: int, v2: int):
 
 
 @app.get("/api/bridge", tags=["Projection"])
-def bridge_analysis(year: Optional[int] = None):
+def bridge_analysis(request: Request, year: Optional[int] = None):
     """
     Compare projected vs actual KPIs month-by-month.
     Returns gap analysis, status (green/yellow/red), and causation rules for each KPI.
     """
+    workspace_id = _get_workspace(request)
     conn = get_db()
     if year:
-        proj_rows   = conn.execute("SELECT * FROM projection_monthly_data WHERE year = ?", [year]).fetchall()
-        actual_rows = conn.execute("SELECT * FROM monthly_data WHERE year = ?", [year]).fetchall()
+        proj_rows   = conn.execute("SELECT * FROM projection_monthly_data WHERE workspace_id=? AND year = ?", [workspace_id, year]).fetchall()
+        actual_rows = conn.execute("SELECT * FROM monthly_data WHERE workspace_id=? AND year = ?", [workspace_id, year]).fetchall()
     else:
-        proj_rows   = conn.execute("SELECT * FROM projection_monthly_data").fetchall()
-        actual_rows = conn.execute("SELECT * FROM monthly_data").fetchall()
+        proj_rows   = conn.execute("SELECT * FROM projection_monthly_data WHERE workspace_id=?", [workspace_id]).fetchall()
+        actual_rows = conn.execute("SELECT * FROM monthly_data WHERE workspace_id=?", [workspace_id]).fetchall()
     conn.close()
 
     if not proj_rows:
@@ -1925,16 +2021,20 @@ def bridge_analysis(year: Optional[int] = None):
 
 
 @app.put("/api/targets/{kpi_key}", tags=["Configuration"])
-def update_target(kpi_key: str, target_value: float):
+def update_target(request: Request, kpi_key: str, target_value: float):
     """Update the target value for a specific KPI."""
     import re
+    workspace_id = _get_workspace(request)
     if not re.match(r'^[a-z_]+$', kpi_key):
         raise HTTPException(status_code=400, detail="Invalid KPI key format")
     match = next((k for k in KPI_DEFS if k["key"] == kpi_key), None)
     if not match:
         raise HTTPException(404, f"KPI '{kpi_key}' not found")
     conn = get_db()
-    conn.execute("UPDATE kpi_targets SET target_value = ? WHERE kpi_key = ?", (target_value, kpi_key))
+    conn.execute(
+        "UPDATE kpi_targets SET target_value = ? WHERE kpi_key = ? AND workspace_id = ?",
+        (target_value, kpi_key, workspace_id)
+    )
     _audit(conn, "target_changed", f"Target for {kpi_key} updated to {target_value}", "kpi_target", kpi_key)
     conn.commit()
     conn.close()
@@ -2242,7 +2342,7 @@ def seed_demo():
     }
 
 @app.get("/api/seed-multiyear", tags=["System"])
-def seed_multiyear():
+def seed_multiyear(workspace_id: str = "rahul@axiomsync.ai"):
     """
     Seed 5 years of KPI data (2021–2025 actuals + 2026 actuals Jan–Mar + 2026 projection Apr–Dec).
 
@@ -2691,16 +2791,16 @@ def seed_multiyear():
     }
 
     conn = get_db()
-    # Clear existing data
-    conn.execute("DELETE FROM monthly_data")
-    conn.execute("DELETE FROM uploads")
-    conn.execute("DELETE FROM projection_monthly_data")
-    conn.execute("DELETE FROM projection_uploads")
+    # Clear existing data for this workspace only
+    conn.execute("DELETE FROM monthly_data WHERE workspace_id=?", (workspace_id,))
+    conn.execute("DELETE FROM uploads WHERE workspace_id=?", (workspace_id,))
+    conn.execute("DELETE FROM projection_monthly_data WHERE workspace_id=?", (workspace_id,))
+    conn.execute("DELETE FROM projection_uploads WHERE workspace_id=?", (workspace_id,))
 
     # Insert upload record for actuals
     cur = conn.execute(
-        "INSERT INTO uploads (filename, uploaded_at, row_count, detected_columns) VALUES (?,?,?,?)",
-        ("multiyear_demo_2021_2026.csv", datetime.utcnow().isoformat(), 63, json.dumps({}))
+        "INSERT INTO uploads (filename, uploaded_at, row_count, detected_columns, workspace_id) VALUES (?,?,?,?,?)",
+        ("multiyear_demo_2021_2026.csv", datetime.utcnow().isoformat(), 63, json.dumps({}), workspace_id)
     )
     upload_id = cur.lastrowid
 
@@ -2740,8 +2840,8 @@ def seed_multiyear():
             else:
                 kpis["customer_decay_slope"] = round((phase["churn_rate"][1] - phase["churn_rate"][0]) / 11.0, 4)
             conn.execute(
-                "INSERT INTO monthly_data (upload_id, year, month, data_json) VALUES (?,?,?,?)",
-                (upload_id, yr, mo, json.dumps(kpis))
+                "INSERT INTO monthly_data (upload_id, year, month, data_json, workspace_id) VALUES (?,?,?,?,?)",
+                (upload_id, yr, mo, json.dumps(kpis), workspace_id)
             )
             total_months += 1
 
@@ -2768,15 +2868,15 @@ def seed_multiyear():
         else:
             kpis["customer_decay_slope"] = round((PHASE_2026_ACTUAL["churn_rate"][1] - PHASE_2026_ACTUAL["churn_rate"][0]) / 2.0, 4)
         conn.execute(
-            "INSERT INTO monthly_data (upload_id, year, month, data_json) VALUES (?,?,?,?)",
-            (upload_id, 2026, mo, json.dumps(kpis))
+            "INSERT INTO monthly_data (upload_id, year, month, data_json, workspace_id) VALUES (?,?,?,?,?)",
+            (upload_id, 2026, mo, json.dumps(kpis), workspace_id)
         )
         total_months += 1
 
     # Seed 2021-2025 plan/budget projections
     cur_plan = conn.execute(
-        "INSERT INTO projection_uploads (filename, uploaded_at, row_count, detected_columns) VALUES (?,?,?,?)",
-        ("plan_budget_2021_2025.csv", datetime.utcnow().isoformat(), 60, json.dumps({}))
+        "INSERT INTO projection_uploads (filename, uploaded_at, row_count, detected_columns, workspace_id) VALUES (?,?,?,?,?)",
+        ("plan_budget_2021_2025.csv", datetime.utcnow().isoformat(), 60, json.dumps({}), workspace_id)
     )
     plan_upload_id = cur_plan.lastrowid
 
@@ -2804,14 +2904,14 @@ def seed_multiyear():
             else:
                 kpis["customer_decay_slope"] = round((phase["churn_rate"][1] - phase["churn_rate"][0]) / 11.0, 4)
             conn.execute(
-                "INSERT INTO projection_monthly_data (projection_upload_id, year, month, data_json) VALUES (?,?,?,?)",
-                (plan_upload_id, yr, mo, json.dumps(kpis))
+                "INSERT INTO projection_monthly_data (projection_upload_id, year, month, data_json, workspace_id) VALUES (?,?,?,?,?)",
+                (plan_upload_id, yr, mo, json.dumps(kpis), workspace_id)
             )
 
     # Seed 2026 projection Apr–Dec
     cur2 = conn.execute(
-        "INSERT INTO projection_uploads (filename, uploaded_at, row_count, detected_columns) VALUES (?,?,?,?)",
-        ("forecast_2026_recovery.csv", datetime.utcnow().isoformat(), 9, json.dumps({}))
+        "INSERT INTO projection_uploads (filename, uploaded_at, row_count, detected_columns, workspace_id) VALUES (?,?,?,?,?)",
+        ("forecast_2026_recovery.csv", datetime.utcnow().isoformat(), 9, json.dumps({}), workspace_id)
     )
     proj_upload_id = cur2.lastrowid
 
@@ -2840,8 +2940,8 @@ def seed_multiyear():
         else:
             kpis["customer_decay_slope"] = round((PHASE_2026_PROJ["churn_rate"][1] - PHASE_2026_PROJ["churn_rate"][0]) / 8.0, 4)
         conn.execute(
-            "INSERT INTO projection_monthly_data (projection_upload_id, year, month, data_json) VALUES (?,?,?,?)",
-            (proj_upload_id, 2026, mo, json.dumps(kpis))
+            "INSERT INTO projection_monthly_data (projection_upload_id, year, month, data_json, workspace_id) VALUES (?,?,?,?,?)",
+            (proj_upload_id, 2026, mo, json.dumps(kpis), workspace_id)
         )
 
     conn.commit()
@@ -2866,12 +2966,13 @@ def seed_multiyear():
 # ─── NLP Query Endpoint ─────────────────────────────────────────────────────
 
 @app.post("/api/query", tags=["Analytics"])
-async def query_kpi(payload: dict):
+async def query_kpi(request: Request, payload: dict):
     """
     Natural-language KPI query powered by Claude.
     Accepts { "question": "...", "years": [2024] } and returns { "answer": "...", "kpis_referenced": [...] }.
     Builds full context from the live DB fingerprint on every call, filtered to requested years.
     """
+    workspace_id = _get_workspace(request)
     question = payload.get("question", "").strip()
     if not question:
         raise HTTPException(status_code=400, detail="question is required")
@@ -2881,12 +2982,15 @@ async def query_kpi(payload: dict):
     conn = get_db()
     if years_filter:
         placeholders = ",".join("?" * len(years_filter))
-        rows = conn.execute(f"SELECT * FROM monthly_data WHERE year IN ({placeholders})", years_filter).fetchall()
+        rows = conn.execute(
+            f"SELECT * FROM monthly_data WHERE workspace_id=? AND year IN ({placeholders})",
+            [workspace_id] + list(years_filter)
+        ).fetchall()
     else:
-        rows = conn.execute("SELECT * FROM monthly_data").fetchall()
+        rows = conn.execute("SELECT * FROM monthly_data WHERE workspace_id=?", [workspace_id]).fetchall()
     targets  = {r["kpi_key"]: {"target": r["target_value"], "direction": r["direction"], "unit": r["unit"]}
-                for r in conn.execute("SELECT * FROM kpi_targets").fetchall()}
-    uploads  = conn.execute("SELECT COUNT(*) as c FROM uploads").fetchone()["c"]
+                for r in conn.execute("SELECT * FROM kpi_targets WHERE workspace_id=?", [workspace_id]).fetchall()}
+    uploads  = conn.execute("SELECT COUNT(*) as c FROM uploads WHERE workspace_id=?", [workspace_id]).fetchone()["c"]
     conn.close()
 
     # Organise monthly values by KPI key
@@ -2940,7 +3044,7 @@ async def query_kpi(payload: dict):
     proj_context_lines = []
     try:
         proj_conn  = get_db()
-        proj_rows  = proj_conn.execute("SELECT * FROM projection_monthly_data").fetchall()
+        proj_rows  = proj_conn.execute("SELECT * FROM projection_monthly_data WHERE workspace_id=?", [workspace_id]).fetchall()
         proj_conn.close()
         if proj_rows:
             proj_by_period: dict = {}
@@ -4236,8 +4340,9 @@ def forecast_model():
 # ─── Export / Import KPI Data ───────────────────────────────────────────────
 
 @app.get("/api/export/data.xlsx")
-def export_data_xlsx():
+def export_data_xlsx(request: Request):
     """Export all monthly KPI data to Excel for offline editing."""
+    workspace_id = _get_workspace(request)
     import openpyxl
     from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
     from openpyxl.utils import get_column_letter
@@ -4275,7 +4380,8 @@ def export_data_xlsx():
 
     conn = get_db()
     rows = conn.execute(
-        "SELECT year, month, data_json FROM monthly_data ORDER BY year, month"
+        "SELECT year, month, data_json FROM monthly_data WHERE workspace_id=? ORDER BY year, month",
+        [workspace_id]
     ).fetchall()
     conn.close()
 
@@ -4664,12 +4770,15 @@ def _add_header_row(table, col_texts):
         _set_cell_style(cell, txt, font_size=11, bold=True, fg=_DECK_WHITE)
         _set_cell_bg_rgb(cell, _DECK_HEADER_BLUE)
 
-def _compute_fingerprint_data():
+def _compute_fingerprint_data(targets_override=None, workspace_id: str = ""):
     """Reuse fingerprint logic without HTTP call."""
     conn = get_db()
-    rows = conn.execute("SELECT * FROM monthly_data").fetchall()
-    targets = {r["kpi_key"]: {"target": r["target_value"], "direction": r["direction"], "unit": r["unit"]}
-               for r in conn.execute("SELECT * FROM kpi_targets").fetchall()}
+    rows = conn.execute("SELECT * FROM monthly_data WHERE workspace_id=?", [workspace_id]).fetchall()
+    if targets_override is not None:
+        targets = targets_override
+    else:
+        targets = {r["kpi_key"]: {"target": r["target_value"], "direction": r["direction"], "unit": r["unit"]}
+                   for r in conn.execute("SELECT * FROM kpi_targets WHERE workspace_id=?", [workspace_id]).fetchall()}
     conn.close()
 
     kpi_monthly: dict = {}
@@ -4737,14 +4846,15 @@ def _compute_fingerprint_data():
     return fingerprint_out
 
 @app.get("/api/export/board-deck.pptx", tags=["Board Deck"])
-def export_board_deck(stage: str = "series_b"):
+def export_board_deck(request: Request, stage: str = "series_b"):
     """Generate a narrative-driven PPTX board deck with charts, executive summary, and data-backed actions."""
+    workspace_id = _get_workspace(request)
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
     import matplotlib.ticker as mticker
 
-    fp_data = _compute_fingerprint_data()
+    fp_data = _compute_fingerprint_data(workspace_id=workspace_id)
 
     valid_stages = {"seed", "series_a", "series_b", "series_c"}
     if stage not in valid_stages:
@@ -5191,36 +5301,39 @@ class _AnnotationBody(_AnnotationBaseModel):
     note: str
 
 @app.get("/api/annotations", tags=["Annotations"])
-def list_annotations(kpi_key: Optional[str] = None, period: Optional[str] = None):
+def list_annotations(request: Request, kpi_key: Optional[str] = None, period: Optional[str] = None):
     """List KPI annotations, optionally filtered by kpi_key and/or period."""
+    workspace_id = _get_workspace(request)
     conn = get_db()
-    clauses, params = [], []
+    clauses: list = ["workspace_id = ?"]
+    params: list = [workspace_id]
     if kpi_key:
         clauses.append("kpi_key = ?")
         params.append(kpi_key)
     if period:
         clauses.append("period = ?")
         params.append(period)
-    where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+    where = " WHERE " + " AND ".join(clauses)
     rows = conn.execute(f"SELECT * FROM kpi_annotations{where} ORDER BY created_at DESC", params).fetchall()
     conn.close()
     return {"annotations": [dict(r) for r in rows]}
 
 @app.put("/api/annotations", tags=["Annotations"])
-def upsert_annotation(body: _AnnotationBody):
+def upsert_annotation(request: Request, body: _AnnotationBody):
     """Create or update (upsert) a KPI annotation for a given kpi_key + period."""
+    workspace_id = _get_workspace(request)
     conn = get_db()
     now = datetime.utcnow().isoformat()
     conn.execute(
-        """INSERT INTO kpi_annotations (kpi_key, period, note, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?)
+        """INSERT INTO kpi_annotations (kpi_key, period, note, created_at, updated_at, workspace_id)
+           VALUES (?, ?, ?, ?, ?, ?)
            ON CONFLICT(kpi_key, period) DO UPDATE SET note=excluded.note, updated_at=excluded.updated_at""",
-        (body.kpi_key, body.period, body.note, now, now),
+        (body.kpi_key, body.period, body.note, now, now, workspace_id),
     )
     conn.commit()
     row = conn.execute(
-        "SELECT * FROM kpi_annotations WHERE kpi_key=? AND period=?",
-        (body.kpi_key, body.period),
+        "SELECT * FROM kpi_annotations WHERE kpi_key=? AND period=? AND workspace_id=?",
+        (body.kpi_key, body.period, workspace_id),
     ).fetchone()
     conn.close()
     return {"status": "ok", "annotation": dict(row)}
@@ -5242,12 +5355,13 @@ def delete_annotation(annotation_id: int):
 # ─── KPI Accountability ─────────────────────────────────────────────────────
 
 @app.get("/api/accountability", tags=["Accountability"])
-def get_accountability(kpi_key: Optional[str] = None):
+def get_accountability(request: Request, kpi_key: Optional[str] = None):
+    workspace_id = _get_workspace(request)
     conn = get_db()
     if kpi_key:
-        rows = conn.execute("SELECT * FROM kpi_accountability WHERE kpi_key=?", (kpi_key,)).fetchall()
+        rows = conn.execute("SELECT * FROM kpi_accountability WHERE kpi_key=? AND workspace_id=?", (kpi_key, workspace_id)).fetchall()
     else:
-        rows = conn.execute("SELECT * FROM kpi_accountability").fetchall()
+        rows = conn.execute("SELECT * FROM kpi_accountability WHERE workspace_id=?", (workspace_id,)).fetchall()
     conn.close()
     result = {}
     for r in rows:
@@ -5261,21 +5375,22 @@ def get_accountability(kpi_key: Optional[str] = None):
     return {"accountability": result}
 
 @app.put("/api/accountability/{kpi_key}", tags=["Accountability"])
-def put_accountability(kpi_key: str, body: dict):
+def put_accountability(request: Request, kpi_key: str, body: dict):
+    workspace_id = _get_workspace(request)
     owner = body.get("owner", "")
     due_date = body.get("due_date", "")
     status = body.get("status", "open")
     now = datetime.now().isoformat()
     conn = get_db()
     conn.execute("""
-        INSERT INTO kpi_accountability (kpi_key, owner, due_date, status, last_updated)
-        VALUES (?, ?, ?, ?, ?)
-        ON CONFLICT(kpi_key) DO UPDATE SET
+        INSERT INTO kpi_accountability (kpi_key, owner, due_date, status, last_updated, workspace_id)
+        VALUES (?, ?, ?, ?, ?, ?)
+        ON CONFLICT(kpi_key, workspace_id) DO UPDATE SET
             owner = excluded.owner,
             due_date = excluded.due_date,
             status = excluded.status,
             last_updated = excluded.last_updated
-    """, (kpi_key, owner, due_date, status, now))
+    """, (kpi_key, owner, due_date, status, now, workspace_id))
     _audit(conn, "accountability_update", f"Accountability updated for {kpi_key}", "accountability", kpi_key)
     conn.commit()
     conn.close()
@@ -5283,9 +5398,10 @@ def put_accountability(kpi_key: str, body: dict):
 
 
 @app.get("/api/export/weekly-briefing.html", tags=["Board Deck"])
-def export_weekly_briefing(stage: str = "series_b"):
+def export_weekly_briefing(request: Request, stage: str = "series_b"):
     """Generate an HTML weekly briefing document."""
-    fp_data = _compute_fingerprint_data()
+    workspace_id = _get_workspace(request)
+    fp_data = _compute_fingerprint_data(workspace_id=workspace_id)
     if not fp_data:
         raise HTTPException(status_code=404, detail="No data available")
 
@@ -5297,7 +5413,7 @@ def export_weekly_briefing(stage: str = "series_b"):
 
     # Get accountability data
     conn = get_db()
-    acct_rows = conn.execute("SELECT * FROM kpi_accountability").fetchall()
+    acct_rows = conn.execute("SELECT * FROM kpi_accountability WHERE workspace_id=?", [workspace_id]).fetchall()
     conn.close()
     acct = {}
     for r in acct_rows:
@@ -5953,20 +6069,21 @@ def _generate_smart_actions(kpi_key: str, fp_data: list, benchmarks_for_stage: d
 
 
 @app.get("/api/smart-actions/{kpi_key}", tags=["Smart Actions"])
-def get_smart_actions(kpi_key: str, stage: str = "series_b"):
+def get_smart_actions(request: Request, kpi_key: str, stage: str = "series_b"):
     """
     Generate data-backed, number-specific corrective action recommendations for a KPI.
     Uses fingerprint data, benchmarks, and the causal knowledge graph (CAUSATION_RULES)
     to produce actionable insights with specific numbers, upstream/downstream analysis,
     and quantified expected impact.
     """
+    workspace_id = _get_workspace(request)
     # Validate stage
     valid_stages = {"seed", "series_a", "series_b", "series_c"}
     if stage not in valid_stages:
         stage = "series_b"
 
     # Compute fingerprint data
-    fp_data = _compute_fingerprint_data()
+    fp_data = _compute_fingerprint_data(workspace_id=workspace_id)
 
     # Get benchmarks for stage
     bench = {}
@@ -5997,23 +6114,25 @@ def get_smart_actions(kpi_key: str, stage: str = "series_b"):
 # ─── Annotations ────────────────────────────────────────────────────────────
 
 @app.get("/api/annotations/{kpi_key}", tags=["Annotations"])
-def get_annotations(kpi_key: str, period: str = None):
+def get_annotations(request: Request, kpi_key: str, period: str = None):
+    workspace_id = _get_workspace(request)
     conn = get_db()
     if period:
         rows = conn.execute(
-            "SELECT * FROM annotations WHERE kpi_key=? AND period=? ORDER BY created_at DESC",
-            (kpi_key, period)
+            "SELECT * FROM annotations WHERE kpi_key=? AND period=? AND workspace_id=? ORDER BY created_at DESC",
+            (kpi_key, period, workspace_id)
         ).fetchall()
     else:
         rows = conn.execute(
-            "SELECT * FROM annotations WHERE kpi_key=? ORDER BY period DESC, created_at DESC",
-            (kpi_key,)
+            "SELECT * FROM annotations WHERE kpi_key=? AND workspace_id=? ORDER BY period DESC, created_at DESC",
+            (kpi_key, workspace_id)
         ).fetchall()
     conn.close()
     return [dict(r) for r in rows]
 
 @app.post("/api/annotations/{kpi_key}", tags=["Annotations"])
 async def add_annotation(kpi_key: str, request: Request):
+    workspace_id = _get_workspace(request)
     body = await request.json()
     note = body.get("note", "").strip()
     if not note:
@@ -6022,8 +6141,8 @@ async def add_annotation(kpi_key: str, request: Request):
     author = body.get("author", "CFO")
     conn = get_db()
     cursor = conn.execute(
-        "INSERT INTO annotations (kpi_key, period, note, author) VALUES (?,?,?,?)",
-        (kpi_key, period, note, author)
+        "INSERT INTO annotations (kpi_key, period, note, author, workspace_id) VALUES (?,?,?,?,?)",
+        (kpi_key, period, note, author, workspace_id)
     )
     ann_id = cursor.lastrowid
     conn.commit()
@@ -6042,29 +6161,32 @@ def delete_annotation(annotation_id: int):
 # ─── Recommendation Outcomes ─────────────────────────────────────────────────
 
 @app.get("/api/outcomes/{kpi_key}", tags=["Outcomes"])
-def get_outcomes(kpi_key: str):
+def get_outcomes(request: Request, kpi_key: str):
+    workspace_id = _get_workspace(request)
     conn = get_db()
     rows = conn.execute(
-        "SELECT * FROM recommendation_outcomes WHERE kpi_key=? ORDER BY started_at DESC",
-        (kpi_key,)
+        "SELECT * FROM recommendation_outcomes WHERE kpi_key=? AND workspace_id=? ORDER BY started_at DESC",
+        (kpi_key, workspace_id)
     ).fetchall()
     conn.close()
     return [dict(r) for r in rows]
 
 @app.post("/api/outcomes/{kpi_key}", tags=["Outcomes"])
 async def record_outcome(kpi_key: str, request: Request):
+    workspace_id = _get_workspace(request)
     body = await request.json()
     conn = get_db()
     cursor = conn.execute("""
         INSERT INTO recommendation_outcomes
-        (kpi_key, action_text, before_value, before_status, outcome_notes)
-        VALUES (?,?,?,?,?)
+        (kpi_key, action_text, before_value, before_status, outcome_notes, workspace_id)
+        VALUES (?,?,?,?,?,?)
     """, (
         kpi_key,
         body.get("action_text", ""),
         body.get("before_value"),
         body.get("before_status"),
-        body.get("outcome_notes", "")
+        body.get("outcome_notes", ""),
+        workspace_id
     ))
     conn.commit()
     outcome_id = cursor.lastrowid
@@ -6101,17 +6223,18 @@ def _audit(conn, event_type: str, description: str, entity_type: str = None, ent
     )
 
 @app.get("/api/audit-log", tags=["Audit"])
-def get_audit_log(limit: int = 100, event_type: str = None):
+def get_audit_log(request: Request, limit: int = 100, event_type: str = None):
+    workspace_id = _get_workspace(request)
     conn = get_db()
     if event_type:
         rows = conn.execute(
-            "SELECT * FROM audit_log WHERE event_type=? ORDER BY created_at DESC LIMIT ?",
-            (event_type, limit)
+            "SELECT * FROM audit_log WHERE workspace_id=? AND event_type=? ORDER BY created_at DESC LIMIT ?",
+            (workspace_id, event_type, limit)
         ).fetchall()
     else:
         rows = conn.execute(
-            "SELECT * FROM audit_log ORDER BY created_at DESC LIMIT ?",
-            (limit,)
+            "SELECT * FROM audit_log WHERE workspace_id=? ORDER BY created_at DESC LIMIT ?",
+            (workspace_id, limit)
         ).fetchall()
     conn.close()
     return [dict(r) for r in rows]
@@ -6120,31 +6243,40 @@ def get_audit_log(limit: int = 100, event_type: str = None):
 # ─── Company Settings ───────────────────────────────────────────────────────
 
 @app.get("/api/company-settings", tags=["Settings"])
-def get_company_settings():
+def get_company_settings(request: Request):
+    workspace_id = _get_workspace(request)
     conn = get_db()
-    rows = conn.execute("SELECT key, value FROM company_settings").fetchall()
+    rows = conn.execute("SELECT key, value FROM company_settings WHERE workspace_id=?", [workspace_id]).fetchall()
     conn.close()
     return {r["key"]: r["value"] for r in rows}
 
 @app.put("/api/company-settings", tags=["Settings"])
 async def update_company_settings(request: Request):
+    workspace_id = _get_workspace(request)
     body = await request.json()
     conn = get_db()
     for k, v in body.items():
-        conn.execute("INSERT OR REPLACE INTO company_settings (key, value) VALUES (?,?)", (k, str(v)))
+        conn.execute(
+            "INSERT OR REPLACE INTO company_settings (key, value, workspace_id) VALUES (?,?,?)",
+            (k, str(v), workspace_id)
+        )
     conn.commit()
     conn.close()
     return {"status": "ok"}
 
 @app.post("/api/company-settings/logo", tags=["Settings"])
-async def upload_logo(file: UploadFile = File(...)):
+async def upload_logo(request: Request, file: UploadFile = File(...)):
+    workspace_id = _get_workspace(request)
     import base64
     contents = await file.read()
     # Store as base64 data URL
     mime = file.content_type or "image/png"
     data_url = f"data:{mime};base64," + base64.b64encode(contents).decode()
     conn = get_db()
-    conn.execute("INSERT OR REPLACE INTO company_settings (key, value) VALUES (?,?)", ("logo", data_url))
+    conn.execute(
+        "INSERT OR REPLACE INTO company_settings (key, value, workspace_id) VALUES (?,?,?)",
+        ("logo", data_url, workspace_id)
+    )
     conn.commit()
     conn.close()
     return {"status": "ok", "logo": data_url}
@@ -6255,8 +6387,8 @@ async def _send_kpi_alert_email(to_email: str, alerts: list) -> bool:
 @app.post("/api/auth/request-link")
 async def request_magic_link(body: MagicLinkRequest, request: Request):
     email = body.email.strip().lower()
-    if email not in ALLOWED_EMAILS:
-        raise HTTPException(status_code=403, detail="Email not authorized. Contact your administrator.")
+    if not _is_work_email(email):
+        raise HTTPException(status_code=403, detail="Please use your work email address. Free email providers (Gmail, Yahoo, etc.) are not supported.")
     token = secrets.token_urlsafe(32)
     expires = (datetime.utcnow() + timedelta(minutes=15)).isoformat()
     try:
@@ -6364,12 +6496,24 @@ async def magic_link_redirect(token: str):
     }
     jwt_token = _jwt.encode(payload, JWT_SECRET, algorithm="HS256")
     # Redirect to frontend with JWT in hash fragment (never sent to server, Safari-safe)
-    return RedirectResponse(url=f"{APP_URL}/#jwt={jwt_token}", status_code=302)
+    response = RedirectResponse(url=f"{APP_URL}/#jwt={jwt_token}", status_code=302)
+    response.set_cookie(
+        key="axiom_session",
+        value=jwt_token,
+        max_age=30*24*3600,  # 30 days
+        path="/",
+        samesite="lax",
+        secure=True,
+        httponly=False  # Must be False so JS can also read it
+    )
+    return response
 
 @app.get("/api/auth/me")
 async def auth_me(request: Request):
     auth_header = request.headers.get("Authorization", "")
     token_str = auth_header.replace("Bearer ", "").strip()
+    if not token_str:
+        token_str = request.cookies.get("axiom_session", "")
     if not token_str:
         raise HTTPException(status_code=401, detail="No token provided")
     if not _JWT_AVAILABLE:
@@ -6380,15 +6524,23 @@ async def auth_me(request: Request):
     except Exception:
         raise HTTPException(status_code=401, detail="Invalid or expired token")
 
+@app.post("/api/auth/logout")
+async def logout():
+    from fastapi.responses import JSONResponse
+    response = JSONResponse({"message": "Logged out"})
+    response.delete_cookie("axiom_session", path="/")
+    return response
+
 @app.post("/api/alerts/send-kpi-alert")
 async def trigger_kpi_alert(request: Request):
     """Manually trigger KPI alert email for all critical KPIs."""
+    workspace_id = _get_workspace(request)
     conn = get_db()
-    targets = {r["kpi_key"]: r["target_value"] for r in conn.execute("SELECT * FROM kpi_targets").fetchall()}
+    targets = {r["kpi_key"]: r["target_value"] for r in conn.execute("SELECT * FROM kpi_targets WHERE workspace_id=?", [workspace_id]).fetchall()}
     conn.close()
     alerts = []
     try:
-        fingerprint = _compute_fingerprint_data(targets)
+        fingerprint = _compute_fingerprint_data(targets_override=targets, workspace_id=workspace_id)
         for kpi in fingerprint.get("kpis", []):
             if kpi.get("fy_status") == "critical":
                 alerts.append({
