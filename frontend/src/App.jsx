@@ -310,8 +310,20 @@ export default function App() {
 
   const closeKpi = () => setSelectedKpi(null)
 
-  // Handle auth token from magic link URL
+  // Handle JWT from magic link redirect (hash fragment — Safari-safe)
   useEffect(() => {
+    const hash = window.location.hash
+    if (hash.startsWith('#jwt=')) {
+      const jwt = hash.slice(5)
+      if (jwt) {
+        localStorage.setItem('axiom_auth_token', jwt)
+        setAuthToken(jwt)
+        setAuthChecked(true)
+        // Clean URL — remove hash
+        window.history.replaceState({}, '', window.location.pathname)
+      }
+    }
+    // Legacy: also handle ?auth_token= query param for old links
     const params = new URLSearchParams(window.location.search)
     const token = params.get('auth_token')
     if (token) {
@@ -325,7 +337,7 @@ export default function App() {
           if (d.token) {
             localStorage.setItem('axiom_auth_token', d.token)
             setAuthToken(d.token)
-            // Clean URL
+            setAuthChecked(true)
             window.history.replaceState({}, '', window.location.pathname)
           }
         })

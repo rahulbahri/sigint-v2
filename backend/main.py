@@ -6270,7 +6270,7 @@ async def request_magic_link(body: MagicLinkRequest, request: Request):
     except Exception as _db_err:
         print(f"[WARN] Could not persist magic token ({_db_err}), using in-memory fallback")
         _MAGIC_TOKEN_CACHE[token] = {"email": email, "expires_at": expires}
-    magic_url = f"{APP_URL}/?auth_token={token}"
+    magic_url = f"{APP_URL}/api/auth/login/{token}"
     sent = await _send_magic_link_email(email, magic_url)
     return {"message": "Magic link sent" if sent else "Magic link generated (email not configured)", "sent": sent}
 
@@ -6319,6 +6319,52 @@ async def verify_magic_token(body: VerifyTokenRequest):
     }
     token_str = _jwt.encode(payload, JWT_SECRET, algorithm="HS256")
     return {"token": token_str, "email": email}
+
+@app.get("/api/auth/login/{token}")
+async def magic_link_redirect(token: str):
+    """Server-side magic link handler — verifies token, sets cookie, redirects to app."""
+    from fastapi.responses import RedirectResponse, HTMLResponse
+    email = None
+    if token in _MAGIC_TOKEN_CACHE:
+        cached = _MAGIC_TOKEN_CACHE.pop(token)
+        expires = datetime.fromisoformat(cached["expires_at"])
+        if datetime.utcnow() > expires:
+            return RedirectResponse(url=f"{APP_URL}/?auth_error=expired")
+        email = cached["email"]
+    else:
+        try:
+            conn = get_db()
+            row = conn.execute(
+                "SELECT * FROM magic_tokens WHERE token=? AND used=0", [token]
+            ).fetchone()
+            if not row:
+                return RedirectResponse(url=f"{APP_URL}/?auth_error=invalid")
+            expires = datetime.fromisoformat(str(row["expires_at"]))
+            if datetime.utcnow() > expires:
+                return RedirectResponse(url=f"{APP_URL}/?auth_error=expired")
+            email = str(row["email"])
+            conn.execute("UPDATE magic_tokens SET used=1 WHERE token=?", [token])
+            try:
+                conn.execute("INSERT OR IGNORE INTO users (email) VALUES (?)", [email])
+                conn.execute("UPDATE users SET last_login=? WHERE email=?",
+                             [datetime.utcnow().isoformat(), email])
+            except Exception:
+                pass
+            conn.commit()
+            conn.close()
+        except Exception as _e:
+            return RedirectResponse(url=f"{APP_URL}/?auth_error=error")
+    if not _JWT_AVAILABLE:
+        return RedirectResponse(url=f"{APP_URL}/?auth_error=config")
+    payload = {
+        "email": email,
+        "role": "admin",
+        "exp": datetime.utcnow() + timedelta(days=30),
+        "iat": datetime.utcnow(),
+    }
+    jwt_token = _jwt.encode(payload, JWT_SECRET, algorithm="HS256")
+    # Redirect to frontend with JWT in hash fragment (never sent to server, Safari-safe)
+    return RedirectResponse(url=f"{APP_URL}/#jwt={jwt_token}", status_code=302)
 
 @app.get("/api/auth/me")
 async def auth_me(request: Request):
