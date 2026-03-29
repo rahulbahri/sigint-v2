@@ -152,6 +152,24 @@ export default function App() {
     setAuthChecked(true)
   }
 
+  // ── Axios 401 interceptor — auto-logout on expired session ────────────────
+  useEffect(() => {
+    const id = axios.interceptors.response.use(
+      res => res,
+      err => {
+        if (err?.response?.status === 401) {
+          // Session has expired server-side — clear everything and show login
+          localStorage.removeItem('axiom_auth_token')
+          document.cookie = 'axiom_session=; path=/; max-age=0'
+          setAuthToken('')
+          setAuthChecked(true)
+        }
+        return Promise.reject(err)
+      }
+    )
+    return () => axios.interceptors.response.eject(id)
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
   // ── Decode user email from JWT ────────────────────────────────────────────
   const userEmail = useMemo(() => {
     if (!authToken) return ''
