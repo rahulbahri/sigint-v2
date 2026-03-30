@@ -4,7 +4,7 @@ import {
   LayoutDashboard, Fingerprint, TrendingUp,
   Upload, Code2, RefreshCw, ChevronRight,
   Activity, GitBranch, Network, Layers, BarChart2, BookOpen, Bell, Settings2, Target,
-  Shield, Menu, X, Zap, LogOut, User, ShieldCheck
+  Shield, Menu, X, Zap, LogOut, User, ShieldCheck, AlertCircle as AlertCircleIcon
 } from 'lucide-react'
 import Scorecard from './components/Scorecard.jsx'
 import Fingerprint2 from './components/Fingerprint.jsx'
@@ -31,6 +31,9 @@ import PricingPage from './components/PricingPage'
 import LoginPage from './components/LoginPage'
 import AdminPanel from './components/AdminPanel.jsx'
 import LegalPage from './components/LegalPage.jsx'
+import DataSourcesPage from './components/DataSourcesPage.jsx'
+import DataGapsPage from './components/DataGapsPage.jsx'
+import FieldMappingPage from './components/FieldMappingPage.jsx'
 
 // ── V2: Nav structured into labelled zones with business-friendly names ──────
 const NAV_GROUPS = [
@@ -51,9 +54,17 @@ const NAV_GROUPS = [
     ],
   },
   {
+    label: 'Data',
+    tabs: [
+      { id: 'sources',  label: 'Data Sources',    Icon: Zap       },
+      { id: 'gaps',     label: 'Data Gaps',       Icon: AlertCircleIcon },
+      { id: 'mappings', label: 'Field Mappings',  Icon: GitBranch },
+      { id: 'upload',   label: 'Manual Upload',   Icon: Upload    },
+    ],
+  },
+  {
     label: 'Settings',
     tabs: [
-      { id: 'upload',  label: 'Data Upload',      Icon: Upload    },
       { id: 'alerts',  label: 'Slack Alerts',     Icon: Bell      },
       { id: 'targets', label: 'KPI Targets',      Icon: Target    },
       { id: 'audit',   label: 'Audit Trail',      Icon: Shield    },
@@ -82,7 +93,10 @@ const PAGE_TITLES = {
   projection:  'Plan vs Actual',
   ontology:    'KPI Causal Map',
   forecast:    'Forward Signals — 90-Day Outlook',
-  upload:      'Data Upload',
+  sources:     'Data Sources',
+  gaps:        'Data Gaps',
+  mappings:    'Field Mappings',
+  upload:      'Manual Upload',
   alerts:      'Slack Alerts',
   targets:     'KPI Targets',
   api:         'API Reference',
@@ -812,6 +826,9 @@ export default function App() {
               )}
               {tab === 'ontology'    && <OntologyPage />}
               {tab === 'forecast'    && <ForecastPage />}
+              {tab === 'sources'     && <DataSourcesPage />}
+              {tab === 'gaps'        && <DataGapsPage />}
+              {tab === 'mappings'    && <FieldMappingPage />}
               {tab === 'upload'      && <CSVUpload onUploaded={loadAll}/>}
               {tab === 'alerts'      && <SlackAlerts filteredFingerprint={filteredFingerprint}/>}
               {tab === 'targets'     && <TargetsEditor />}
@@ -825,6 +842,9 @@ export default function App() {
 
           {!loading && noData && tab === 'ontology'   && <OntologyPage />}
           {!loading && noData && tab === 'forecast'   && <ForecastPage />}
+          {!loading && (tab === 'sources')            && <DataSourcesPage />}
+          {!loading && (tab === 'gaps')               && <DataGapsPage />}
+          {!loading && (tab === 'mappings')           && <FieldMappingPage />}
           {!loading && noData && tab === 'upload'     && <CSVUpload onUploaded={loadAll}/>}
           {!loading && noData && tab === 'alerts'     && <SlackAlerts filteredFingerprint={[]}/>}
           {!loading && noData && tab === 'targets'    && <TargetsEditor />}

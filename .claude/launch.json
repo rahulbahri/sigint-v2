@@ -2,11 +2,10 @@
   "version": "0.0.1",
   "configurations": [
     {
-      "name": "Signal V2 Backend",
-      "runtimeExecutable": "python3",
-      "runtimeArgs": ["-m", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8003", "--reload"],
-      "port": 8003,
-      "cwd": "/Users/rahulbahri/Signal-platform V2/signals-intelligence-v2/backend"
+      "name": "frontend",
+      "runtimeExecutable": "bash",
+      "runtimeArgs": ["frontend/vite-preview.sh"],
+      "port": 5174
     }
   ]
 }

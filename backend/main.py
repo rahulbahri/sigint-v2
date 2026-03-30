@@ -1,7 +1,7 @@
 from fastapi import FastAPI, UploadFile, File, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse, RedirectResponse
 import pandas as pd
 import numpy as np
 import io, os, json, sqlite3, re, secrets, base64
@@ -6915,6 +6915,462 @@ async def qb_sync():
         raise HTTPException(status_code=400, detail=f"QuickBooks API error: {resp.status_code}")
     _audit("data_synced", "quickbooks", realm_id, "QuickBooks P&L data synced")
     return {"synced": True, "data": resp.json()}
+
+
+# ─── ELT: Connectors, Field Mappings, Data Gaps ──────────────────────────────
+
+import sys as _sys
+_sys.path.insert(0, str(Path(__file__).parent))
+
+from connectors.base import encrypt_credentials, decrypt_credentials, ConnectorError
+from connectors.stripe_connector     import StripeConnector
+from connectors.hubspot_connector    import HubSpotConnector
+from connectors.quickbooks_connector import QuickBooksConnector
+from connectors.xero_connector       import XeroConnector
+from connectors.shopify_connector    import ShopifyConnector
+from connectors.salesforce_connector import SalesforceConnector
+from elt.transformer  import Transformer
+from elt.gap_detector import GapDetector
+
+_CONNECTORS = {
+    "stripe":      StripeConnector(),
+    "hubspot":     HubSpotConnector(),
+    "quickbooks":  QuickBooksConnector(),
+    "xero":        XeroConnector(),
+    "shopify":     ShopifyConnector(),
+    "salesforce":  SalesforceConnector(),
+}
+
+_SOURCE_LABELS = {
+    "stripe":     "Stripe",
+    "hubspot":    "HubSpot",
+    "quickbooks": "QuickBooks",
+    "xero":       "Xero",
+    "shopify":    "Shopify",
+    "salesforce": "Salesforce",
+}
+
+
+def _elt_ensure_tables(conn) -> None:
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS connector_configs (
+            id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+            workspace_id        TEXT NOT NULL,
+            source_name         TEXT NOT NULL,
+            credentials_enc     TEXT,
+            sync_status         TEXT DEFAULT 'pending',
+            last_sync_at        TEXT,
+            last_error          TEXT,
+            created_at          TEXT DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(workspace_id, source_name)
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS raw_extracts (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            workspace_id    TEXT NOT NULL,
+            source_name     TEXT NOT NULL,
+            entity_type     TEXT NOT NULL,
+            raw_json        TEXT NOT NULL,
+            extracted_at    TEXT DEFAULT CURRENT_TIMESTAMP,
+            processed       INTEGER DEFAULT 0
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS field_mappings (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            workspace_id    TEXT NOT NULL,
+            source_name     TEXT NOT NULL,
+            source_field    TEXT NOT NULL,
+            canonical_table TEXT NOT NULL,
+            canonical_field TEXT NOT NULL,
+            confidence      REAL DEFAULT 0,
+            confirmed_by_user INTEGER DEFAULT 0,
+            created_at      TEXT DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(workspace_id, source_name, source_field, canonical_table)
+        )
+    """)
+    conn.commit()
+
+
+def _run_elt_sync(workspace_id: str, source_name: str, credentials: dict) -> dict:
+    """Run full ELT for one source. Called in background thread."""
+    connector = _CONNECTORS.get(source_name)
+    if not connector:
+        return {"error": f"Unknown connector: {source_name}"}
+    conn = get_db()
+    try:
+        _elt_ensure_tables(conn)
+        # Refresh token if needed
+        try:
+            credentials = connector.refresh_token(credentials)
+        except Exception:
+            pass
+
+        bundles = connector.extract(workspace_id, credentials)
+        transformer = Transformer(conn, workspace_id, source_name)
+        total_upserted = 0
+        for bundle in bundles:
+            entity_type = bundle["entity_type"]
+            records     = bundle["records"]
+            # Store raw
+            conn.execute(
+                "INSERT INTO raw_extracts (workspace_id, source_name, entity_type, raw_json) "
+                "VALUES (?,?,?,?)",
+                [workspace_id, source_name, entity_type, json.dumps(records)],
+            )
+            # Transform + upsert canonical
+            canonical = transformer.transform(entity_type, records)
+            n = transformer.upsert_canonical(entity_type, canonical)
+            total_upserted += n
+            # Save/update field mappings
+            if records:
+                transformer.save_mappings(entity_type, records[0])
+
+        # Update connector status
+        conn.execute(
+            "UPDATE connector_configs SET sync_status='ok', last_sync_at=datetime('now'), "
+            "last_error=NULL WHERE workspace_id=? AND source_name=?",
+            [workspace_id, source_name],
+        )
+        conn.commit()
+        _audit("data_synced", source_name, workspace_id, f"ELT sync: {total_upserted} records")
+        return {"synced": True, "records_upserted": total_upserted}
+    except ConnectorError as ce:
+        conn.execute(
+            "UPDATE connector_configs SET sync_status='error', last_error=? "
+            "WHERE workspace_id=? AND source_name=?",
+            [str(ce), workspace_id, source_name],
+        )
+        conn.commit()
+        return {"error": str(ce)}
+    except Exception as ex:
+        conn.execute(
+            "UPDATE connector_configs SET sync_status='error', last_error=? "
+            "WHERE workspace_id=? AND source_name=?",
+            [str(ex), workspace_id, source_name],
+        )
+        conn.commit()
+        return {"error": "Sync failed — check logs"}
+    finally:
+        conn.close()
+
+
+# ── List all connectors + status ──────────────────────────────────────────────
+
+@app.get("/api/connectors", tags=["ELT"])
+async def list_connectors(request: Request):
+    workspace_id = _get_workspace(request)
+    if not workspace_id:
+        raise HTTPException(status_code=401, detail="Unauthorised")
+    conn = get_db()
+    _elt_ensure_tables(conn)
+    rows = conn.execute(
+        "SELECT source_name, sync_status, last_sync_at, last_error "
+        "FROM connector_configs WHERE workspace_id=?",
+        [workspace_id],
+    ).fetchall()
+    conn.close()
+    connected = {r[0]: {
+        "source_name":  r[0],
+        "label":        _SOURCE_LABELS.get(r[0], r[0].title()),
+        "status":       r[1],
+        "last_sync_at": r[2],
+        "last_error":   r[3],
+        "connected":    True,
+    } for r in rows}
+
+    all_sources = []
+    for key, label in _SOURCE_LABELS.items():
+        if key in connected:
+            all_sources.append(connected[key])
+        else:
+            all_sources.append({
+                "source_name": key,
+                "label":       label,
+                "status":      "not_connected",
+                "last_sync_at": None,
+                "last_error":   None,
+                "connected":   False,
+            })
+    return {"connectors": all_sources}
+
+
+# ── Stripe: connect with API key ──────────────────────────────────────────────
+
+@app.post("/api/connectors/stripe/connect", tags=["ELT"])
+async def stripe_connect(request: Request):
+    workspace_id = _get_workspace(request)
+    if not workspace_id:
+        raise HTTPException(status_code=401, detail="Unauthorised")
+    body = await request.json()
+    api_key = body.get("api_key", "").strip()
+    if not api_key:
+        raise HTTPException(status_code=400, detail="api_key is required")
+    connector = _CONNECTORS["stripe"]
+    if not connector.validate_credentials({"api_key": api_key}):
+        raise HTTPException(status_code=400, detail="Invalid Stripe API key — validation failed")
+    enc = encrypt_credentials({"api_key": api_key})
+    conn = get_db()
+    _elt_ensure_tables(conn)
+    conn.execute(
+        "INSERT INTO connector_configs (workspace_id, source_name, credentials_enc, sync_status) "
+        "VALUES (?,?,?,'connected') "
+        "ON CONFLICT(workspace_id, source_name) DO UPDATE SET "
+        "credentials_enc=excluded.credentials_enc, sync_status='connected', last_error=NULL",
+        [workspace_id, "stripe", enc],
+    )
+    conn.commit()
+    conn.close()
+    _audit("integration_connected", "stripe", workspace_id, "Stripe API key connected")
+    return {"connected": True}
+
+
+# ── OAuth: get auth URL for OAuth2 sources ────────────────────────────────────
+
+@app.get("/api/connectors/{source}/auth-url", tags=["ELT"])
+async def connector_auth_url(source: str, request: Request):
+    workspace_id = _get_workspace(request)
+    if not workspace_id:
+        raise HTTPException(status_code=401, detail="Unauthorised")
+    connector = _CONNECTORS.get(source)
+    if not connector or connector.AUTH_TYPE != "oauth2":
+        raise HTTPException(status_code=404, detail=f"OAuth connector '{source}' not found")
+    state        = secrets.token_urlsafe(16)
+    redirect_uri = f"{APP_URL}/api/connectors/{source}/callback"
+    try:
+        auth_url = connector.get_auth_url(redirect_uri, state)
+    except (NotImplementedError, KeyError) as exc:
+        raise HTTPException(status_code=503, detail=f"{source} not configured: {exc}")
+    # Store state→workspace mapping briefly in DB
+    conn = get_db()
+    _elt_ensure_tables(conn)
+    conn.execute(
+        "INSERT OR REPLACE INTO connector_configs "
+        "(workspace_id, source_name, sync_status) VALUES (?,?,'pending') "
+        "ON CONFLICT(workspace_id, source_name) DO UPDATE SET sync_status='pending'",
+        [workspace_id, source],
+    )
+    conn.commit()
+    # Stash state in a temp table so callback can look up workspace
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS oauth_states (
+            state TEXT PRIMARY KEY,
+            workspace_id TEXT,
+            source_name TEXT,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    conn.execute(
+        "INSERT OR REPLACE INTO oauth_states (state, workspace_id, source_name) VALUES (?,?,?)",
+        [state, workspace_id, source],
+    )
+    conn.commit()
+    conn.close()
+    return {"auth_url": auth_url, "state": state}
+
+
+# ── OAuth callback (shared for all OAuth2 connectors) ─────────────────────────
+
+@app.get("/api/connectors/{source}/callback", tags=["ELT"])
+async def connector_oauth_callback(
+    source: str,
+    request: Request,
+    code: str = "",
+    state: str = "",
+    error: str = "",
+    shop: str = "",        # Shopify
+    realmId: str = "",     # QuickBooks
+):
+    if error:
+        return RedirectResponse(url=f"{APP_URL}?connector_error={source}:{error}")
+    connector = _CONNECTORS.get(source)
+    if not connector:
+        raise HTTPException(status_code=404, detail=f"Unknown connector: {source}")
+
+    # Look up workspace from state
+    conn = get_db()
+    state_row = conn.execute(
+        "SELECT workspace_id FROM oauth_states WHERE state=?", [state]
+    ).fetchone()
+    if not state_row:
+        conn.close()
+        return RedirectResponse(url=f"{APP_URL}?connector_error={source}:invalid_state")
+    workspace_id = state_row[0]
+    conn.execute("DELETE FROM oauth_states WHERE state=?", [state])
+    conn.commit()
+
+    redirect_uri = f"{APP_URL}/api/connectors/{source}/callback"
+    try:
+        if source == "shopify":
+            shop_domain = shop or state.split("|")[-1]
+            credentials = connector.exchange_code_for_shop(code, shop_domain)
+        elif source == "quickbooks":
+            credentials = connector.exchange_code(code, redirect_uri)
+            credentials["realmId"] = realmId
+        else:
+            credentials = connector.exchange_code(code, redirect_uri)
+    except ConnectorError as ce:
+        conn.execute(
+            "UPDATE connector_configs SET sync_status='error', last_error=? "
+            "WHERE workspace_id=? AND source_name=?",
+            [str(ce), workspace_id, source],
+        )
+        conn.commit()
+        conn.close()
+        return RedirectResponse(url=f"{APP_URL}?connector_error={source}:token_exchange_failed")
+
+    enc = encrypt_credentials(credentials)
+    conn.execute(
+        "INSERT INTO connector_configs (workspace_id, source_name, credentials_enc, sync_status) "
+        "VALUES (?,?,?,'connected') "
+        "ON CONFLICT(workspace_id, source_name) DO UPDATE SET "
+        "credentials_enc=excluded.credentials_enc, sync_status='connected', last_error=NULL",
+        [workspace_id, source, enc],
+    )
+    conn.commit()
+    conn.close()
+    _audit("integration_connected", source, workspace_id, f"{source.title()} OAuth connected")
+
+    # Kick off initial sync in background
+    import threading as _threading
+    row = get_db().execute(
+        "SELECT credentials_enc FROM connector_configs WHERE workspace_id=? AND source_name=?",
+        [workspace_id, source],
+    ).fetchone()
+    if row:
+        creds = decrypt_credentials(row[0])
+        _threading.Thread(
+            target=_run_elt_sync, args=(workspace_id, source, creds), daemon=True
+        ).start()
+
+    return RedirectResponse(url=f"{APP_URL}?connector_connected={source}")
+
+
+# ── Disconnect a connector ────────────────────────────────────────────────────
+
+@app.delete("/api/connectors/{source}", tags=["ELT"])
+async def disconnect_connector(source: str, request: Request):
+    workspace_id = _get_workspace(request)
+    if not workspace_id:
+        raise HTTPException(status_code=401, detail="Unauthorised")
+    conn = get_db()
+    conn.execute(
+        "DELETE FROM connector_configs WHERE workspace_id=? AND source_name=?",
+        [workspace_id, source],
+    )
+    conn.commit()
+    conn.close()
+    _audit("integration_disconnected", source, workspace_id, f"{source.title()} disconnected")
+    return {"disconnected": True}
+
+
+# ── Trigger manual sync ───────────────────────────────────────────────────────
+
+@app.post("/api/connectors/{source}/sync", tags=["ELT"])
+async def sync_connector(source: str, request: Request):
+    workspace_id = _get_workspace(request)
+    if not workspace_id:
+        raise HTTPException(status_code=401, detail="Unauthorised")
+    conn = get_db()
+    row = conn.execute(
+        "SELECT credentials_enc FROM connector_configs WHERE workspace_id=? AND source_name=?",
+        [workspace_id, source],
+    ).fetchone()
+    conn.close()
+    if not row:
+        raise HTTPException(status_code=404, detail=f"{source} not connected")
+    credentials = decrypt_credentials(row[0])
+    import threading as _threading
+    _threading.Thread(
+        target=_run_elt_sync, args=(workspace_id, source, credentials), daemon=True
+    ).start()
+    return {"message": f"Sync started for {source}"}
+
+
+# ── Field mappings: list + confirm ────────────────────────────────────────────
+
+@app.get("/api/connectors/mappings", tags=["ELT"])
+async def list_field_mappings(request: Request, source: str = "", needs_review: bool = False):
+    workspace_id = _get_workspace(request)
+    if not workspace_id:
+        raise HTTPException(status_code=401, detail="Unauthorised")
+    conn = get_db()
+    sql  = "SELECT * FROM field_mappings WHERE workspace_id=?"
+    args = [workspace_id]
+    if source:
+        sql  += " AND source_name=?"
+        args.append(source)
+    if needs_review:
+        sql  += " AND confirmed_by_user=0 AND confidence < 0.85"
+    rows = conn.execute(sql, args).fetchall()
+    conn.close()
+    cols = ["id","workspace_id","source_name","source_field","canonical_table",
+            "canonical_field","confidence","confirmed_by_user","created_at"]
+    return {"mappings": [dict(zip(cols, r)) for r in rows]}
+
+
+@app.put("/api/connectors/mappings/{mapping_id}", tags=["ELT"])
+async def confirm_field_mapping(mapping_id: int, request: Request):
+    workspace_id = _get_workspace(request)
+    if not workspace_id:
+        raise HTTPException(status_code=401, detail="Unauthorised")
+    body = await request.json()
+    canonical_field = body.get("canonical_field", "")
+    if not canonical_field:
+        raise HTTPException(status_code=400, detail="canonical_field required")
+    conn = get_db()
+    conn.execute(
+        "UPDATE field_mappings SET canonical_field=?, confirmed_by_user=1, confidence=1.0 "
+        "WHERE id=? AND workspace_id=?",
+        [canonical_field, mapping_id, workspace_id],
+    )
+    conn.commit()
+    conn.close()
+    return {"updated": True}
+
+
+# ── Data gaps ─────────────────────────────────────────────────────────────────
+
+@app.get("/api/data-gaps", tags=["ELT"])
+async def get_data_gaps(request: Request):
+    workspace_id = _get_workspace(request)
+    if not workspace_id:
+        raise HTTPException(status_code=401, detail="Unauthorised")
+    conn = get_db()
+    detector = GapDetector(conn, workspace_id)
+    report   = detector.run()
+    conn.close()
+    return report.to_dict()
+
+
+# ── Canonical data preview ────────────────────────────────────────────────────
+
+@app.get("/api/canonical/{entity_type}", tags=["ELT"])
+async def get_canonical_data(entity_type: str, request: Request, limit: int = 100):
+    workspace_id = _get_workspace(request)
+    if not workspace_id:
+        raise HTTPException(status_code=401, detail="Unauthorised")
+    safe_entity = re.sub(r"[^a-z_]", "", entity_type)
+    table       = f"canonical_{safe_entity}"
+    conn        = get_db()
+    try:
+        rows = conn.execute(
+            f"SELECT * FROM {table} WHERE workspace_id=? LIMIT ?",
+            [workspace_id, limit],
+        ).fetchall()
+        if not rows:
+            return {"records": [], "total": 0}
+        cols    = [d[0] for d in conn.execute(f"PRAGMA table_info({table})").fetchall()]
+        records = [dict(zip(cols, r)) for r in rows]
+        total   = conn.execute(
+            f"SELECT COUNT(*) FROM {table} WHERE workspace_id=?", [workspace_id]
+        ).fetchone()[0]
+        return {"records": records, "total": total}
+    except Exception:
+        return {"records": [], "total": 0}
+    finally:
+        conn.close()
 
 
 # ─── Serve React Frontend ───────────────────────────────────────────────────
