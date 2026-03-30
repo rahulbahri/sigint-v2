@@ -455,6 +455,12 @@ def init_db():
         ("ebitda_margin",      22.0,   "pct",    "higher"),
         ("cash_conv_cycle",    42.0,   "days",   "lower"),
         ("dso",                35.0,   "days",   "lower"),
+        ("ar_turnover",         8.5,   "ratio",  "higher"),
+        ("avg_collection_period", 43.0, "days",  "lower"),
+        ("cei",                90.0,   "pct",    "higher"),
+        ("ar_aging_current",   75.0,   "pct",    "higher"),
+        ("ar_aging_overdue",   25.0,   "pct",    "lower"),
+        ("billable_utilization", 72.0, "pct",    "higher"),
         ("arr_growth",          7.0,   "pct",    "higher"),
         ("nrr",               105.0,   "pct",    "higher"),
         ("burn_multiple",       1.2,   "ratio",  "lower"),
@@ -649,8 +655,14 @@ KPI_DEFS = [
     {"key": "gross_margin",         "name": "Gross Margin %",            "unit": "pct",    "direction": "higher", "formula": "(Revenue - COGS) / Revenue × 100"},
     {"key": "operating_margin",     "name": "Operating Margin %",        "unit": "pct",    "direction": "higher", "formula": "(Revenue - COGS - OpEx) / Revenue × 100"},
     {"key": "ebitda_margin",        "name": "EBITDA Margin %",           "unit": "pct",    "direction": "higher", "formula": "EBITDA / Revenue × 100"},
-    {"key": "cash_conv_cycle",      "name": "Cash Conversion Cycle",     "unit": "days",   "direction": "lower",  "formula": "DSO + DIO - DPO"},
-    {"key": "dso",                  "name": "Days Sales Outstanding",    "unit": "days",   "direction": "lower",  "formula": "(AR / Revenue) × 30"},
+    {"key": "cash_conv_cycle",      "name": "Cash Conversion Cycle",     "unit": "days",   "direction": "lower",  "formula": "DSO + DIO - DPO",                                          "domain": "cashflow"},
+    {"key": "dso",                  "name": "Days Sales Outstanding",    "unit": "days",   "direction": "lower",  "formula": "(AR / Revenue) × 30",                                         "domain": "cashflow"},
+    {"key": "ar_turnover",          "name": "AR Turnover Ratio",         "unit": "ratio",  "direction": "higher", "formula": "Net_Credit_Sales / Average_AR",                               "domain": "cashflow"},
+    {"key": "avg_collection_period","name": "Avg Collection Period",     "unit": "days",   "direction": "lower",  "formula": "365 / AR_Turnover_Ratio",                                     "domain": "cashflow"},
+    {"key": "cei",                  "name": "Collections Effectiveness", "unit": "pct",    "direction": "higher", "formula": "(Beg_AR + Sales - End_AR) / (Beg_AR + Sales - Current_AR) × 100", "domain": "cashflow"},
+    {"key": "ar_aging_current",     "name": "AR Current (0-30 days)",    "unit": "pct",    "direction": "higher", "formula": "Current_AR / Total_AR × 100",                                 "domain": "cashflow"},
+    {"key": "ar_aging_overdue",     "name": "AR Overdue (30+ days)",     "unit": "pct",    "direction": "lower",  "formula": "Overdue_AR / Total_AR × 100",                                 "domain": "cashflow"},
+    {"key": "billable_utilization", "name": "Billable Utilization Rate", "unit": "pct",    "direction": "higher", "formula": "Billable_Hours / Total_Available_Hours × 100",                "domain": "efficiency"},
     {"key": "arr_growth",           "name": "ARR Growth Rate",           "unit": "pct",    "direction": "higher", "formula": "(ARR_Month - ARR_PrevMonth) / ARR_PrevMonth × 100"},
     {"key": "nrr",                  "name": "Net Revenue Retention",     "unit": "pct",    "direction": "higher", "formula": "(MRR_Start + Expansion - Churn - Contraction) / MRR_Start × 100"},
     {"key": "burn_multiple",        "name": "Burn Multiple",             "unit": "ratio",  "direction": "lower",  "formula": "Net Burn / Net New ARR"},
@@ -747,11 +759,87 @@ CAUSATION_RULES = {
             "Loosened credit terms or approval",
             "Customer cash flow difficulties",
         ],
-        "downstream_impact": ["cash_conv_cycle"],
+        "downstream_impact": ["cash_conv_cycle", "ar_turnover", "avg_collection_period", "cei"],
         "corrective_actions": [
             "Tighten credit approval criteria",
             "Automate payment reminders at 30/45/60 days",
             "Offer early payment discounts to accelerate collection",
+        ],
+    },
+    "ar_turnover": {
+        "root_causes": [
+            "Slow collections process",
+            "High DSO pulling down turnover rate",
+            "Large overdue AR balances not being pursued",
+        ],
+        "downstream_impact": ["avg_collection_period", "cash_conv_cycle", "cash_runway"],
+        "corrective_actions": [
+            "Review credit policies and reduce average credit terms",
+            "Increase collections team follow-up frequency",
+            "Prioritise top overdue accounts for direct outreach",
+        ],
+    },
+    "avg_collection_period": {
+        "root_causes": [
+            "AR Turnover Ratio declining",
+            "Invoice disputes slowing payment",
+            "Extended payment terms offered during sales",
+        ],
+        "downstream_impact": ["cash_conv_cycle", "working_capital"],
+        "corrective_actions": [
+            "Shorten standard payment terms where possible",
+            "Implement automated invoice dispute resolution",
+            "Offer early payment incentives for key accounts",
+        ],
+    },
+    "cei": {
+        "root_causes": [
+            "Collections team not following up on overdue accounts",
+            "High volume of disputed invoices",
+            "DSO extending faster than collections activity",
+        ],
+        "downstream_impact": ["cash_runway", "working_capital"],
+        "corrective_actions": [
+            "Set collections effectiveness targets per collector",
+            "Segment overdue AR by risk tier and prioritise outreach",
+            "Track and resolve invoice disputes within 48 hours",
+        ],
+    },
+    "ar_aging_current": {
+        "root_causes": [
+            "Strong collections process keeping AR current",
+            "Short payment terms in contracts",
+        ],
+        "downstream_impact": ["cei", "dso"],
+        "corrective_actions": [
+            "Monitor aging buckets weekly",
+            "Escalate accounts moving from current to 30+ days",
+        ],
+    },
+    "ar_aging_overdue": {
+        "root_causes": [
+            "Collections follow-up gaps at 30/60/90 day marks",
+            "Customer financial distress in receivables base",
+            "Invoice errors causing payment disputes",
+        ],
+        "downstream_impact": ["dso", "cash_runway", "cei"],
+        "corrective_actions": [
+            "Implement automated escalation at 30, 60, and 90 days overdue",
+            "Review customer credit limits for accounts with growing overdue balances",
+            "Audit invoices for errors that may be causing disputes",
+        ],
+    },
+    "billable_utilization": {
+        "root_causes": [
+            "High non-billable administrative time",
+            "Bench time between client projects",
+            "Underestimated project scopes reducing billable hours",
+        ],
+        "downstream_impact": ["rev_per_employee", "gross_margin", "headcount_eff"],
+        "corrective_actions": [
+            "Track time allocation weekly and identify non-billable drains",
+            "Reduce bench time by improving pipeline-to-delivery handoff",
+            "Review project scoping process to capture all billable work",
         ],
     },
     "cash_conv_cycle": {
@@ -1366,6 +1454,42 @@ BENCHMARKS = {
         "series_b": {"p25": 20,  "p50": 35,  "p75": 52},
         "series_c": {"p25": 18,  "p50": 30,  "p75": 48},
     },
+    "ar_turnover": {
+        "seed":     {"p25": 6.0, "p50": 8.5, "p75": 12.0},
+        "series_a": {"p25": 5.5, "p50": 8.0, "p75": 11.0},
+        "series_b": {"p25": 6.5, "p50": 9.0, "p75": 13.0},
+        "series_c": {"p25": 7.0, "p50": 10.0,"p75": 14.0},
+    },
+    "avg_collection_period": {
+        "seed":     {"p25": 30,  "p50": 43,  "p75": 61},
+        "series_a": {"p25": 33,  "p50": 46,  "p75": 66},
+        "series_b": {"p25": 28,  "p50": 41,  "p75": 56},
+        "series_c": {"p25": 26,  "p50": 37,  "p75": 52},
+    },
+    "cei": {
+        "seed":     {"p25": 75,  "p50": 88,  "p75": 95},
+        "series_a": {"p25": 72,  "p50": 85,  "p75": 93},
+        "series_b": {"p25": 78,  "p50": 90,  "p75": 96},
+        "series_c": {"p25": 80,  "p50": 92,  "p75": 97},
+    },
+    "ar_aging_current": {
+        "seed":     {"p25": 60,  "p50": 74,  "p75": 85},
+        "series_a": {"p25": 58,  "p50": 72,  "p75": 84},
+        "series_b": {"p25": 62,  "p50": 76,  "p75": 87},
+        "series_c": {"p25": 65,  "p50": 79,  "p75": 90},
+    },
+    "ar_aging_overdue": {
+        "seed":     {"p25": 15,  "p50": 26,  "p75": 40},
+        "series_a": {"p25": 16,  "p50": 28,  "p75": 42},
+        "series_b": {"p25": 13,  "p50": 24,  "p75": 38},
+        "series_c": {"p25": 10,  "p50": 21,  "p75": 35},
+    },
+    "billable_utilization": {
+        "seed":     {"p25": 58,  "p50": 70,  "p75": 80},
+        "series_a": {"p25": 60,  "p50": 72,  "p75": 82},
+        "series_b": {"p25": 62,  "p50": 74,  "p75": 84},
+        "series_c": {"p25": 65,  "p50": 76,  "p75": 86},
+    },
     "cash_conv_cycle": {
         "seed":     {"p25": 25,  "p50": 42,  "p75": 65},
         "series_a": {"p25": 28,  "p50": 45,  "p75": 68},
@@ -1769,10 +1893,18 @@ def seed_demo_projection():
     final_kpis: dict = {}
     for mo, rev, cogs_pct, f_opex, v_opex_pct, dso, rec_pct, churn_pct, cust, new_c, sm_pct in MP_PROJ:
         kpis = dict(base_by_mo.get(mo, {}))
-        kpis["dso"]             = round(dso * random.gauss(1.0, 0.02), 1)
-        kpis["cash_conv_cycle"] = round(kpis["dso"] + 8.0 + random.gauss(0, 0.5), 1)
-        kpis["revenue_quality"]  = round(rec_pct + random.gauss(0, 0.3), 2)
-        kpis["recurring_revenue"]= kpis["revenue_quality"]
+        kpis["dso"]                  = round(dso * random.gauss(1.0, 0.02), 1)
+        kpis["cash_conv_cycle"]      = round(kpis["dso"] + 8.0 + random.gauss(0, 0.5), 1)
+        kpis["ar_turnover"]          = round(365 / max(1, kpis["dso"] * (365/30)) * random.gauss(1.0, 0.03), 2)
+        kpis["avg_collection_period"]= round(365 / max(0.1, kpis["ar_turnover"]) * random.gauss(1.0, 0.02), 1)
+        _cei_base                    = max(70, 100 - (kpis["dso"] - 25) * 0.6)
+        kpis["cei"]                  = round(min(99, _cei_base * random.gauss(1.0, 0.015)), 1)
+        _overdue                     = round(max(5, min(60, (kpis["dso"] - 20) * 0.8 + random.gauss(0, 2))), 1)
+        kpis["ar_aging_overdue"]     = _overdue
+        kpis["ar_aging_current"]     = round(100 - _overdue, 1)
+        kpis["billable_utilization"] = round(random.gauss(72, 3), 1)
+        kpis["revenue_quality"]      = round(rec_pct + random.gauss(0, 0.3), 2)
+        kpis["recurring_revenue"]    = kpis["revenue_quality"]
         nrr_base = 115.43 - 5.29 * churn_pct
         kpis["churn_rate"] = round(churn_pct + random.gauss(0, 0.05), 2)
         kpis["nrr"]        = round(nrr_base  + random.gauss(0, 0.25), 1)
@@ -2303,12 +2435,20 @@ def seed_demo():
         sm_spend   = act_opex * sm_pct
 
         # ── DSO & Cash Cycle (seasonal; Dec high = year-end billing) ─────────
-        kpis["dso"]            = round(dso * random.gauss(1.0, 0.02), 1)
-        kpis["cash_conv_cycle"]= round(kpis["dso"] + 8.0 + random.gauss(0, 0.5), 1)
+        kpis["dso"]                  = round(dso * random.gauss(1.0, 0.02), 1)
+        kpis["cash_conv_cycle"]      = round(kpis["dso"] + 8.0 + random.gauss(0, 0.5), 1)
+        kpis["ar_turnover"]          = round(365 / max(1, kpis["dso"] * (365/30)) * random.gauss(1.0, 0.03), 2)
+        kpis["avg_collection_period"]= round(365 / max(0.1, kpis["ar_turnover"]) * random.gauss(1.0, 0.02), 1)
+        _cei_base                    = max(70, 100 - (kpis["dso"] - 25) * 0.6)
+        kpis["cei"]                  = round(min(99, _cei_base * random.gauss(1.0, 0.015)), 1)
+        _overdue                     = round(max(5, min(60, (kpis["dso"] - 20) * 0.8 + random.gauss(0, 2))), 1)
+        kpis["ar_aging_overdue"]     = _overdue
+        kpis["ar_aging_current"]     = round(100 - _overdue, 1)
+        kpis["billable_utilization"] = round(random.gauss(72, 3), 1)
 
         # ── Revenue Quality / Recurring Revenue ──────────────────────────────
-        kpis["revenue_quality"]  = round(rec_pct + random.gauss(0, 0.3), 2)
-        kpis["recurring_revenue"]= kpis["revenue_quality"]
+        kpis["revenue_quality"]      = round(rec_pct + random.gauss(0, 0.3), 2)
+        kpis["recurring_revenue"]    = kpis["revenue_quality"]
 
         # ── Churn Rate → NRR (near-perfect inverse, R ≈ -0.99) ──────────────
         # Calibrated linear: NRR = 98.5 when churn = 3.2%  (budget-freeze Jan)
