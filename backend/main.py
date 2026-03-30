@@ -528,8 +528,10 @@ except Exception as _init_err:
 @app.on_event("startup")
 async def auto_seed():
     """Auto-seed full multi-year demo data for rahul@axiomsync.ai on cold start."""
+    print(f"[STARTUP] auto_seed begin — USE_PG={_USE_PG}")
     try:
         conn = get_db()
+        print("[STARTUP] DB connection OK")
         count = conn.execute(
             "SELECT COUNT(*) FROM monthly_data WHERE workspace_id=?",
             ["rahul@axiomsync.ai"]
@@ -539,17 +541,24 @@ async def auto_seed():
             ["rahul@axiomsync.ai"]
         ).fetchone()[0]
         conn.close()
+        print(f"[STARTUP] monthly_data={count} projection_monthly_data={proj_count}")
         if count == 0 or proj_count == 0:
+            print("[STARTUP] Seeding demo data...")
             seed_multiyear(workspace_id="rahul@axiomsync.ai")
+            print("[STARTUP] Seed complete")
     except Exception as _seed_err:
+        import traceback as _tb2
         print(f"[WARN] auto_seed failed: {_seed_err}")
+        _tb2.print_exc()
     # Initialize ontology tables once at startup instead of on every GET request (M2)
     try:
         conn_ont = get_db()
         _init_ontology_tables(conn_ont)
         conn_ont.close()
-    except Exception:
-        pass
+        print("[STARTUP] Ontology tables OK")
+    except Exception as _ont_err:
+        print(f"[WARN] ontology init failed: {_ont_err}")
+    print("[STARTUP] auto_seed complete — server ready")
 
 # ─── KPI Definitions ────────────────────────────────────────────────────────
 
@@ -6922,17 +6931,31 @@ async def qb_sync():
 import sys as _sys
 _sys.path.insert(0, str(Path(__file__).parent))
 
-from connectors.base import encrypt_credentials, decrypt_credentials, ConnectorError
-from connectors.stripe_connector     import StripeConnector
-from connectors.hubspot_connector    import HubSpotConnector
-from connectors.quickbooks_connector import QuickBooksConnector
-from connectors.xero_connector       import XeroConnector
-from connectors.shopify_connector    import ShopifyConnector
-from connectors.salesforce_connector import SalesforceConnector
-from elt.transformer  import Transformer
-from elt.gap_detector import GapDetector
+try:
+    from connectors.base import encrypt_credentials, decrypt_credentials, ConnectorError
+    from connectors.stripe_connector     import StripeConnector
+    from connectors.hubspot_connector    import HubSpotConnector
+    from connectors.quickbooks_connector import QuickBooksConnector
+    from connectors.xero_connector       import XeroConnector
+    from connectors.shopify_connector    import ShopifyConnector
+    from connectors.salesforce_connector import SalesforceConnector
+    from elt.transformer  import Transformer
+    from elt.gap_detector import GapDetector
+    _ELT_AVAILABLE = True
+    print("[ELT] Connector modules loaded OK")
+except Exception as _elt_import_err:
+    import traceback as _elt_tb
+    print(f"[ELT] WARNING: connector import failed — ELT endpoints disabled: {_elt_import_err}")
+    _elt_tb.print_exc()
+    _ELT_AVAILABLE = False
+    # Stub classes so the rest of the file doesn't crash
+    class ConnectorError(Exception): pass
+    class Transformer: pass
+    class GapDetector: pass
+    def encrypt_credentials(c): return ""
+    def decrypt_credentials(t): return {}
 
-_CONNECTORS = {
+_CONNECTORS = {} if not _ELT_AVAILABLE else {
     "stripe":      StripeConnector(),
     "hubspot":     HubSpotConnector(),
     "quickbooks":  QuickBooksConnector(),
