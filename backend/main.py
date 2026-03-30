@@ -7126,6 +7126,34 @@ async def stripe_connect(request: Request):
     return {"connected": True}
 
 
+@app.post("/api/connectors/hubspot/connect", tags=["ELT"])
+async def hubspot_connect(request: Request):
+    workspace_id = _get_workspace(request)
+    if not workspace_id:
+        raise HTTPException(status_code=401, detail="Unauthorised")
+    body = await request.json()
+    api_key = body.get("api_key", "").strip()
+    if not api_key:
+        raise HTTPException(status_code=400, detail="api_key is required")
+    connector = _CONNECTORS["hubspot"]
+    if not connector.validate_credentials({"api_key": api_key}):
+        raise HTTPException(status_code=400, detail="Invalid HubSpot token — validation failed. Check scopes include contacts, deals, and companies.")
+    enc = encrypt_credentials({"api_key": api_key})
+    conn = get_db()
+    _elt_ensure_tables(conn)
+    conn.execute(
+        "INSERT INTO connector_configs (workspace_id, source_name, credentials_enc, sync_status) "
+        "VALUES (?,?,?,'connected') "
+        "ON CONFLICT(workspace_id, source_name) DO UPDATE SET "
+        "credentials_enc=excluded.credentials_enc, sync_status='connected', last_error=NULL",
+        [workspace_id, "hubspot", enc],
+    )
+    conn.commit()
+    conn.close()
+    _audit("integration_connected", "hubspot", workspace_id, "HubSpot private app token connected")
+    return {"connected": True}
+
+
 # ── OAuth: get auth URL for OAuth2 sources ────────────────────────────────────
 
 @app.get("/api/connectors/{source}/auth-url", tags=["ELT"])

@@ -77,6 +77,57 @@ function StripeConnectModal({ onClose, onConnected }) {
   )
 }
 
+function ApiTokenModal({ source, label, placeholder, helpText, helpUrl, onClose, onConnected }) {
+  const [apiKey, setApiKey] = useState('')
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState('')
+
+  async function handleConnect() {
+    if (!apiKey.trim()) { setError(`Enter your ${label} token`); return }
+    setLoading(true); setError('')
+    try {
+      await axios.post(`/api/connectors/${source}/connect`, { api_key: apiKey.trim() })
+      onConnected()
+      onClose()
+    } catch (e) {
+      setError(e.response?.data?.detail || 'Connection failed')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50">
+      <div className="bg-[#1a1f2e] border border-white/10 rounded-xl p-6 w-full max-w-md shadow-2xl">
+        <h3 className="text-white font-semibold text-lg mb-1">Connect {label}</h3>
+        <p className="text-gray-400 text-sm mb-4">
+          {helpText}{' '}
+          {helpUrl && <a href={helpUrl} target="_blank" rel="noreferrer" className="text-[#00AEEF] hover:underline">Get your token →</a>}
+        </p>
+        <div className="flex items-center gap-2 bg-[#0d1117] border border-white/10 rounded-lg px-3 py-2 mb-3">
+          <Key size={14} className="text-gray-500 shrink-0"/>
+          <input
+            type="password"
+            placeholder={placeholder}
+            value={apiKey}
+            onChange={e => setApiKey(e.target.value)}
+            onKeyDown={e => e.key === 'Enter' && handleConnect()}
+            className="bg-transparent text-white text-sm flex-1 outline-none placeholder-gray-600"
+          />
+        </div>
+        {error && <p className="text-red-400 text-xs mb-3">{error}</p>}
+        <div className="flex gap-2 justify-end">
+          <button onClick={onClose} className="px-4 py-2 text-sm text-gray-400 hover:text-white transition-colors">Cancel</button>
+          <button onClick={handleConnect} disabled={loading}
+            className="px-4 py-2 text-sm bg-[#00AEEF] text-white rounded-lg hover:bg-[#0099d4] disabled:opacity-50 transition-colors">
+            {loading ? 'Connecting…' : 'Connect'}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 function ShopifyConnectModal({ onClose }) {
   const [shop, setShop] = useState('')
 
@@ -155,9 +206,10 @@ export default function DataSourcesPage() {
   }
 
   async function handleConnect(source) {
-    if (source === 'stripe')   { setModal('stripe');   return }
-    if (source === 'shopify')  { setModal('shopify');  return }
-    // All other OAuth sources
+    if (source === 'stripe')  { setModal('stripe');  return }
+    if (source === 'hubspot') { setModal('hubspot'); return }
+    if (source === 'shopify') { setModal('shopify'); return }
+    // OAuth sources
     try {
       const { data } = await axios.get(`/api/connectors/${source}/auth-url`)
       window.location.href = data.auth_url
@@ -300,7 +352,22 @@ export default function DataSourcesPage() {
       )}
 
       {/* Modals */}
-      {modal === 'stripe'  && <StripeConnectModal  onClose={() => setModal(null)} onConnected={load}/>}
+      {modal === 'stripe' && (
+        <ApiTokenModal
+          source="stripe" label="Stripe" placeholder="sk_live_..."
+          helpText="Find your secret key at"
+          helpUrl="https://dashboard.stripe.com/apikeys"
+          onClose={() => setModal(null)} onConnected={load}
+        />
+      )}
+      {modal === 'hubspot' && (
+        <ApiTokenModal
+          source="hubspot" label="HubSpot" placeholder="pat-na2-..."
+          helpText="In HubSpot: Settings → Integrations → Private Apps → Create private app."
+          helpUrl="https://app.hubspot.com/private-apps"
+          onClose={() => setModal(null)} onConnected={load}
+        />
+      )}
       {modal === 'shopify' && <ShopifyConnectModal onClose={() => setModal(null)}/>}
     </div>
   )

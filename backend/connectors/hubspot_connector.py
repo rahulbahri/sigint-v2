@@ -1,6 +1,7 @@
 """
 HubSpot connector — extracts contacts, companies, deals.
-Auth: OAuth2.
+Auth: Private App token (recommended) OR OAuth2.
+Private App tokens start with pat-na1-... or pat-na2-...
 """
 from __future__ import annotations
 
@@ -9,75 +10,46 @@ import httpx
 
 from .base import BaseConnector, ConnectorError
 
-_BASE     = "https://api.hubapi.com"
-_AUTH_URL = "https://app.hubspot.com/oauth/authorize"
+_BASE      = "https://api.hubapi.com"
+_AUTH_URL  = "https://app.hubspot.com/oauth/authorize"
 _TOKEN_URL = "https://api.hubapi.com/oauth/v1/token"
-_LIMIT    = 100
+_LIMIT     = 100
 
 
 class HubSpotConnector(BaseConnector):
     SOURCE_NAME  = "hubspot"
-    AUTH_TYPE    = "oauth2"
+    AUTH_TYPE    = "api_key"   # private app token — no OAuth needed
     OAUTH_SCOPES = [
         "crm.objects.contacts.read",
         "crm.objects.deals.read",
         "crm.objects.companies.read",
     ]
 
-    def get_auth_url(self, redirect_uri: str, state: str) -> str:
-        client_id = os.environ["HUBSPOT_CLIENT_ID"]
-        scopes    = "%20".join(self.OAUTH_SCOPES)
-        return (
-            f"{_AUTH_URL}?client_id={client_id}"
-            f"&redirect_uri={redirect_uri}"
-            f"&scope={scopes}"
-            f"&state={state}"
-        )
-
-    def exchange_code(self, code: str, redirect_uri: str) -> dict:
-        r = httpx.post(_TOKEN_URL, data={
-            "grant_type":    "authorization_code",
-            "client_id":     os.environ["HUBSPOT_CLIENT_ID"],
-            "client_secret": os.environ["HUBSPOT_CLIENT_SECRET"],
-            "redirect_uri":  redirect_uri,
-            "code":          code,
-        }, timeout=30)
-        if r.status_code != 200:
-            raise ConnectorError(f"HubSpot token exchange failed: {r.text}")
-        return r.json()
-
-    def refresh_token(self, credentials: dict) -> dict:
-        r = httpx.post(_TOKEN_URL, data={
-            "grant_type":    "refresh_token",
-            "client_id":     os.environ["HUBSPOT_CLIENT_ID"],
-            "client_secret": os.environ["HUBSPOT_CLIENT_SECRET"],
-            "refresh_token": credentials["refresh_token"],
-        }, timeout=30)
-        if r.status_code != 200:
-            raise ConnectorError(f"HubSpot token refresh failed: {r.text}")
-        return {**credentials, **r.json()}
+    def validate_credentials(self, credentials: dict) -> bool:
+        token = credentials.get("api_key", "") or credentials.get("access_token", "")
+        if not token:
+            return False
+        try:
+            r = httpx.get(
+                f"{_BASE}/crm/v3/objects/contacts?limit=1",
+                headers={"Authorization": f"Bearer {token}"},
+                timeout=10,
+            )
+            return r.status_code == 200
+        except Exception:
+            return False
 
     def extract(self, workspace_id: str, credentials: dict) -> list[dict]:
-        token = credentials.get("access_token", "")
+        # Support both private app token (api_key) and OAuth access_token
+        token = credentials.get("api_key", "") or credentials.get("access_token", "")
         if not token:
-            raise ConnectorError("HubSpot access token missing.")
+            raise ConnectorError("HubSpot token missing.")
         headers = {"Authorization": f"Bearer {token}"}
         return [
             {"entity_type": "customers", "records": self._fetch_contacts(headers)},
             {"entity_type": "pipeline",  "records": self._fetch_deals(headers)},
             {"entity_type": "companies", "records": self._fetch_companies(headers)},
         ]
-
-    def validate_credentials(self, credentials: dict) -> bool:
-        try:
-            r = httpx.get(
-                f"{_BASE}/crm/v3/objects/contacts?limit=1",
-                headers={"Authorization": f"Bearer {credentials.get('access_token','')}"},
-                timeout=10,
-            )
-            return r.status_code == 200
-        except Exception:
-            return False
 
     def _fetch_contacts(self, headers: dict) -> list[dict]:
         props = "firstname,lastname,email,company,createdate,hs_lead_status,lifecyclestage"
@@ -100,7 +72,7 @@ class HubSpotConnector(BaseConnector):
                     r = client.get(url, headers=headers, params=params)
                     if r.status_code != 200:
                         raise ConnectorError(
-                            f"HubSpot API error {r.status_code} on {url}: {r.text}"
+                            f"HubSpot API error {r.status_code}: {r.text[:200]}"
                         )
                     data = r.json()
                     records.extend(data.get("results", []))
