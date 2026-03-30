@@ -528,10 +528,8 @@ except Exception as _init_err:
 @app.on_event("startup")
 async def auto_seed():
     """Auto-seed full multi-year demo data for rahul@axiomsync.ai on cold start."""
-    print(f"[STARTUP] auto_seed begin — USE_PG={_USE_PG}")
     try:
         conn = get_db()
-        print("[STARTUP] DB connection OK")
         count = conn.execute(
             "SELECT COUNT(*) FROM monthly_data WHERE workspace_id=?",
             ["rahul@axiomsync.ai"]
@@ -541,24 +539,17 @@ async def auto_seed():
             ["rahul@axiomsync.ai"]
         ).fetchone()[0]
         conn.close()
-        print(f"[STARTUP] monthly_data={count} projection_monthly_data={proj_count}")
         if count == 0 or proj_count == 0:
-            print("[STARTUP] Seeding demo data...")
             seed_multiyear(workspace_id="rahul@axiomsync.ai")
-            print("[STARTUP] Seed complete")
     except Exception as _seed_err:
-        import traceback as _tb2
         print(f"[WARN] auto_seed failed: {_seed_err}")
-        _tb2.print_exc()
     # Initialize ontology tables once at startup instead of on every GET request (M2)
     try:
         conn_ont = get_db()
         _init_ontology_tables(conn_ont)
         conn_ont.close()
-        print("[STARTUP] Ontology tables OK")
-    except Exception as _ont_err:
-        print(f"[WARN] ontology init failed: {_ont_err}")
-    print("[STARTUP] auto_seed complete — server ready")
+    except Exception:
+        pass
 
 # ─── KPI Definitions ────────────────────────────────────────────────────────
 
@@ -7430,7 +7421,7 @@ STATIC_DIR = Path(__file__).parent.parent / "frontend" / "dist"
 if STATIC_DIR.exists():
     app.mount("/assets", StaticFiles(directory=STATIC_DIR / "assets"), name="assets")
 
-    @app.get("/{full_path:path}", include_in_schema=False)
+    @app.api_route("/{full_path:path}", methods=["GET", "HEAD"], include_in_schema=False)
     def serve_spa(full_path: str):
         index = STATIC_DIR / "index.html"
         return FileResponse(
