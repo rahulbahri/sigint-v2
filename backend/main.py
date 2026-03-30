@@ -414,6 +414,23 @@ def init_db():
         )
     """)
     conn.commit()
+    # Decision log table — captures preserved reasoning behind key decisions
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS decisions (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            workspace_id    TEXT DEFAULT '',
+            title           TEXT NOT NULL,
+            the_decision    TEXT NOT NULL,
+            rationale       TEXT DEFAULT '',
+            kpi_context     TEXT DEFAULT '[]',
+            outcome         TEXT DEFAULT '',
+            decided_by      TEXT DEFAULT 'CFO',
+            status          TEXT DEFAULT 'active',
+            decided_at      TEXT DEFAULT (datetime('now'))
+        )
+    """)
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_decisions_workspace ON decisions(workspace_id)")
+    conn.commit()
     # ALTER TABLE migrations for existing tables (add workspace_id if missing)
     for tbl in ["uploads","monthly_data","kpi_targets","projection_uploads",
                 "projection_monthly_data","kpi_accountability","annotations",
@@ -7779,6 +7796,203 @@ async def get_data_quality(request: Request):
     issues.sort(key=lambda x: 0 if x["severity"] == "critical" else 1)
 
     return {"summary": summary, "issues": issues}
+
+
+# ─── Decision Log ────────────────────────────────────────────────────────────
+
+@app.get("/api/decisions")
+async def get_decisions(request: Request):
+    workspace_id = _get_workspace(request)
+    if not workspace_id:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    conn = get_db()
+    rows = conn.execute(
+        "SELECT id, title, the_decision, rationale, kpi_context, outcome, "
+        "decided_by, status, decided_at FROM decisions WHERE workspace_id=? "
+        "ORDER BY decided_at DESC",
+        [workspace_id]
+    ).fetchall()
+    conn.close()
+    result = []
+    for r in rows:
+        result.append({
+            "id":           r["id"],
+            "title":        r["title"],
+            "the_decision": r["the_decision"],
+            "rationale":    r["rationale"] or "",
+            "kpi_context":  json.loads(r["kpi_context"] or "[]"),
+            "outcome":      r["outcome"] or "",
+            "decided_by":   r["decided_by"] or "CFO",
+            "status":       r["status"] or "active",
+            "decided_at":   r["decided_at"] or "",
+        })
+    return {"decisions": result}
+
+
+@app.post("/api/decisions")
+async def create_decision(request: Request):
+    workspace_id = _get_workspace(request)
+    if not workspace_id:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    body = await request.json()
+    title        = (body.get("title") or "").strip()
+    the_decision = (body.get("the_decision") or "").strip()
+    rationale    = (body.get("rationale") or "").strip()
+    kpi_context  = json.dumps(body.get("kpi_context") or [])
+    decided_by   = (body.get("decided_by") or "CFO").strip()
+    if not title or not the_decision:
+        raise HTTPException(status_code=400, detail="title and the_decision are required")
+    conn = get_db()
+    conn.execute(
+        "INSERT INTO decisions (workspace_id, title, the_decision, rationale, kpi_context, decided_by) "
+        "VALUES (?,?,?,?,?,?)",
+        [workspace_id, title, the_decision, rationale, kpi_context, decided_by]
+    )
+    conn.commit()
+    new_id = conn.lastrowid
+    conn.close()
+    return {"id": new_id, "status": "created"}
+
+
+@app.put("/api/decisions/{decision_id}")
+async def update_decision(decision_id: int, request: Request):
+    workspace_id = _get_workspace(request)
+    if not workspace_id:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    body   = await request.json()
+    status = (body.get("status") or "active")
+    outcome = (body.get("outcome") or "").strip()
+    conn = get_db()
+    conn.execute(
+        "UPDATE decisions SET outcome=?, status=? WHERE id=? AND workspace_id=?",
+        [outcome, status, decision_id, workspace_id]
+    )
+    conn.commit()
+    conn.close()
+    return {"status": "updated"}
+
+
+@app.delete("/api/decisions/{decision_id}")
+async def delete_decision(decision_id: int, request: Request):
+    workspace_id = _get_workspace(request)
+    if not workspace_id:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    conn = get_db()
+    conn.execute(
+        "DELETE FROM decisions WHERE id=? AND workspace_id=?",
+        [decision_id, workspace_id]
+    )
+    conn.commit()
+    conn.close()
+    return {"status": "deleted"}
+
+
+# ─── KPI Coverage Score ───────────────────────────────────────────────────────
+
+# Maps each connector to the KPI keys and domains it unlocks
+_SOURCE_KPI_MAP: dict = {
+    "stripe": {
+        "kpis":    ["arr_growth","nrr","churn_rate","expansion_rate","ltv_cac",
+                    "cac_payback","recurring_revenue","revenue_quality","logo_retention"],
+        "domains": ["Revenue", "Retention", "Unit Economics"],
+    },
+    "quickbooks": {
+        "kpis":    ["gross_margin","operating_margin","ebitda_margin","opex_ratio",
+                    "burn_multiple","dso","ar_turnover","avg_collection_period",
+                    "cei","ar_aging_current","ar_aging_overdue","contribution_margin"],
+        "domains": ["Profitability", "Cash Flow & AR", "Efficiency"],
+    },
+    "xero": {
+        "kpis":    ["gross_margin","operating_margin","ebitda_margin","opex_ratio",
+                    "burn_multiple","dso","ar_turnover","avg_collection_period",
+                    "cei","ar_aging_current","ar_aging_overdue","contribution_margin"],
+        "domains": ["Profitability", "Cash Flow & AR", "Efficiency"],
+    },
+    "shopify": {
+        "kpis":    ["revenue_growth","customer_concentration","revenue_momentum",
+                    "revenue_fragility"],
+        "domains": ["Revenue", "Risk"],
+    },
+    "hubspot": {
+        "kpis":    ["health_score","logo_retention","expansion_rate","cpl","mql_sql_rate"],
+        "domains": ["Retention", "Growth"],
+    },
+    "salesforce": {
+        "kpis":    ["pipeline_conversion","win_rate","quota_attainment",
+                    "sales_efficiency","headcount_eff"],
+        "domains": ["Growth", "Efficiency"],
+    },
+}
+
+_TOTAL_KPIS = 57
+
+@app.get("/api/kpi-coverage")
+async def get_kpi_coverage(request: Request):
+    workspace_id = _get_workspace(request)
+    if not workspace_id:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    conn = get_db()
+    # Check for live connector syncs
+    synced_sources = []
+    try:
+        _elt_ensure_tables(conn)
+        rows = conn.execute(
+            "SELECT source_name, last_sync_at FROM connector_configs "
+            "WHERE workspace_id=? AND sync_status='ok'",
+            [workspace_id]
+        ).fetchall()
+        synced_sources = rows
+    except Exception:
+        pass
+    # Check for CSV data
+    has_csv = False
+    try:
+        cnt = conn.execute(
+            "SELECT COUNT(*) FROM monthly_data WHERE workspace_id=?", [workspace_id]
+        ).fetchone()
+        has_csv = (cnt[0] if cnt else 0) > 0
+    except Exception:
+        pass
+    conn.close()
+
+    covered_kpis: set = set()
+    covered_domains: set = set()
+    source_detail: list = []
+    for row in synced_sources:
+        src      = row["source_name"] if isinstance(row, dict) else row[0]
+        last_syn = row["last_sync_at"] if isinstance(row, dict) else row[1]
+        info = _SOURCE_KPI_MAP.get(src, {})
+        new_kpis = set(info.get("kpis", [])) - covered_kpis
+        covered_kpis.update(info.get("kpis", []))
+        covered_domains.update(info.get("domains", []))
+        source_detail.append({
+            "source":       src,
+            "label":        _SOURCE_LABELS.get(src, src.title()),
+            "last_sync_at": last_syn,
+            "kpi_count":    len(info.get("kpis", [])),
+            "new_kpis":     len(new_kpis),
+        })
+
+    # CSV data gives partial coverage of ~20 core KPIs if present
+    csv_kpis = set()
+    if has_csv:
+        csv_kpis = {"revenue_growth","gross_margin","operating_margin","ebitda_margin",
+                    "burn_multiple","dso","churn_rate","nrr","arr_growth",
+                    "ltv_cac","cac_payback","opex_ratio","contribution_margin",
+                    "customer_concentration","headcount_eff","rev_per_employee"}
+        covered_kpis.update(csv_kpis)
+
+    coverage_pct = round(len(covered_kpis) / _TOTAL_KPIS * 100)
+
+    return {
+        "coverage_pct":     coverage_pct,
+        "covered_kpis":     len(covered_kpis),
+        "total_kpis":       _TOTAL_KPIS,
+        "covered_domains":  sorted(covered_domains),
+        "sources":          source_detail,
+        "has_csv_data":     has_csv,
+        "source_count":     len(synced_sources),
+    }
 
 
 # ─── Serve React Frontend ───────────────────────────────────────────────────

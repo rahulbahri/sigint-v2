@@ -4,7 +4,8 @@ import {
   LayoutDashboard, Fingerprint, TrendingUp,
   Upload, Code2, RefreshCw, ChevronRight,
   Activity, GitBranch, Network, Layers, BarChart2, BookOpen, Bell, Settings2, Target,
-  Shield, Menu, X, Zap, LogOut, User, ShieldCheck, AlertCircle as AlertCircleIcon
+  Shield, Menu, X, Zap, LogOut, User, ShieldCheck, AlertCircle as AlertCircleIcon,
+  BookMarked,
 } from 'lucide-react'
 import Scorecard from './components/Scorecard.jsx'
 import Fingerprint2 from './components/Fingerprint.jsx'
@@ -35,14 +36,16 @@ import DataSourcesPage from './components/DataSourcesPage.jsx'
 import DataGapsPage from './components/DataGapsPage.jsx'
 import FieldMappingPage from './components/FieldMappingPage.jsx'
 import DataQualityPage from './components/DataQualityPage.jsx'
+import DecisionLog from './components/DecisionLog.jsx'
 
 // ── V2: Nav structured into labelled zones with business-friendly names ──────
 const NAV_GROUPS = [
   {
     label: 'Intelligence',
     tabs: [
-      { id: 'board',    label: 'Executive Brief',       Icon: Layers    },
-      { id: 'variance', label: 'Variance Command',      Icon: Activity  },
+      { id: 'board',     label: 'Executive Brief',  Icon: Layers     },
+      { id: 'variance',  label: 'Variance Command', Icon: Activity   },
+      { id: 'decisions', label: 'Decision Log',     Icon: BookMarked },
     ],
   },
   {
@@ -97,6 +100,7 @@ const PAGE_TITLES = {
   forecast:    'Forward Signals — 90-Day Outlook',
   sources:     'Data Sources',
   gaps:        'Data Gaps',
+  decisions:   'Decision Log',
   quality:     'Data Quality',
   mappings:    'Field Mappings',
   upload:      'Manual Upload',
@@ -528,7 +532,7 @@ export default function App() {
         <div className="flex-1 flex flex-col min-h-0">
 
           {/* ── Onboarding Checklist ──────────────────────────── */}
-          <OnboardingChecklist fingerprint={filteredFingerprint} onNavigate={setTab} />
+          <OnboardingChecklist fingerprint={filteredFingerprint} onNavigate={setTab} authToken={authToken} />
 
           {/* ── Anika co-pilot CTA — prominent, always visible ── */}
           <div className="px-3 pt-3 pb-1">
@@ -827,6 +831,7 @@ export default function App() {
                   onNavigateToUpload={() => setTab('upload')}
                 />
               )}
+              {tab === 'decisions'   && <DecisionLog authToken={authToken} fingerprint={fingerprint} />}
               {tab === 'ontology'    && <OntologyPage />}
               {tab === 'forecast'    && <ForecastPage />}
               {tab === 'sources'     && <DataSourcesPage />}
@@ -844,6 +849,7 @@ export default function App() {
             </>
           )}
 
+          {!loading && (tab === 'decisions')           && <DecisionLog authToken={authToken} fingerprint={fingerprint} />}
           {!loading && noData && tab === 'ontology'   && <OntologyPage />}
           {!loading && noData && tab === 'forecast'   && <ForecastPage />}
           {!loading && (tab === 'sources')            && <DataSourcesPage />}
