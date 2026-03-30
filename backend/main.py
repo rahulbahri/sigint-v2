@@ -4,7 +4,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, StreamingResponse, RedirectResponse
 import pandas as pd
 import numpy as np
-import io, os, json, sqlite3, re, secrets, base64
+import io, os, json, sqlite3, re, secrets, base64, hmac, hashlib
 import anthropic
 import httpx
 from datetime import datetime, timedelta
@@ -7170,12 +7170,18 @@ _sys.path.insert(0, str(Path(__file__).parent))
 
 try:
     from connectors.base import encrypt_credentials, decrypt_credentials, ConnectorError
-    from connectors.stripe_connector     import StripeConnector
-    from connectors.hubspot_connector    import HubSpotConnector
-    from connectors.quickbooks_connector import QuickBooksConnector
-    from connectors.xero_connector       import XeroConnector
-    from connectors.shopify_connector    import ShopifyConnector
-    from connectors.salesforce_connector import SalesforceConnector
+    from connectors.stripe_connector        import StripeConnector
+    from connectors.hubspot_connector       import HubSpotConnector
+    from connectors.quickbooks_connector    import QuickBooksConnector
+    from connectors.xero_connector          import XeroConnector
+    from connectors.shopify_connector       import ShopifyConnector
+    from connectors.salesforce_connector    import SalesforceConnector
+    from connectors.google_sheets_connector import GoogleSheetsConnector
+    from connectors.brex_connector          import BrexConnector
+    from connectors.ramp_connector          import RampConnector
+    from connectors.netsuite_connector      import NetSuiteConnector
+    from connectors.sage_intacct_connector  import SageIntacctConnector
+    from connectors.snowflake_connector     import SnowflakeConnector
     from elt.transformer  import Transformer
     from elt.gap_detector import GapDetector
     _ELT_AVAILABLE = True
@@ -7193,21 +7199,33 @@ except Exception as _elt_import_err:
     def decrypt_credentials(t): return {}
 
 _CONNECTORS = {} if not _ELT_AVAILABLE else {
-    "stripe":      StripeConnector(),
-    "hubspot":     HubSpotConnector(),
-    "quickbooks":  QuickBooksConnector(),
-    "xero":        XeroConnector(),
-    "shopify":     ShopifyConnector(),
-    "salesforce":  SalesforceConnector(),
+    "stripe":        StripeConnector(),
+    "hubspot":       HubSpotConnector(),
+    "quickbooks":    QuickBooksConnector(),
+    "xero":          XeroConnector(),
+    "shopify":       ShopifyConnector(),
+    "salesforce":    SalesforceConnector(),
+    "google_sheets": GoogleSheetsConnector(),
+    "brex":          BrexConnector(),
+    "ramp":          RampConnector(),
+    "netsuite":      NetSuiteConnector(),
+    "sage_intacct":  SageIntacctConnector(),
+    "snowflake":     SnowflakeConnector(),
 }
 
 _SOURCE_LABELS = {
-    "stripe":     "Stripe",
-    "hubspot":    "HubSpot",
-    "quickbooks": "QuickBooks",
-    "xero":       "Xero",
-    "shopify":    "Shopify",
-    "salesforce": "Salesforce",
+    "stripe":        "Stripe",
+    "hubspot":       "HubSpot",
+    "quickbooks":    "QuickBooks",
+    "xero":          "Xero",
+    "shopify":       "Shopify",
+    "salesforce":    "Salesforce",
+    "google_sheets": "Google Sheets",
+    "brex":          "Brex",
+    "ramp":          "Ramp",
+    "netsuite":      "NetSuite",
+    "sage_intacct":  "Sage Intacct",
+    "snowflake":     "Snowflake",
 }
 
 
@@ -7921,6 +7939,37 @@ _SOURCE_KPI_MAP: dict = {
         "kpis":    ["pipeline_conversion","win_rate","quota_attainment",
                     "sales_efficiency","headcount_eff"],
         "domains": ["Growth", "Efficiency"],
+    },
+    "google_sheets": {
+        "kpis":    ["revenue_growth","gross_margin","operating_margin","dso",
+                    "churn_rate","nrr","arr_growth","burn_multiple"],
+        "domains": ["Revenue", "Profitability"],
+    },
+    "brex": {
+        "kpis":    ["opex_ratio","burn_multiple","contribution_margin",
+                    "headcount_eff","rev_per_employee"],
+        "domains": ["Efficiency", "Profitability"],
+    },
+    "ramp": {
+        "kpis":    ["opex_ratio","burn_multiple","contribution_margin",
+                    "headcount_eff","rev_per_employee"],
+        "domains": ["Efficiency", "Profitability"],
+    },
+    "netsuite": {
+        "kpis":    ["gross_margin","operating_margin","ebitda_margin","opex_ratio",
+                    "burn_multiple","dso","ar_turnover","avg_collection_period",
+                    "cei","ar_aging_current","ar_aging_overdue","billable_utilization"],
+        "domains": ["Profitability", "Cash Flow & AR", "Efficiency"],
+    },
+    "sage_intacct": {
+        "kpis":    ["gross_margin","operating_margin","ebitda_margin","opex_ratio",
+                    "burn_multiple","dso","ar_turnover","avg_collection_period"],
+        "domains": ["Profitability", "Cash Flow & AR"],
+    },
+    "snowflake": {
+        "kpis":    ["revenue_growth","gross_margin","operating_margin","dso",
+                    "churn_rate","nrr","arr_growth","burn_multiple","ltv_cac"],
+        "domains": ["Revenue", "Profitability", "Retention"],
     },
 }
 

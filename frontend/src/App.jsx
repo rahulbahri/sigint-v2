@@ -5,7 +5,7 @@ import {
   Upload, Code2, RefreshCw, ChevronRight,
   Activity, GitBranch, Network, Layers, BarChart2, BookOpen, Bell, Settings2, Target,
   Shield, Menu, X, Zap, LogOut, User, ShieldCheck, AlertCircle as AlertCircleIcon,
-  BookMarked,
+  BookMarked, Sliders, MonitorPlay,
 } from 'lucide-react'
 import Scorecard from './components/Scorecard.jsx'
 import Fingerprint2 from './components/Fingerprint.jsx'
@@ -37,6 +37,7 @@ import DataGapsPage from './components/DataGapsPage.jsx'
 import FieldMappingPage from './components/FieldMappingPage.jsx'
 import DataQualityPage from './components/DataQualityPage.jsx'
 import DecisionLog from './components/DecisionLog.jsx'
+import ScenarioPlanner from './components/ScenarioPlanner.jsx'
 
 // ── V2: Nav structured into labelled zones with business-friendly names ──────
 const NAV_GROUPS = [
@@ -51,10 +52,11 @@ const NAV_GROUPS = [
   {
     label: 'Analysis',
     tabs: [
-      { id: 'fingerprint', label: 'Performance Fingerprint', Icon: Fingerprint     },
-      { id: 'trends',      label: 'Trend Explorer',          Icon: TrendingUp      },
-      { id: 'forecast',    label: 'Forward Signals',         Icon: BarChart2        },
-      { id: 'projection',  label: 'Plan vs Actual',          Icon: GitBranch       },
+      { id: 'fingerprint', label: 'Performance Fingerprint', Icon: Fingerprint  },
+      { id: 'trends',      label: 'Trend Explorer',          Icon: TrendingUp   },
+      { id: 'forecast',    label: 'Forward Signals',         Icon: BarChart2    },
+      { id: 'projection',  label: 'Plan vs Actual',          Icon: GitBranch    },
+      { id: 'scenario',    label: 'Scenario Planner',        Icon: Sliders      },
     ],
   },
   {
@@ -101,6 +103,7 @@ const PAGE_TITLES = {
   sources:     'Data Sources',
   gaps:        'Data Gaps',
   decisions:   'Decision Log',
+  scenario:    'Scenario Planner',
   quality:     'Data Quality',
   mappings:    'Field Mappings',
   upload:      'Manual Upload',
@@ -114,6 +117,36 @@ const PAGE_TITLES = {
 }
 
 const FILTER_TABS = new Set(['variance', 'dashboard', 'fingerprint', 'trends', 'projection'])
+
+// ── Cockpit modes: curated KPI sets per audience ──────────────────────────────
+export const COCKPIT_MODES = {
+  board: {
+    label: 'Board',
+    description: 'Quarterly board metrics — outcomes and capital efficiency',
+    kpis: ['revenue_growth','arr_growth','gross_margin','ebitda_margin',
+           'nrr','burn_multiple','ltv_cac','customer_concentration'],
+  },
+  operator: {
+    label: 'Operator',
+    description: 'CEO/COO weekly ops — execution and growth levers',
+    kpis: ['revenue_growth','gross_margin','churn_rate','burn_multiple',
+           'quota_attainment','pipeline_conversion','cac_payback','dso',
+           'headcount_eff','marketing_roi'],
+  },
+  controller: {
+    label: 'Controller',
+    description: 'CFO/Finance — cash, AR, and margin precision',
+    kpis: ['dso','ar_turnover','cei','ar_aging_current','ar_aging_overdue',
+           'operating_margin','ebitda_margin','opex_ratio','burn_multiple',
+           'cash_conv_cycle','contribution_margin'],
+  },
+  investor: {
+    label: 'Investor',
+    description: 'Monthly VC update — growth signals and efficiency',
+    kpis: ['arr_growth','nrr','gross_margin','burn_multiple','ltv_cac',
+           'cac_payback','churn_rate','revenue_quality','logo_retention'],
+  },
+}
 
 // Recompute a KPI's status from its filtered average
 function kpiStatus(avg, target, direction) {
@@ -148,6 +181,7 @@ export default function App() {
   const [authChecked, setAuthChecked]             = useState(false)
   const [showPricing, setShowPricing]             = useState(false)
   const [showLegal, setShowLegal]                 = useState(false)
+  const [cockpitMode, setCockpitMode]             = useState(() => localStorage.getItem('axiom_cockpit_mode') || null)
 
   // ── Validate stored token with backend on every load ─────────────────────
   useEffect(() => {
@@ -246,19 +280,22 @@ export default function App() {
 
   const filteredFingerprint = useMemo(() => {
     if (!fingerprint?.length) return fingerprint
-    return fingerprint.map(kpi => {
-      const months = (kpi.monthly ?? []).filter(m => {
-        const [yr, mo] = m.period.split('-').map(Number)
-        return inFilter(yr, mo)
+    const modeKpis = cockpitMode ? new Set(COCKPIT_MODES[cockpitMode]?.kpis || []) : null
+    return fingerprint
+      .filter(kpi => !modeKpis || modeKpis.has(kpi.key))
+      .map(kpi => {
+        const months = (kpi.monthly ?? []).filter(m => {
+          const [yr, mo] = m.period.split('-').map(Number)
+          return inFilter(yr, mo)
+        })
+        const vals = months.map(m => m.value).filter(v => v != null)
+        const avg  = vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : null
+        const trend = vals.length >= 2
+          ? (vals.at(-1) > vals[0] ? 'up' : vals.at(-1) < vals[0] ? 'down' : 'flat')
+          : (kpi.trend ?? 'flat')
+        return { ...kpi, monthly: months, avg, fy_status: kpiStatus(avg, kpi.target, kpi.direction), trend }
       })
-      const vals = months.map(m => m.value).filter(v => v != null)
-      const avg  = vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : null
-      const trend = vals.length >= 2
-        ? (vals.at(-1) > vals[0] ? 'up' : vals.at(-1) < vals[0] ? 'down' : 'flat')
-        : (kpi.trend ?? 'flat')
-      return { ...kpi, monthly: months, avg, fy_status: kpiStatus(avg, kpi.target, kpi.direction), trend }
-    })
-  }, [fingerprint, yearSet, monthSet])
+  }, [fingerprint, yearSet, monthSet, cockpitMode])
 
   // Year-only filtered fingerprint for Org Fingerprint tab — preserves all 12 months
   // so the Compare Periods feature can compare any sub-period within the selected year
@@ -701,6 +738,37 @@ export default function App() {
           </div>
         </header>
 
+        {/* Cockpit mode switcher — shown on Intelligence + Analysis tabs */}
+        {!loading && (tab === 'board' || tab === 'variance' || tab === 'fingerprint' || tab === 'dashboard') && (
+          <div className="flex items-center gap-1.5 px-6 py-2 border-b border-slate-100 bg-slate-50/60 overflow-x-auto flex-shrink-0">
+            <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mr-1 shrink-0">View:</span>
+            <button
+              onClick={() => { setCockpitMode(null); localStorage.removeItem('axiom_cockpit_mode') }}
+              className={`text-[11px] font-semibold px-3 py-1 rounded-full border transition-colors whitespace-nowrap ${
+                !cockpitMode
+                  ? 'bg-slate-800 text-white border-slate-800'
+                  : 'bg-white text-slate-500 border-slate-200 hover:border-slate-400'
+              }`}
+            >
+              All KPIs
+            </button>
+            {Object.entries(COCKPIT_MODES).map(([key, mode]) => (
+              <button
+                key={key}
+                onClick={() => { setCockpitMode(key); localStorage.setItem('axiom_cockpit_mode', key) }}
+                title={mode.description}
+                className={`text-[11px] font-semibold px-3 py-1 rounded-full border transition-colors whitespace-nowrap ${
+                  cockpitMode === key
+                    ? 'bg-[#0055A4] text-white border-[#0055A4]'
+                    : 'bg-white text-slate-500 border-slate-200 hover:border-[#0055A4] hover:text-[#0055A4]'
+                }`}
+              >
+                {mode.label}
+              </button>
+            ))}
+          </div>
+        )}
+
         {/* Filter strip — shown on data tabs only */}
         {!loading && !noData && FILTER_TABS.has(tab) && (
           <MonthRangeFilter
@@ -832,6 +900,7 @@ export default function App() {
                 />
               )}
               {tab === 'decisions'   && <DecisionLog authToken={authToken} fingerprint={fingerprint} />}
+              {tab === 'scenario'    && <ScenarioPlanner fingerprint={filteredFingerprint} authToken={authToken} />}
               {tab === 'ontology'    && <OntologyPage />}
               {tab === 'forecast'    && <ForecastPage />}
               {tab === 'sources'     && <DataSourcesPage />}
@@ -850,6 +919,7 @@ export default function App() {
           )}
 
           {!loading && (tab === 'decisions')           && <DecisionLog authToken={authToken} fingerprint={fingerprint} />}
+          {!loading && (tab === 'scenario')            && <ScenarioPlanner fingerprint={fingerprint} authToken={authToken} />}
           {!loading && noData && tab === 'ontology'   && <OntologyPage />}
           {!loading && noData && tab === 'forecast'   && <ForecastPage />}
           {!loading && (tab === 'sources')            && <DataSourcesPage />}
