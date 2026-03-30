@@ -34,6 +34,7 @@ import LegalPage from './components/LegalPage.jsx'
 import DataSourcesPage from './components/DataSourcesPage.jsx'
 import DataGapsPage from './components/DataGapsPage.jsx'
 import FieldMappingPage from './components/FieldMappingPage.jsx'
+import DataQualityPage from './components/DataQualityPage.jsx'
 
 // ── V2: Nav structured into labelled zones with business-friendly names ──────
 const NAV_GROUPS = [
@@ -56,10 +57,11 @@ const NAV_GROUPS = [
   {
     label: 'Data',
     tabs: [
-      { id: 'sources',  label: 'Data Sources',    Icon: Zap       },
+      { id: 'sources',  label: 'Data Sources',    Icon: Zap             },
       { id: 'gaps',     label: 'Data Gaps',       Icon: AlertCircleIcon },
-      { id: 'mappings', label: 'Field Mappings',  Icon: GitBranch },
-      { id: 'upload',   label: 'Manual Upload',   Icon: Upload    },
+      { id: 'quality',  label: 'Data Quality',    Icon: ShieldCheck     },
+      { id: 'mappings', label: 'Field Mappings',  Icon: GitBranch       },
+      { id: 'upload',   label: 'Manual Upload',   Icon: Upload          },
     ],
   },
   {
@@ -95,6 +97,7 @@ const PAGE_TITLES = {
   forecast:    'Forward Signals — 90-Day Outlook',
   sources:     'Data Sources',
   gaps:        'Data Gaps',
+  quality:     'Data Quality',
   mappings:    'Field Mappings',
   upload:      'Manual Upload',
   alerts:      'Slack Alerts',
@@ -828,6 +831,7 @@ export default function App() {
               {tab === 'forecast'    && <ForecastPage />}
               {tab === 'sources'     && <DataSourcesPage />}
               {tab === 'gaps'        && <DataGapsPage />}
+              {tab === 'quality'     && <DataQualityPage />}
               {tab === 'mappings'    && <FieldMappingPage />}
               {tab === 'upload'      && <CSVUpload onUploaded={loadAll}/>}
               {tab === 'alerts'      && <SlackAlerts filteredFingerprint={filteredFingerprint}/>}
@@ -844,6 +848,7 @@ export default function App() {
           {!loading && noData && tab === 'forecast'   && <ForecastPage />}
           {!loading && (tab === 'sources')            && <DataSourcesPage />}
           {!loading && (tab === 'gaps')               && <DataGapsPage />}
+          {!loading && (tab === 'quality')            && <DataQualityPage />}
           {!loading && (tab === 'mappings')           && <FieldMappingPage />}
           {!loading && noData && tab === 'upload'     && <CSVUpload onUploaded={loadAll}/>}
           {!loading && noData && tab === 'alerts'     && <SlackAlerts filteredFingerprint={[]}/>}

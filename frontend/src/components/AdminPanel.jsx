@@ -1,21 +1,24 @@
 import { useState, useEffect } from 'react'
-import { Users, Database, Upload, Activity, Trash2, RefreshCw, ShieldCheck } from 'lucide-react'
+import { Users, Database, Upload, Activity, Trash2, RefreshCw, ShieldCheck, Wifi, WifiOff } from 'lucide-react'
 
 export default function AdminPanel() {
-  const [stats, setStats]           = useState(null)
-  const [workspaces, setWorkspaces] = useState([])
-  const [loading, setLoading]       = useState(true)
-  const [deleting, setDeleting]     = useState(null)
-  const [error, setError]           = useState('')
+  const [stats, setStats]                   = useState(null)
+  const [workspaces, setWorkspaces]         = useState([])
+  const [connectorHealth, setConnectorHealth] = useState([])
+  const [loading, setLoading]               = useState(true)
+  const [deleting, setDeleting]             = useState(null)
+  const [error, setError]                   = useState('')
 
   function load() {
     setLoading(true)
     Promise.all([
       fetch('/api/admin/stats').then(r => r.json()),
       fetch('/api/admin/workspaces').then(r => r.json()),
-    ]).then(([s, w]) => {
+      fetch('/api/admin/connector-health').then(r => r.json()).catch(() => ({ workspaces: [] })),
+    ]).then(([s, w, h]) => {
       setStats(s)
       setWorkspaces(w.workspaces || [])
+      setConnectorHealth(h.workspaces || [])
       setLoading(false)
     }).catch(() => { setError('Failed to load admin data'); setLoading(false) })
   }
@@ -143,6 +146,40 @@ export default function AdminPanel() {
           </div>
         )}
       </div>
+      {/* Connector Health */}
+      {connectorHealth.length > 0 && (
+        <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden">
+          <div className="px-4 py-3 border-b border-slate-100">
+            <h3 className="text-[12px] font-semibold text-slate-700">Connector Health</h3>
+          </div>
+          <div className="divide-y divide-slate-50">
+            {connectorHealth.map(ws => (
+              <div key={ws.workspace_id} className="px-4 py-3">
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-[12px] font-medium text-slate-700">{ws.workspace_id}</span>
+                  <span className="text-[11px] text-slate-400">{ws.healthy}/{ws.total} healthy</span>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  {ws.connectors.map(c => (
+                    <span key={c.source}
+                      title={c.last_error || c.last_sync_at || ''}
+                      className={`flex items-center gap-1 text-[11px] px-2 py-0.5 rounded-full border
+                        ${c.status === 'ok'
+                          ? 'bg-green-50 text-green-600 border-green-200'
+                          : c.status === 'error'
+                          ? 'bg-red-50 text-red-600 border-red-200'
+                          : 'bg-slate-50 text-slate-500 border-slate-200'}`}
+                    >
+                      {c.status === 'ok' ? <Wifi size={9}/> : <WifiOff size={9}/>}
+                      {c.source}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   )
 }

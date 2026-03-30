@@ -551,6 +551,57 @@ async def auto_seed():
     except Exception:
         pass
 
+    # ── 24-hour automatic sync scheduler ────────────────────────────────────
+    def _auto_sync_worker():
+        import time as _t
+        _t.sleep(300)  # wait 5 min after startup before first check
+        while True:
+            try:
+                _c = get_db()
+                exists = _c.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table' AND name='connector_configs'"
+                ).fetchone()
+                if exists and _ELT_AVAILABLE:
+                    rows = _c.execute("""
+                        SELECT workspace_id, source_name, credentials_enc
+                        FROM connector_configs
+                        WHERE sync_status != 'error'
+                        AND (last_sync_at IS NULL
+                             OR datetime(last_sync_at) < datetime('now', '-23 hours'))
+                    """).fetchall()
+                    _c.close()
+                    for ws_id, src_name, creds_enc in rows:
+                        try:
+                            connector = _CONNECTORS.get(src_name)
+                            if not connector or not creds_enc:
+                                continue
+                            creds = decrypt_credentials(creds_enc)
+                            transformer = Transformer(get_db(), ws_id)
+                            records_map = connector.extract(creds)
+                            for entity_type, records in records_map.items():
+                                canonical = transformer.transform(entity_type, records)
+                                transformer.upsert_canonical(entity_type, canonical)
+                            # Update last_sync_at
+                            _uc = get_db()
+                            _uc.execute(
+                                "UPDATE connector_configs SET sync_status='ok', last_sync_at=datetime('now'), last_error=NULL "
+                                "WHERE workspace_id=? AND source_name=?",
+                                [ws_id, src_name]
+                            )
+                            _uc.commit()
+                            _uc.close()
+                        except Exception as _se:
+                            print(f"[SYNC] auto-sync failed for {ws_id}/{src_name}: {_se}")
+                else:
+                    _c.close()
+            except Exception as _we:
+                print(f"[SYNC] scheduler error: {_we}")
+            _t.sleep(3600)  # check every hour, sync if >23h since last sync
+
+    import threading as _threading
+    _sync_thread = _threading.Thread(target=_auto_sync_worker, daemon=True, name="auto-sync")
+    _sync_thread.start()
+
 # ─── KPI Definitions ────────────────────────────────────────────────────────
 
 # Extended ontology-only metrics (not in KPI_DEFS main dashboard; used only in the knowledge graph)
@@ -6724,6 +6775,44 @@ async def admin_list_workspaces(request: Request):
         conn.close()
         raise HTTPException(status_code=500, detail="Failed to fetch workspaces")
 
+@app.get("/api/admin/connector-health", tags=["Admin"])
+async def admin_connector_health(request: Request):
+    """Per-workspace connector status for admin view."""
+    _require_admin(request)
+    conn = get_db()
+    try:
+        # Check if connector_configs table exists
+        exists = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='connector_configs'"
+        ).fetchone()
+        if not exists:
+            return {"workspaces": []}
+
+        rows = conn.execute("""
+            SELECT workspace_id, source_name, sync_status, last_sync_at, last_error
+            FROM connector_configs
+            ORDER BY workspace_id, source_name
+        """).fetchall()
+
+        # Group by workspace
+        ws_map = {}
+        for ws_id, source, status, last_sync, last_err in rows:
+            if ws_id not in ws_map:
+                ws_map[ws_id] = {"workspace_id": ws_id, "connectors": [], "healthy": 0, "errored": 0, "total": 0}
+            ws_map[ws_id]["connectors"].append({
+                "source": source, "status": status,
+                "last_sync_at": last_sync, "last_error": last_err
+            })
+            ws_map[ws_id]["total"] += 1
+            if status == "ok":
+                ws_map[ws_id]["healthy"] += 1
+            elif status == "error":
+                ws_map[ws_id]["errored"] += 1
+
+        return {"workspaces": list(ws_map.values())}
+    finally:
+        conn.close()
+
 @app.delete("/api/admin/workspace/{email}", tags=["Admin"])
 async def admin_delete_workspace(email: str, request: Request):
     _require_admin(request)
@@ -7413,6 +7502,143 @@ async def get_canonical_data(entity_type: str, request: Request, limit: int = 10
         return {"records": [], "total": 0}
     finally:
         conn.close()
+
+
+# ─── Data Quality ─────────────────────────────────────────────────────────────
+
+@app.get("/api/data-quality", tags=["ELT"])
+async def get_data_quality(request: Request):
+    """Scan canonical tables and return data quality issues for this workspace."""
+    workspace_id = _get_workspace(request)
+    if not workspace_id:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+
+    conn = get_db()
+    issues = []
+    summary = {"total_issues": 0, "critical": 0, "warning": 0, "tables_scanned": 0}
+
+    canonical_tables = [
+        "canonical_revenue", "canonical_customers", "canonical_pipeline",
+        "canonical_employees", "canonical_expenses", "canonical_products",
+        "canonical_invoices", "canonical_marketing"
+    ]
+
+    for table in canonical_tables:
+        # Check if table exists
+        exists = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name=?", [table]
+        ).fetchone()
+        if not exists:
+            continue
+
+        summary["tables_scanned"] += 1
+        total = conn.execute(
+            f"SELECT COUNT(*) FROM {table} WHERE workspace_id=?", [workspace_id]
+        ).fetchone()[0]
+        if total == 0:
+            continue
+
+        entity = table.replace("canonical_", "")
+
+        # Check for records with null amount
+        if entity in ("revenue", "expenses", "invoices"):
+            null_amount = conn.execute(
+                f"SELECT COUNT(*) FROM {table} WHERE workspace_id=? AND (amount IS NULL OR amount='')",
+                [workspace_id]
+            ).fetchone()[0]
+            if null_amount > 0:
+                sev = "critical" if null_amount / total > 0.3 else "warning"
+                issues.append({
+                    "table": table, "issue": "missing_amount",
+                    "severity": sev,
+                    "count": null_amount, "total": total,
+                    "description": f"{null_amount} of {total} {entity} records have no amount",
+                    "fix": f"Ensure all {entity} records have an amount value in your source system"
+                })
+                summary[sev] += 1
+                summary["total_issues"] += 1
+
+        # Check for records with no period/date
+        period_col = "period" if entity in ("revenue", "expenses") else "created_at"
+        has_col = conn.execute(f"PRAGMA table_info({table})").fetchall()
+        col_names = [r[1] for r in has_col]
+        if period_col in col_names:
+            null_period = conn.execute(
+                f"SELECT COUNT(*) FROM {table} WHERE workspace_id=? AND ({period_col} IS NULL OR {period_col}='')",
+                [workspace_id]
+            ).fetchone()[0]
+            if null_period > 0:
+                sev = "critical" if null_period / total > 0.3 else "warning"
+                issues.append({
+                    "table": table, "issue": "missing_period",
+                    "severity": sev,
+                    "count": null_period, "total": total,
+                    "description": f"{null_period} of {total} {entity} records have no date/period",
+                    "fix": "Use the transaction date as the period or re-sync with your source"
+                })
+                summary[sev] += 1
+                summary["total_issues"] += 1
+
+        # Check for negative amounts (potential untagged refunds)
+        if entity in ("revenue", "invoices") and "amount" in col_names:
+            negative = conn.execute(
+                f"SELECT COUNT(*) FROM {table} WHERE workspace_id=? AND amount < 0",
+                [workspace_id]
+            ).fetchone()[0]
+            if negative > 0:
+                issues.append({
+                    "table": table, "issue": "negative_amount",
+                    "severity": "warning",
+                    "count": negative, "total": total,
+                    "description": f"{negative} {entity} records have negative amounts (possible refunds)",
+                    "fix": "Tag these as refunds in your source system or they will reduce revenue totals"
+                })
+                summary["warning"] += 1
+                summary["total_issues"] += 1
+
+        # Check for records with no customer link
+        if "customer_id" in col_names and entity == "revenue":
+            no_customer = conn.execute(
+                f"SELECT COUNT(*) FROM {table} WHERE workspace_id=? AND (customer_id IS NULL OR customer_id='')",
+                [workspace_id]
+            ).fetchone()[0]
+            if no_customer > 0:
+                sev = "critical" if no_customer / total > 0.5 else "warning"
+                issues.append({
+                    "table": table, "issue": "no_customer_link",
+                    "severity": sev,
+                    "count": no_customer, "total": total,
+                    "description": f"{no_customer} revenue records have no linked customer",
+                    "fix": "Ensure customers are linked to invoices in your accounting system"
+                })
+                summary[sev] += 1
+                summary["total_issues"] += 1
+
+        # Check for duplicates by source_id
+        if "source_id" in col_names:
+            dup_query = conn.execute(
+                f"SELECT COUNT(*) FROM (SELECT source_id, COUNT(*) as c FROM {table} "
+                f"WHERE workspace_id=? AND source_id IS NOT NULL AND source_id!='' "
+                f"GROUP BY source_id HAVING c > 1)",
+                [workspace_id]
+            ).fetchone()[0]
+            if dup_query > 0:
+                issues.append({
+                    "table": table, "issue": "duplicates",
+                    "severity": "warning",
+                    "count": dup_query, "total": total,
+                    "description": f"{dup_query} duplicate {entity} records detected",
+                    "fix": "Re-sync from source — duplicates may have been created by multiple syncs"
+                })
+                summary["warning"] += 1
+                summary["total_issues"] += 1
+
+    conn.close()
+
+    # Sort: critical first
+    issues.sort(key=lambda x: 0 if x["severity"] == "critical" else 1)
+
+    return {"summary": summary, "issues": issues}
 
 
 # ─── Serve React Frontend ───────────────────────────────────────────────────
