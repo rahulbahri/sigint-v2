@@ -4054,7 +4054,8 @@ def _init_forecast_tables():
             upstream_kpis TEXT,
             days_back INTEGER DEFAULT 365,
             trained_at TEXT,
-            regime_data TEXT DEFAULT NULL
+            regime_data TEXT DEFAULT NULL,
+            workspace_id TEXT DEFAULT ''
         );
         CREATE TABLE IF NOT EXISTS forecast_runs (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -4068,21 +4069,39 @@ def _init_forecast_tables():
         );
     """)
     conn.commit()
-    # Add regime_data column to existing tables that pre-date this migration
-    try:
-        conn.execute("ALTER TABLE markov_models ADD COLUMN regime_data TEXT DEFAULT NULL")
-        conn.commit()
-    except Exception:
-        pass  # Column already exists
+    # Migrations for columns added after initial schema
+    for migration in [
+        "ALTER TABLE markov_models ADD COLUMN regime_data TEXT DEFAULT NULL",
+        "ALTER TABLE markov_models ADD COLUMN workspace_id TEXT DEFAULT ''",
+    ]:
+        try:
+            conn.execute(migration)
+            conn.commit()
+        except Exception:
+            pass  # Column already exists
     conn.close()
 
 _init_forecast_tables()
 
-def _mrk_monthly_history():
+# ── Per-workspace forecast build status (in-memory) ──────────────────────────
+# Tracks whether a training job is actively running for a workspace.
+import threading as _threading
+_FORECAST_BUILDING: dict[str, bool]  = {}   # workspace_id → True while building
+_FORECAST_ERROR:    dict[str, str]   = {}   # workspace_id → last error message
+_FORECAST_LOCK = _threading.Lock()
+
+def _mrk_monthly_history(workspace_id: str = ""):
     conn = get_db()
-    rows = conn.execute(
-        "SELECT year, month, data_json FROM monthly_data ORDER BY year ASC, month ASC"
-    ).fetchall()
+    if workspace_id:
+        rows = conn.execute(
+            "SELECT year, month, data_json FROM monthly_data "
+            "WHERE workspace_id=? ORDER BY year ASC, month ASC",
+            [workspace_id],
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT year, month, data_json FROM monthly_data ORDER BY year ASC, month ASC"
+        ).fetchall()
     conn.close()
     result = {}
     for r in rows:
@@ -4113,12 +4132,19 @@ def _mrk_causal_pairs():
         return []
 
 
-def _mrk_monthly_history_dated():
+def _mrk_monthly_history_dated(workspace_id: str = ""):
     """Returns OrderedDict {(year, month): {kpi: float}} sorted chronologically."""
     conn = get_db()
-    rows = conn.execute(
-        "SELECT year, month, data_json FROM monthly_data ORDER BY year ASC, month ASC"
-    ).fetchall()
+    if workspace_id:
+        rows = conn.execute(
+            "SELECT year, month, data_json FROM monthly_data "
+            "WHERE workspace_id=? ORDER BY year ASC, month ASC",
+            [workspace_id],
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT year, month, data_json FROM monthly_data ORDER BY year ASC, month ASC"
+        ).fetchall()
     conn.close()
     result = {}
     for r in rows:
@@ -4283,7 +4309,7 @@ def _build_deduped_causal_map(causal_pairs, kpis):
     return causal_map
 
 
-def _build_markov_task():
+def _build_markov_task(workspace_id: str = ""):
     """
     Wasserstein regime-conditioned bootstrap Monte Carlo engine.
 
@@ -4293,9 +4319,16 @@ def _build_markov_task():
                         regime-conditioned delta pools so Monte Carlo sampling
                         reflects the current operating context.
     """
-    history       = _mrk_monthly_history()
-    dated_history = _mrk_monthly_history_dated()
+    history       = _mrk_monthly_history(workspace_id)
+    dated_history = _mrk_monthly_history_dated(workspace_id)
     if len(history) < 2:
+        msg = (
+            "Not enough monthly data to train the forecast model. "
+            "Upload at least 2 months of KPI data first."
+        )
+        print(f"[Forecast] {msg} (workspace={workspace_id!r})")
+        with _FORECAST_LOCK:
+            _FORECAST_ERROR[workspace_id] = msg
         return
 
     current_values = {}
@@ -4339,11 +4372,12 @@ def _build_markov_task():
 
     now = datetime.utcnow().isoformat()
     conn = get_db()
-    conn.execute("DELETE FROM markov_models")
+    # Delete only this workspace's model so other workspaces are unaffected
+    conn.execute("DELETE FROM markov_models WHERE workspace_id=?", [workspace_id])
     conn.execute(
         "INSERT INTO markov_models (kpis, thresholds, self_matrices, cross_matrices, "
-        "current_states, upstream_kpis, days_back, trained_at, regime_data) "
-        "VALUES (?,?,?,?,?,?,?,?,?)",
+        "current_states, upstream_kpis, days_back, trained_at, regime_data, workspace_id) "
+        "VALUES (?,?,?,?,?,?,?,?,?,?)",
         (json.dumps(kpis),
          json.dumps(value_ranges),
          json.dumps(mean_deltas),
@@ -4351,13 +4385,16 @@ def _build_markov_task():
          json.dumps(current_values),
          json.dumps(upstream_kpis),
          365, now,
-         json.dumps(regime_data) if regime_data else None)
+         json.dumps(regime_data) if regime_data else None,
+         workspace_id)
     )
     conn.commit()
     conn.close()
+    print(f"[Forecast] Model trained: {len(kpis)} KPIs (workspace={workspace_id!r})")
 
 
-def _project_scenario(horizon_days: int, overrides: dict, n_samples: int):
+def _project_scenario(horizon_days: int, overrides: dict, n_samples: int,
+                      workspace_id: str = ""):
     """
     Bootstrap Monte Carlo projection in real KPI units.
     overrides = {kpi: state_idx} where state_idx 0-4 maps to p10/p25/p50/p75/p90.
@@ -4366,8 +4403,14 @@ def _project_scenario(horizon_days: int, overrides: dict, n_samples: int):
     """
     conn = get_db()
     row  = conn.execute(
-        "SELECT * FROM markov_models ORDER BY id DESC LIMIT 1"
+        "SELECT * FROM markov_models WHERE workspace_id=? ORDER BY id DESC LIMIT 1",
+        [workspace_id],
     ).fetchone()
+    # Fall back to any model if workspace-specific one not found (migration path)
+    if not row:
+        row = conn.execute(
+            "SELECT * FROM markov_models ORDER BY id DESC LIMIT 1"
+        ).fetchone()
     conn.close()
     if not row:
         return {"status": "no_model", "message": "Train model first"}
@@ -4547,28 +4590,60 @@ class _ProjectRequest(_BaseModel):
 
 
 @app.post("/api/forecast/build")
-def forecast_build():
+def forecast_build(request: Request):
+    workspace_id = _get_workspace(request)
+    # If already building for this workspace, don't spawn another thread
+    with _FORECAST_LOCK:
+        if _FORECAST_BUILDING.get(workspace_id):
+            return {"status": "building", "message": "Training already in progress"}
+        _FORECAST_BUILDING[workspace_id] = True
+        _FORECAST_ERROR.pop(workspace_id, None)
+
     def _bg():
         try:
-            _build_markov_task()
+            _build_markov_task(workspace_id)
         except Exception:
-            import traceback; traceback.print_exc()
+            import traceback as _tb
+            err = _tb.format_exc()
+            _tb.print_exc()
+            with _FORECAST_LOCK:
+                _FORECAST_ERROR[workspace_id] = "Training failed — check server logs."
+        finally:
+            with _FORECAST_LOCK:
+                _FORECAST_BUILDING[workspace_id] = False
+
     threading.Thread(target=_bg, daemon=True).start()
     return {"status": "building", "message": "Markov model training started"}
 
 
 @app.post("/api/forecast/project")
-def forecast_project(req: _ProjectRequest):
-    result = _project_scenario(req.horizon_days, req.overrides, req.n_samples)
+def forecast_project(request: Request, req: _ProjectRequest):
+    workspace_id = _get_workspace(request)
+    result = _project_scenario(req.horizon_days, req.overrides, req.n_samples, workspace_id)
     return result
 
 
 @app.get("/api/forecast/model")
-def forecast_model():
+def forecast_model(request: Request):
+    workspace_id = _get_workspace(request)
+    # Return building/error status immediately if applicable
+    with _FORECAST_LOCK:
+        if _FORECAST_BUILDING.get(workspace_id):
+            return {"status": "building", "message": "Training in progress…"}
+        err = _FORECAST_ERROR.get(workspace_id)
+    if err:
+        return {"status": "error", "message": err}
+
     conn = get_db()
+    # Prefer workspace-specific model; fall back to legacy unscoped model
     row = conn.execute(
-        "SELECT * FROM markov_models ORDER BY id DESC LIMIT 1"
+        "SELECT * FROM markov_models WHERE workspace_id=? ORDER BY id DESC LIMIT 1",
+        [workspace_id],
     ).fetchone()
+    if not row:
+        row = conn.execute(
+            "SELECT * FROM markov_models WHERE workspace_id='' ORDER BY id DESC LIMIT 1"
+        ).fetchone()
     conn.close()
     if not row:
         return {"status": "not_trained"}
@@ -6512,13 +6587,46 @@ async def update_company_settings(request: Request):
     conn.close()
     return {"status": "ok"}
 
+_ALLOWED_LOGO_MIME = {"image/png", "image/jpeg", "image/jpg", "image/svg+xml",
+                      "image/webp", "image/gif"}
+_MAX_LOGO_BYTES = 5 * 1024 * 1024  # 5 MB hard limit
+
 @app.post("/api/company-settings/logo", tags=["Settings"])
 async def upload_logo(request: Request, file: UploadFile = File(...)):
     workspace_id = _get_workspace(request)
     import base64
+
+    # Read file fully so we can check size
     contents = await file.read()
-    # Store as base64 data URL
-    mime = file.content_type or "image/png"
+
+    # Validate file size
+    if len(contents) > _MAX_LOGO_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail=f"Logo too large ({len(contents)//1024}KB). Maximum allowed size is 5MB."
+        )
+
+    # Validate MIME type — trust content_type but fall back to sniffing magic bytes
+    mime = (file.content_type or "").lower().split(";")[0].strip()
+    if not mime or mime == "application/octet-stream":
+        # Sniff common image magic bytes
+        if contents[:8] == b"\x89PNG\r\n\x1a\n":
+            mime = "image/png"
+        elif contents[:3] == b"\xff\xd8\xff":
+            mime = "image/jpeg"
+        elif contents[:4] == b"<svg" or b"<svg" in contents[:64]:
+            mime = "image/svg+xml"
+        elif contents[:4] in (b"RIFF", b"WEBP"):
+            mime = "image/webp"
+        else:
+            mime = "image/png"  # default fallback
+
+    if mime not in _ALLOWED_LOGO_MIME:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported file type '{mime}'. Please upload a PNG, JPG, SVG, or WebP image."
+        )
+
     data_url = f"data:{mime};base64," + base64.b64encode(contents).decode()
     conn = get_db()
     conn.execute(

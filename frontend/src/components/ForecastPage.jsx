@@ -311,17 +311,34 @@ export default function ForecastPage() {
     setResult(null)
     try {
       await axios.post('/api/forecast/build')
-      for (let i = 0; i < 30; i++) {
+      // Poll up to 120 s (60 × 2 s). The server now returns status "building"
+      // while training is in progress, "ready" on success, "error" on failure.
+      for (let i = 0; i < 60; i++) {
         await new Promise(r => setTimeout(r, 2000))
         const res = await axios.get('/api/forecast/model')
-        if (res.data?.status === 'ready') {
+        const s = res.data?.status
+        if (s === 'ready') {
           setModel(res.data)
           if (res.data.kpis?.length && !selectedKpi) setSelectedKpi(res.data.kpis[0])
-          break
+          setBuilding(false)
+          return
         }
+        if (s === 'error') {
+          setError(res.data?.message || 'Training failed — check that KPI data is loaded.')
+          setBuilding(false)
+          return
+        }
+        if (s === 'not_trained' && i > 5) {
+          // After a few seconds "not_trained" means the task returned early
+          setError('Not enough monthly data to train the model. Upload at least 2 months of KPI history.')
+          setBuilding(false)
+          return
+        }
+        // s === 'building' → keep polling
       }
+      setError('Training timed out after 2 minutes. The server may still be working — try refreshing.')
     } catch {
-      setError('Failed to build model. Make sure data is loaded.')
+      setError('Failed to start training. Make sure data is loaded and try again.')
     }
     setBuilding(false)
   }

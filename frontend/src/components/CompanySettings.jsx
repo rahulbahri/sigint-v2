@@ -3,11 +3,13 @@ import axios from 'axios'
 import { Upload, Building2, Check, AlertCircle } from 'lucide-react'
 
 export default function CompanySettings({ onSave }) {
-  const [companyName, setCompanyName] = useState('')
-  const [industry, setIndustry]       = useState('')
-  const [logo, setLogo]               = useState(null)       // preview URL
-  const [saving, setSaving]           = useState(false)
-  const [status, setStatus]           = useState(null)       // 'ok' | 'error'
+  const [companyName, setCompanyName]   = useState('')
+  const [industry, setIndustry]         = useState('')
+  const [logo, setLogo]                 = useState(null)       // preview URL
+  const [saving, setSaving]             = useState(false)
+  const [status, setStatus]             = useState(null)       // 'ok' | 'error'
+  const [logoUploading, setLogoUploading] = useState(false)
+  const [logoError, setLogoError]       = useState(null)
   const fileRef = useRef(null)
 
   // Load current settings on mount
@@ -41,16 +43,26 @@ export default function CompanySettings({ onSave }) {
   async function handleLogoUpload(e) {
     const file = e.target.files?.[0]
     if (!file) return
+    // 5 MB client-side guard — gives a friendlier message before hitting the server
+    if (file.size > 5 * 1024 * 1024) {
+      setLogoError('File is too large. Please use an image under 5 MB.')
+      return
+    }
+    setLogoError(null)
+    setLogoUploading(true)
     const formData = new FormData()
     formData.append('file', file)
     try {
-      const r = await axios.post('/api/company-settings/logo', formData, {
-        headers: { 'Content-Type': 'multipart/form-data' },
-      })
+      // ⚠️  Do NOT set Content-Type manually — axios must let the browser set it
+      //     so the multipart boundary is included in the header automatically.
+      const r = await axios.post('/api/company-settings/logo', formData)
       setLogo(r.data.logo)
       if (onSave) onSave({ logo: r.data.logo })
-    } catch {
-      setStatus('error')
+    } catch (err) {
+      const detail = err?.response?.data?.detail || 'Upload failed — please try again.'
+      setLogoError(detail)
+    } finally {
+      setLogoUploading(false)
     }
   }
 
@@ -77,16 +89,24 @@ export default function CompanySettings({ onSave }) {
           <div className="flex-1 space-y-2">
             <p className="text-xs text-slate-500">PNG, JPG or SVG — displayed in the sidebar. Max 1 MB recommended.</p>
             <button
-              onClick={() => fileRef.current?.click()}
+              onClick={() => { setLogoError(null); fileRef.current?.click() }}
+              disabled={logoUploading}
               className="flex items-center gap-2 px-3 py-1.5 rounded-lg border border-slate-200
-                         text-xs font-medium text-slate-600 hover:border-[#0055A4] hover:text-[#0055A4] transition-all"
+                         text-xs font-medium text-slate-600 hover:border-[#0055A4] hover:text-[#0055A4]
+                         transition-all disabled:opacity-50 disabled:cursor-not-allowed"
             >
-              <Upload size={12}/> Upload Logo
+              <Upload size={12}/>
+              {logoUploading ? 'Uploading…' : 'Upload Logo'}
             </button>
+            {logoError && (
+              <p className="text-xs text-red-500 flex items-center gap-1 mt-1">
+                <AlertCircle size={11}/> {logoError}
+              </p>
+            )}
             <input
               ref={fileRef}
               type="file"
-              accept="image/*"
+              accept="image/png,image/jpeg,image/svg+xml,image/webp"
               className="hidden"
               onChange={handleLogoUpload}
             />

@@ -147,6 +147,7 @@ export default function ScenarioPlanner({ fingerprint, authToken }) {
   const [scenarioName, setScenarioName] = useState('What-If Scenario')
   const [saving, setSaving]             = useState(false)
   const [saved, setSaved]               = useState(false)
+  const [saveError, setSaveError]       = useState(null)
   const [showInfo, setShowInfo]         = useState(false)
 
   const headers = authToken ? { Authorization: `Bearer ${authToken}` } : {}
@@ -200,6 +201,7 @@ export default function ScenarioPlanner({ fingerprint, authToken }) {
       })
       .map(k => k.key)
 
+    setSaveError(null)
     try {
       await axios.post('/api/decisions', {
         title:        scenarioName,
@@ -210,8 +212,11 @@ export default function ScenarioPlanner({ fingerprint, authToken }) {
       }, { headers })
       setSaved(true)
       setTimeout(() => setSaved(false), 3000)
-    } catch { /* silent */ }
-    finally { setSaving(false) }
+    } catch (err) {
+      setSaveError(err?.response?.data?.detail || 'Save failed — please try again.')
+    } finally {
+      setSaving(false)
+    }
   }
 
   return (
@@ -322,8 +327,13 @@ export default function ScenarioPlanner({ fingerprint, authToken }) {
               className="w-full flex items-center justify-center gap-1.5 text-[11px] font-bold bg-[#0055A4] text-white rounded-lg py-2 hover:bg-blue-700 disabled:opacity-40 transition-colors"
             >
               <BookMarked size={11} />
-              {saved ? 'Saved to Decision Log!' : saving ? 'Saving...' : 'Save to Decision Log'}
+              {saved ? 'Saved to Decision Log!' : saving ? 'Saving…' : 'Save to Decision Log'}
             </button>
+            {saveError && (
+              <p className="text-[10px] text-red-500 flex items-center gap-1 mt-1">
+                ⚠ {saveError}
+              </p>
+            )}
           </div>
         </div>
 
