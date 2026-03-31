@@ -103,6 +103,8 @@ class SnowflakeConnector(BaseConnector):
             return False
 
     def extract(self, workspace_id: str, credentials: dict) -> list[dict]:
+        global _DATABASE, _SCHEMA, _WAREHOUSE  # declared before first use
+
         acct  = credentials.get("account")   or _ACCOUNT
         user  = credentials.get("user")      or _USER
         pwd   = credentials.get("password")  or _PASSWORD
@@ -118,7 +120,6 @@ class SnowflakeConnector(BaseConnector):
             )
 
         # Ensure globals are correct for this connection
-        global _DATABASE, _SCHEMA, _WAREHOUSE
         _DATABASE, _SCHEMA, _WAREHOUSE = db, sch, wh
 
         token   = _get_token(acct, user, pwd)
