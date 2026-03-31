@@ -183,12 +183,64 @@ UPLOADS_DIR.mkdir(exist_ok=True)
 
 # ─── Database abstraction (SQLite local / PostgreSQL production) ─────────────
 
+# Per-table upsert conflict targets: (conflict_cols_sql, set_of_pk_col_names_to_exclude_from_UPDATE)
+_PG_UPSERT: dict = {
+    "company_settings":  ("(key, workspace_id)",         {"key", "workspace_id"}),
+    "org_invites":       ("(token)",                     {"token", "id"}),
+    "oauth_states":      ("(state)",                     {"state", "id"}),
+    "connector_configs": ("(workspace_id, source_name)", {"workspace_id", "source_name", "id"}),
+    "kpi_targets":       ("(kpi_key, workspace_id)",     {"kpi_key", "workspace_id", "id"}),
+}
+
 def _sql_translate(sql: str) -> str:
     """Translate SQLite SQL to PostgreSQL SQL."""
     sql = sql.replace("?", "%s")
+
+    # INSERT OR IGNORE → INSERT ... ON CONFLICT DO NOTHING
     if re.search(r"INSERT\s+OR\s+IGNORE", sql, re.IGNORECASE):
         sql = re.sub(r"INSERT\s+OR\s+IGNORE\s+INTO", "INSERT INTO", sql, flags=re.IGNORECASE)
         sql = sql.rstrip().rstrip(";") + " ON CONFLICT DO NOTHING"
+
+    # INSERT OR REPLACE → proper PostgreSQL upsert
+    elif re.search(r"INSERT\s+OR\s+REPLACE", sql, re.IGNORECASE):
+        # If caller already appended ON CONFLICT manually, just strip "OR REPLACE"
+        if re.search(r"ON\s+CONFLICT", sql, re.IGNORECASE):
+            sql = re.sub(r"\s+OR\s+REPLACE", "", sql, flags=re.IGNORECASE)
+        else:
+            m_tbl = re.search(r"INSERT\s+OR\s+REPLACE\s+INTO\s+(\w+)\s*\(([^)]+)\)", sql, re.IGNORECASE)
+            if m_tbl:
+                tbl   = m_tbl.group(1).lower()
+                cols  = [c.strip() for c in m_tbl.group(2).split(",")]
+                upsert = _PG_UPSERT.get(tbl)
+                if upsert:
+                    conflict_target, pk_cols = upsert
+                    upd_cols = [c for c in cols if c.lower() not in pk_cols]
+                    if upd_cols:
+                        updates = ", ".join(f"{c}=EXCLUDED.{c}" for c in upd_cols)
+                        suffix  = f" ON CONFLICT {conflict_target} DO UPDATE SET {updates}"
+                    else:
+                        suffix  = f" ON CONFLICT {conflict_target} DO NOTHING"
+                else:
+                    # Unknown table — safe fallback: strip OR REPLACE, no ON CONFLICT
+                    suffix = ""
+                sql = re.sub(r"INSERT\s+OR\s+REPLACE\s+INTO", "INSERT INTO", sql, flags=re.IGNORECASE)
+                sql = sql.rstrip().rstrip(";") + suffix
+            else:
+                sql = re.sub(r"\s+OR\s+REPLACE", "", sql, flags=re.IGNORECASE)
+
+    # sqlite_master → information_schema.tables (hardcoded table name variant)
+    sql = re.sub(
+        r"SELECT\s+name\s+FROM\s+sqlite_master\s+WHERE\s+type\s*=\s*'table'\s+AND\s+name\s*=\s*'(\w+)'",
+        r"SELECT table_name AS name FROM information_schema.tables WHERE table_schema='public' AND table_name='\1'",
+        sql, flags=re.IGNORECASE,
+    )
+    # sqlite_master → information_schema.tables (parameterised %s variant)
+    sql = re.sub(
+        r"SELECT\s+name\s+FROM\s+sqlite_master\s+WHERE\s+type\s*=\s*'table'\s+AND\s+name\s*=\s*%s",
+        "SELECT table_name AS name FROM information_schema.tables WHERE table_schema='public' AND table_name=%s",
+        sql, flags=re.IGNORECASE,
+    )
+
     sql = re.sub(r"datetime\('now'\)", "NOW()", sql, flags=re.IGNORECASE)
     sql = re.sub(r"date\('now'\)", "CURRENT_DATE", sql, flags=re.IGNORECASE)
     return sql
@@ -7166,7 +7218,9 @@ async def invite_member(body: _InviteRequest, request: Request):
         conn.close()
         raise HTTPException(status_code=403, detail="Only admins can invite members")
     invite_email = body.email.strip().lower()
-    if not _is_work_email(invite_email):
+    # Block free email providers (gmail, yahoo, etc.) but allow any work domain —
+    # even if it isn't in ALLOWED_EMAILS, because the invited user will join via org share.
+    if not _email_domain(invite_email) or _is_free_email(invite_email):
         conn.close()
         raise HTTPException(status_code=400, detail="Please use a work email address")
     # Create invite token
@@ -7310,12 +7364,12 @@ async def save_scenario(body: _ScenarioSaveRequest, request: Request):
     if not workspace_id:
         raise HTTPException(status_code=401, detail="Not authenticated")
     conn = get_db()
-    conn.execute(
+    cur = conn.execute(
         "INSERT INTO saved_scenarios (workspace_id, name, levers_json, notes) VALUES (?,?,?,?)",
         [workspace_id, body.name.strip(), body.levers_json, body.notes],
     )
     conn.commit()
-    new_id = conn.execute("SELECT last_insert_rowid() as id").fetchone()["id"]
+    new_id = cur.lastrowid if cur else None
     conn.close()
     return {"id": new_id, "status": "saved"}
 
