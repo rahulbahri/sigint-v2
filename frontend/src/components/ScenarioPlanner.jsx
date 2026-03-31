@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react'
+import { useState, useMemo, useEffect, useCallback } from 'react'
 import {
   Sliders, TrendingUp, TrendingDown, Minus,
   RefreshCw, BookMarked, ChevronDown, ChevronUp, Info,
@@ -149,8 +149,22 @@ export default function ScenarioPlanner({ fingerprint, authToken }) {
   const [saved, setSaved]               = useState(false)
   const [saveError, setSaveError]       = useState(null)
   const [showInfo, setShowInfo]         = useState(false)
+  const [savedScenarios, setSavedScenarios]   = useState([])
+  const [loadingScenarios, setLoadingScenarios] = useState(false)
+  const [showSavedList, setShowSavedList]     = useState(false)
 
   const headers = authToken ? { Authorization: `Bearer ${authToken}` } : {}
+
+  const loadSavedScenarios = useCallback(async () => {
+    setLoadingScenarios(true)
+    try {
+      const r = await axios.get('/api/scenarios', { headers })
+      setSavedScenarios(r.data.scenarios || [])
+    } catch { /* ignore */ }
+    setLoadingScenarios(false)
+  }, [])
+
+  useEffect(() => { loadSavedScenarios() }, [])
 
   // Base case values from fingerprint
   const baseValues = useMemo(() => {
@@ -174,49 +188,34 @@ export default function ScenarioPlanner({ fingerprint, authToken }) {
     setSaved(false)
   }
 
-  // Save as decision log entry
+  // Save scenario to API
   async function saveScenario() {
+    if (!hasChanges) return
     setSaving(true)
-    const changedLevers = LEVERS.filter(l => levers[l.id] !== 0)
-    const leverSummary = changedLevers
-      .map(l => `${l.label}: ${levers[l.id] > 0 ? '+' : ''}${levers[l.id]}${l.unit}`)
-      .join(', ')
-
-    const impactSummary = OUTPUT_KPIS
-      .map(k => {
-        const base = baseValues[k.key]
-        const proj = projected[k.key]
-        if (base == null || proj == null) return null
-        const delta = proj - base
-        if (Math.abs(delta) < 0.1) return null
-        return `${k.name}: ${fmt(base, k.unit)} → ${fmt(proj, k.unit)} (${delta > 0 ? '+' : ''}${delta.toFixed(1)})`
-      })
-      .filter(Boolean)
-      .join('\n')
-
-    const linkedKpis = OUTPUT_KPIS
-      .filter(k => {
-        const delta = (projected[k.key] || 0) - (baseValues[k.key] || 0)
-        return Math.abs(delta) > 0.1
-      })
-      .map(k => k.key)
-
     setSaveError(null)
     try {
-      await axios.post('/api/decisions', {
-        title:        scenarioName,
-        the_decision: `Scenario analysis: ${leverSummary}`,
-        rationale:    `Projected KPI impact:\n${impactSummary}`,
-        decided_by:   'Finance',
-        kpi_context:  linkedKpis,
+      await axios.post('/api/scenarios', {
+        name:        scenarioName,
+        levers_json: JSON.stringify(levers),
+        notes:       '',
       }, { headers })
       setSaved(true)
       setTimeout(() => setSaved(false), 3000)
+      loadSavedScenarios()
     } catch (err) {
       setSaveError(err?.response?.data?.detail || 'Save failed — please try again.')
     } finally {
       setSaving(false)
     }
+  }
+
+  function loadScenario(scenario) {
+    try {
+      const parsed = JSON.parse(scenario.levers_json)
+      setLevers({ ...initialLevers, ...parsed })
+      setScenarioName(scenario.name)
+      setShowSavedList(false)
+    } catch { /* ignore */ }
   }
 
   return (
@@ -310,11 +309,37 @@ export default function ScenarioPlanner({ fingerprint, authToken }) {
             )
           })}
 
-          {/* Save to Decision Log */}
+          {/* Save Scenario */}
           <div className="bg-white rounded-xl border border-slate-100 px-4 py-3 space-y-2.5">
             <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">
               Save Scenario
             </p>
+            {savedScenarios.length > 0 && (
+              <div className="relative">
+                <button
+                  type="button"
+                  onClick={() => setShowSavedList(v => !v)}
+                  className="w-full text-left flex items-center justify-between px-3 py-2 rounded-lg border border-slate-200 text-xs text-slate-500 hover:border-[#0055A4] hover:text-[#0055A4] transition-colors"
+                >
+                  <span>Load saved scenario…</span>
+                  <ChevronDown size={11}/>
+                </button>
+                {showSavedList && (
+                  <div className="absolute z-20 left-0 right-0 top-full mt-1 bg-white border border-slate-200 rounded-xl shadow-lg overflow-hidden max-h-48 overflow-y-auto">
+                    {savedScenarios.map(s => (
+                      <button
+                        key={s.id}
+                        onClick={() => loadScenario(s)}
+                        className="w-full text-left px-3 py-2.5 text-xs text-slate-700 hover:bg-slate-50 flex items-center justify-between gap-2 border-b border-slate-50 last:border-0"
+                      >
+                        <span className="font-medium truncate">{s.name}</span>
+                        <span className="text-slate-400 flex-shrink-0">{new Date(s.created_at).toLocaleDateString()}</span>
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
             <input
               className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm text-slate-800 focus:outline-none focus:border-[#0055A4]"
               value={scenarioName}
@@ -327,7 +352,7 @@ export default function ScenarioPlanner({ fingerprint, authToken }) {
               className="w-full flex items-center justify-center gap-1.5 text-[11px] font-bold bg-[#0055A4] text-white rounded-lg py-2 hover:bg-blue-700 disabled:opacity-40 transition-colors"
             >
               <BookMarked size={11} />
-              {saved ? 'Saved to Decision Log!' : saving ? 'Saving…' : 'Save to Decision Log'}
+              {saved ? 'Scenario Saved!' : saving ? 'Saving…' : 'Save Scenario'}
             </button>
             {saveError && (
               <p className="text-[10px] text-red-500 flex items-center gap-1 mt-1">

@@ -5,7 +5,7 @@ import {
   Upload, Code2, RefreshCw, ChevronRight,
   Activity, GitBranch, Network, Layers, BarChart2, BookOpen, Bell, Settings2, Target,
   Shield, Menu, X, Zap, LogOut, User, ShieldCheck, AlertCircle as AlertCircleIcon,
-  BookMarked, Sliders, MonitorPlay,
+  BookMarked, Sliders, MonitorPlay, Users,
 } from 'lucide-react'
 import Scorecard from './components/Scorecard.jsx'
 import Fingerprint2 from './components/Fingerprint.jsx'
@@ -23,6 +23,7 @@ import ForecastPage from './components/ForecastPage.jsx'
 import DevDocs from './components/DevDocs.jsx'
 import SlackAlerts from './components/SlackAlerts.jsx'
 import CompanySettings from './components/CompanySettings.jsx'
+import TeamSettings from './components/TeamSettings.jsx'
 import OnboardingModal from './components/OnboardingModal.jsx'
 import VarianceCommand from './components/VarianceCommand.jsx'
 import TargetsEditor from './components/TargetsEditor.jsx'
@@ -76,6 +77,7 @@ const NAV_GROUPS = [
       { id: 'targets', label: 'KPI Targets',      Icon: Target    },
       { id: 'audit',   label: 'Audit Trail',      Icon: Shield    },
       { id: 'company', label: 'Company Settings', Icon: Settings2 },
+      { id: 'team',    label: 'Team & Access',    Icon: Users     },
     ],
   },
 ]
@@ -912,6 +914,7 @@ export default function App() {
               {tab === 'targets'     && <TargetsEditor />}
               {tab === 'audit'      && <AuditLog />}
               {tab === 'company'     && <CompanySettings onSave={(updated) => setCompanySettings(prev => ({ ...prev, ...updated }))}/>}
+              {tab === 'team'        && <TeamSettings authToken={authToken} />}
               {tab === 'api'         && <APIReference kpiDefs={kpiDefs}/>}
               {tab === 'devdocs'     && <DevDocs />}
               {tab === 'admin'       && isAdmin && <AdminPanel />}
@@ -931,6 +934,7 @@ export default function App() {
           {!loading && noData && tab === 'targets'    && <TargetsEditor />}
           {!loading && noData && tab === 'audit'     && <AuditLog />}
           {!loading && noData && tab === 'company'    && <CompanySettings onSave={(updated) => setCompanySettings(prev => ({ ...prev, ...updated }))}/>}
+          {!loading && noData && tab === 'team'       && <TeamSettings authToken={authToken} />}
           {!loading && noData && tab === 'api'        && <APIReference kpiDefs={kpiDefs}/>}
           {!loading && noData && tab === 'devdocs'    && <DevDocs />}
           {!loading && tab === 'admin' && isAdmin     && <AdminPanel />}

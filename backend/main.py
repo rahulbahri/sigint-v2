@@ -26,28 +26,56 @@ STRIPE_WEBHOOK_SEC = os.environ.get("STRIPE_WEBHOOK_SECRET", "")
 QB_CLIENT_ID       = os.environ.get("INTUIT_CLIENT_ID", "")
 QB_CLIENT_SECRET   = os.environ.get("INTUIT_CLIENT_SECRET", "")
 QB_REDIRECT_URI    = os.environ.get("QB_REDIRECT_URI", "")
-ALLOWED_EMAILS     = [e.strip().lower() for e in os.environ.get("ALLOWED_EMAILS", "rahul@axiomsync.ai").split(",")]
+ALLOWED_EMAILS     = [e.strip().lower() for e in os.environ.get("ALLOWED_EMAILS", "").split(",") if e.strip()]
+ALLOWED_DOMAINS    = [d.strip().lower() for d in os.environ.get("ALLOWED_DOMAINS", "").split(",") if d.strip()]
 _USE_PG            = bool(DATABASE_URL)
 
 # ── Work-email validator ─────────────────────────────────────────────────────
 _FREE_EMAIL_DOMAINS = {
-    "gmail.com","googlemail.com","yahoo.com","yahoo.co.uk","yahoo.fr","yahoo.de",
-    "yahoo.es","yahoo.it","yahoo.ca","yahoo.com.au","hotmail.com","hotmail.co.uk",
-    "hotmail.fr","hotmail.de","hotmail.es","hotmail.it","outlook.com","live.com",
-    "live.co.uk","msn.com","aol.com","aol.co.uk","icloud.com","me.com","mac.com",
-    "protonmail.com","proton.me","pm.me","mail.com","inbox.com","gmx.com","gmx.net",
-    "gmx.de","yandex.com","yandex.ru","zoho.com","rediffmail.com","qq.com",
-    "163.com","126.com","sina.com","tutanota.com","guerrillamail.com","tempmail.com",
-    "throwaway.email","mailinator.com","sharklasers.com","guerrillamailblock.com",
+    "gmail.com","googlemail.com","yahoo.com","yahoo.co.uk","yahoo.co.in",
+    "hotmail.com","hotmail.co.uk","outlook.com","live.com","live.co.uk",
+    "icloud.com","me.com","mac.com","aol.com","aol.co.uk",
+    "protonmail.com","proton.me","tutanota.com","tutanota.de",
+    "fastmail.com","fastmail.fm","zoho.com","yandex.com","yandex.ru",
+    "mail.com","inbox.com","gmx.com","gmx.de","web.de",
+    "msn.com","passport.com","windowslive.com",
 }
 
+def _email_domain(email: str) -> str:
+    """Extract domain from email address."""
+    return email.split("@")[-1].lower() if "@" in email else ""
+
+def _is_free_email(email: str) -> bool:
+    return _email_domain(email) in _FREE_EMAIL_DOMAINS
+
+def _org_id_for_email(email: str) -> str:
+    """
+    Return the org/workspace ID for an email.
+    Work emails → domain (e.g. acmecorp.com)
+    Free/personal emails → full email (personal workspace)
+    """
+    domain = _email_domain(email)
+    if not domain or domain in _FREE_EMAIL_DOMAINS:
+        return email.lower()
+    return domain
+
 def _is_work_email(email: str) -> bool:
-    """Returns True if email is from a non-free domain."""
-    try:
-        domain = email.strip().lower().split("@")[1]
-        return domain not in _FREE_EMAIL_DOMAINS
-    except Exception:
-        return False
+    """
+    Returns True if the email is allowed to sign in.
+    Priority:
+      1. Exact match in ALLOWED_EMAILS whitelist (always allowed)
+      2. Domain match in ALLOWED_DOMAINS whitelist (if set, restricts to those domains)
+      3. If neither whitelist is set: allow all non-free-email domains
+    """
+    email = email.strip().lower()
+    # Always allow explicitly whitelisted emails
+    if ALLOWED_EMAILS and email in ALLOWED_EMAILS:
+        return True
+    # Domain whitelist takes precedence if configured
+    if ALLOWED_DOMAINS:
+        return _email_domain(email) in ALLOWED_DOMAINS
+    # Default: allow any work email (reject free providers)
+    return not _is_free_email(email)
 
 # ── Conditional imports ──────────────────────────────────────────────────────
 if _USE_PG:
@@ -282,7 +310,30 @@ def get_db():
     return conn
 
 def _get_workspace(request: Request) -> str:
-    """Extract workspace_id (email) from JWT in Authorization header or cookie."""
+    """
+    Extract workspace_id from JWT.
+    Returns org_id (domain for work emails, email for personal) so that
+    all members of the same organisation share a single workspace.
+    """
+    token_str = ""
+    auth_header = request.headers.get("Authorization", "")
+    if auth_header.startswith("Bearer "):
+        token_str = auth_header[7:].strip()
+    if not token_str:
+        token_str = request.cookies.get("axiom_session", "")
+    if not token_str:
+        return ""
+    try:
+        import jwt as _j
+        payload = _j.decode(token_str, JWT_SECRET, algorithms=["HS256"])
+        # Prefer org_id (new tokens); fall back to email (legacy tokens)
+        return payload.get("org_id") or payload.get("email", "")
+    except Exception:
+        return ""
+
+
+def _get_user_email(request: Request) -> str:
+    """Extract the individual user's email from JWT (not the org/workspace id)."""
     token_str = ""
     auth_header = request.headers.get("Authorization", "")
     if auth_header.startswith("Bearer "):
@@ -297,6 +348,30 @@ def _get_workspace(request: Request) -> str:
         return payload.get("email", "")
     except Exception:
         return ""
+
+
+def _migrate_workspace_data(conn, old_workspace_id: str, new_workspace_id: str):
+    """
+    One-time migration: re-tag all rows from old_workspace_id (email) to
+    new_workspace_id (org domain) so the user's data is accessible under the
+    shared org workspace.
+    """
+    if old_workspace_id == new_workspace_id:
+        return
+    tables = [
+        "uploads", "monthly_data", "kpi_targets", "projection_uploads",
+        "projection_monthly_data", "kpi_accountability", "annotations",
+        "recommendation_outcomes", "audit_log", "company_settings",
+        "decisions", "connector_configs", "markov_models", "saved_scenarios",
+    ]
+    for tbl in tables:
+        try:
+            conn.execute(
+                f"UPDATE {tbl} SET workspace_id=? WHERE workspace_id=?",
+                [new_workspace_id, old_workspace_id],
+            )
+        except Exception:
+            pass
 
 def init_db():
     conn = get_db()
@@ -531,14 +606,64 @@ def init_db():
     """)
     conn.execute("""
         CREATE TABLE IF NOT EXISTS users (
+            id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            email        TEXT NOT NULL UNIQUE,
+            org_id       TEXT DEFAULT '',
+            role         TEXT DEFAULT 'admin',
+            display_name TEXT DEFAULT '',
+            status       TEXT DEFAULT 'active',
+            invited_by   TEXT DEFAULT '',
+            org_migrated INTEGER DEFAULT 0,
+            created_at   TEXT DEFAULT (datetime('now')),
+            last_login   TEXT
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS organisations (
+            id           TEXT PRIMARY KEY,
+            name         TEXT DEFAULT '',
+            plan         TEXT DEFAULT 'free',
+            invite_only  INTEGER DEFAULT 0,
+            created_at   TEXT DEFAULT (datetime('now'))
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS org_invites (
             id          INTEGER PRIMARY KEY AUTOINCREMENT,
-            email       TEXT NOT NULL UNIQUE,
-            role        TEXT DEFAULT 'admin',
-            created_at  TEXT DEFAULT (datetime('now')),
-            last_login  TEXT
+            org_id      TEXT NOT NULL,
+            email       TEXT NOT NULL,
+            invited_by  TEXT NOT NULL,
+            token       TEXT UNIQUE NOT NULL,
+            expires_at  TEXT NOT NULL,
+            accepted    INTEGER DEFAULT 0,
+            created_at  TEXT DEFAULT (datetime('now'))
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS saved_scenarios (
+            id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            workspace_id TEXT NOT NULL,
+            name         TEXT NOT NULL,
+            levers_json  TEXT NOT NULL,
+            notes        TEXT DEFAULT '',
+            created_at   TEXT DEFAULT (datetime('now')),
+            updated_at   TEXT DEFAULT (datetime('now'))
         )
     """)
     conn.commit()
+    # ALTER TABLE migrations for users columns
+    for _mig in [
+        "ALTER TABLE users ADD COLUMN org_id TEXT DEFAULT ''",
+        "ALTER TABLE users ADD COLUMN display_name TEXT DEFAULT ''",
+        "ALTER TABLE users ADD COLUMN status TEXT DEFAULT 'active'",
+        "ALTER TABLE users ADD COLUMN invited_by TEXT DEFAULT ''",
+        "ALTER TABLE users ADD COLUMN org_migrated INTEGER DEFAULT 0",
+    ]:
+        try:
+            conn.execute(_mig)
+            conn.commit()
+        except Exception:
+            pass
     conn.close()
 
 try:
@@ -3956,11 +4081,20 @@ def _run_ontology_discovery():
 # ── Ontology endpoints ────────────────────────────────────────────────────
 
 @app.post("/api/ontology/discover")
-def ontology_discover():
-    """Trigger background knowledge-graph discovery."""
+def ontology_discover(request: Request):
+    """Trigger background knowledge-graph discovery for the current workspace."""
+    workspace_id = _get_workspace(request)
+    if not workspace_id:
+        raise HTTPException(status_code=401, detail="Not authenticated")
     def _bg():
         try:
-            _run_ontology_discovery()
+            _run_ontology_discovery(workspace_id=workspace_id)
+        except TypeError:
+            # Older _run_ontology_discovery doesn't accept workspace_id
+            try:
+                _run_ontology_discovery()
+            except Exception as exc:
+                print(f"Ontology discovery error: {exc}")
         except Exception as exc:
             print(f"Ontology discovery error: {exc}")
     threading.Thread(target=_bg, daemon=True).start()
@@ -6651,19 +6785,25 @@ class MagicLinkRequest(_BM2):
 class VerifyTokenRequest(_BM2):
     token: str
 
-async def _send_magic_link_email(to_email: str, magic_url: str) -> bool:
+async def _send_magic_link_email(to_email: str, magic_url: str, subject: str = None, body_override: str = None) -> bool:
     if not RESEND_API_KEY:
         return False
     try:
-        async with httpx.AsyncClient(timeout=10) as client:
-            resp = await client.post(
-                "https://api.resend.com/emails",
-                headers={"Authorization": f"Bearer {RESEND_API_KEY}", "Content-Type": "application/json"},
-                json={
-                    "from": f"Axiom <{RESEND_FROM}>",
-                    "to": [to_email],
-                    "subject": "Your Axiom sign-in link",
-                    "html": f"""
+        email_subject = subject if subject else "Your Axiom sign-in link"
+        if body_override:
+            # Plain-text body override — wrap in simple HTML
+            body_lines = body_override.replace("\n", "<br>")
+            email_html = f"""
+                    <div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+                                max-width:480px;margin:0 auto;padding:40px 24px;background:#fff">
+                      <div style="margin-bottom:32px">
+                        <span style="font-size:20px;font-weight:700;color:#6366f1">Axiom</span>
+                      </div>
+                      <p style="color:#0f172a;line-height:1.6">{body_lines}</p>
+                    </div>
+                    """
+        else:
+            email_html = f"""
                     <div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
                                 max-width:480px;margin:0 auto;padding:40px 24px;background:#fff">
                       <div style="margin-bottom:32px">
@@ -6685,6 +6825,15 @@ async def _send_magic_link_email(to_email: str, magic_url: str) -> bool:
                       </p>
                     </div>
                     """
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.post(
+                "https://api.resend.com/emails",
+                headers={"Authorization": f"Bearer {RESEND_API_KEY}", "Content-Type": "application/json"},
+                json={
+                    "from": f"Axiom <{RESEND_FROM}>",
+                    "to": [to_email],
+                    "subject": email_subject,
+                    "html": email_html,
                 }
             )
             return resp.status_code in (200, 201)
@@ -6799,16 +6948,57 @@ async def verify_magic_token(body: VerifyTokenRequest):
             raise
         except Exception as _ve:
             raise HTTPException(status_code=500, detail="Verification failed. Please request a new sign-in link.")
+    org_id = _org_id_for_email(email)
+    # Ensure org exists
+    try:
+        conn2 = get_db()
+        conn2.execute(
+            "INSERT OR IGNORE INTO organisations (id, name) VALUES (?,?)",
+            [org_id, org_id],
+        )
+        # Determine role: first user in org = admin, rest = member
+        existing = conn2.execute(
+            "SELECT COUNT(*) as c FROM users WHERE org_id=? AND status='active'",
+            [org_id],
+        ).fetchone()
+        role = "admin" if (not existing or existing["c"] == 0) else "member"
+        conn2.execute(
+            "INSERT OR IGNORE INTO users (email, org_id, role) VALUES (?,?,?)",
+            [email, org_id, role],
+        )
+        conn2.execute(
+            "UPDATE users SET last_login=?, org_id=?, role=COALESCE(NULLIF(role,''), ?) WHERE email=?",
+            [datetime.utcnow().isoformat(), org_id, role, email],
+        )
+        # One-time migration: re-tag old per-email workspace data to org workspace
+        migrated = conn2.execute(
+            "SELECT org_migrated FROM users WHERE email=?", [email]
+        ).fetchone()
+        if migrated and not migrated["org_migrated"]:
+            _migrate_workspace_data(conn2, email, org_id)
+            conn2.execute(
+                "UPDATE users SET org_migrated=1 WHERE email=?", [email]
+            )
+        conn2.commit()
+        # Fetch confirmed role
+        user_row = conn2.execute("SELECT role FROM users WHERE email=?", [email]).fetchone()
+        role = user_row["role"] if user_row else "member"
+        conn2.close()
+    except Exception as _oe:
+        print(f"[Auth] Org setup warning: {_oe}")
+        role = "member"
+
     if not _JWT_AVAILABLE:
         raise HTTPException(status_code=500, detail="JWT library not available")
     payload = {
-        "email": email,
-        "role": "admin",
-        "exp": datetime.utcnow() + timedelta(days=30),
-        "iat": datetime.utcnow(),
+        "email":  email,
+        "org_id": org_id,
+        "role":   role,
+        "exp":    datetime.utcnow() + timedelta(days=30),
+        "iat":    datetime.utcnow(),
     }
     token_str = _jwt.encode(payload, JWT_SECRET, algorithm="HS256")
-    return {"token": token_str, "email": email}
+    return {"token": token_str, "email": email, "org_id": org_id, "role": role}
 
 @app.get("/api/auth/login/{token}")
 async def magic_link_redirect(token: str):
@@ -6846,11 +7036,32 @@ async def magic_link_redirect(token: str):
             return RedirectResponse(url=f"{APP_URL}/?auth_error=error")
     if not _JWT_AVAILABLE:
         return RedirectResponse(url=f"{APP_URL}/?auth_error=config")
+    org_id = _org_id_for_email(email)
+    # Ensure org + user exist, run migration
+    try:
+        _conn = get_db()
+        _conn.execute("INSERT OR IGNORE INTO organisations (id, name) VALUES (?,?)", [org_id, org_id])
+        existing = _conn.execute("SELECT COUNT(*) as c FROM users WHERE org_id=? AND status='active'", [org_id]).fetchone()
+        role = "admin" if (not existing or existing["c"] == 0) else "member"
+        _conn.execute("INSERT OR IGNORE INTO users (email, org_id, role) VALUES (?,?,?)", [email, org_id, role])
+        _conn.execute("UPDATE users SET last_login=?, org_id=?, role=COALESCE(NULLIF(role,''), ?) WHERE email=?",
+                      [datetime.utcnow().isoformat(), org_id, role, email])
+        migrated = _conn.execute("SELECT org_migrated FROM users WHERE email=?", [email]).fetchone()
+        if migrated and not migrated["org_migrated"]:
+            _migrate_workspace_data(_conn, email, org_id)
+            _conn.execute("UPDATE users SET org_migrated=1 WHERE email=?", [email])
+        _conn.commit()
+        user_row = _conn.execute("SELECT role FROM users WHERE email=?", [email]).fetchone()
+        role = user_row["role"] if user_row else "member"
+        _conn.close()
+    except Exception:
+        role = "admin"
     payload = {
-        "email": email,
-        "role": "admin",
-        "exp": datetime.utcnow() + timedelta(days=30),
-        "iat": datetime.utcnow(),
+        "email":  email,
+        "org_id": org_id,
+        "role":   role,
+        "exp":    datetime.utcnow() + timedelta(days=30),
+        "iat":    datetime.utcnow(),
     }
     jwt_token = _jwt.encode(payload, JWT_SECRET, algorithm="HS256")
     # Redirect to frontend with JWT in hash fragment (never sent to server, Safari-safe)
@@ -6888,6 +7099,255 @@ async def logout():
     response = JSONResponse({"message": "Logged out"})
     response.delete_cookie("axiom_session", path="/")
     return response
+
+
+# ─── Org / Team Management ────────────────────────────────────────────────────
+
+@app.get("/api/org", tags=["Org"])
+def get_org(request: Request):
+    """Return current org info + member list."""
+    workspace_id = _get_workspace(request)
+    user_email   = _get_user_email(request)
+    if not workspace_id:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    conn = get_db()
+    org  = conn.execute("SELECT * FROM organisations WHERE id=?", [workspace_id]).fetchone()
+    members = conn.execute(
+        "SELECT email, role, display_name, status, last_login, created_at FROM users "
+        "WHERE org_id=? AND status != 'removed' ORDER BY created_at ASC",
+        [workspace_id],
+    ).fetchall()
+    invites = conn.execute(
+        "SELECT email, invited_by, created_at, expires_at FROM org_invites "
+        "WHERE org_id=? AND accepted=0 AND expires_at > datetime('now') ORDER BY created_at DESC",
+        [workspace_id],
+    ).fetchall()
+    conn.close()
+    return {
+        "org": {
+            "id":          workspace_id,
+            "name":        org["name"] if org else workspace_id,
+            "plan":        org["plan"] if org else "free",
+            "invite_only": bool(org["invite_only"]) if org else False,
+        },
+        "members": [
+            {
+                "email":        r["email"],
+                "role":         r["role"] or "member",
+                "display_name": r["display_name"] or "",
+                "status":       r["status"] or "active",
+                "last_login":   r["last_login"] or "",
+                "is_you":       r["email"] == user_email,
+            }
+            for r in members
+        ],
+        "pending_invites": [
+            {"email": r["email"], "invited_by": r["invited_by"], "sent_at": r["created_at"]}
+            for r in invites
+        ],
+    }
+
+
+class _InviteRequest(_BM2):
+    email: str
+    role:  str = "member"
+
+@app.post("/api/org/invite", tags=["Org"])
+async def invite_member(body: _InviteRequest, request: Request):
+    """Send an invite email to add a new member. Admin only."""
+    workspace_id = _get_workspace(request)
+    user_email   = _get_user_email(request)
+    if not workspace_id:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    # Check caller is admin
+    conn = get_db()
+    caller = conn.execute("SELECT role FROM users WHERE email=?", [user_email]).fetchone()
+    if not caller or caller["role"] != "admin":
+        conn.close()
+        raise HTTPException(status_code=403, detail="Only admins can invite members")
+    invite_email = body.email.strip().lower()
+    if not _is_work_email(invite_email):
+        conn.close()
+        raise HTTPException(status_code=400, detail="Please use a work email address")
+    # Create invite token
+    inv_token  = secrets.token_urlsafe(32)
+    expires_at = (datetime.utcnow() + timedelta(days=7)).isoformat()
+    conn.execute(
+        "INSERT OR REPLACE INTO org_invites (org_id, email, invited_by, token, expires_at) "
+        "VALUES (?,?,?,?,?)",
+        [workspace_id, invite_email, user_email, inv_token, expires_at],
+    )
+    # Pre-create user with pending status so they appear in member list
+    conn.execute(
+        "INSERT OR IGNORE INTO users (email, org_id, role, status, invited_by) "
+        "VALUES (?,?,?,?,?)",
+        [invite_email, workspace_id, body.role, "invited", user_email],
+    )
+    conn.commit()
+    conn.close()
+    # Send invite email
+    invite_url = f"{APP_URL}/api/auth/accept-invite/{inv_token}"
+    await _send_magic_link_email(
+        invite_email,
+        invite_url,
+        subject=f"You've been invited to join {workspace_id} on AxiomSync",
+        body_override=(
+            f"{user_email} has invited you to join their AxiomSync workspace.\n\n"
+            f"Click the link below to accept and sign in:\n{invite_url}\n\n"
+            "This link expires in 7 days."
+        ),
+    )
+    return {"status": "invited", "email": invite_email}
+
+
+@app.get("/api/auth/accept-invite/{token}", tags=["Auth"])
+async def accept_invite(token: str):
+    """Accept an org invite — sets workspace, redirects to app."""
+    from fastapi.responses import RedirectResponse
+    conn = get_db()
+    inv = conn.execute(
+        "SELECT * FROM org_invites WHERE token=? AND accepted=0 AND expires_at > datetime('now')",
+        [token],
+    ).fetchone()
+    if not inv:
+        conn.close()
+        return RedirectResponse(url=f"{APP_URL}/?auth_error=invite_expired")
+    email  = inv["email"]
+    org_id = inv["org_id"]
+    conn.execute("UPDATE org_invites SET accepted=1 WHERE token=?", [token])
+    conn.execute(
+        "UPDATE users SET org_id=?, status='active', org_migrated=1 WHERE email=?",
+        [org_id, email],
+    )
+    conn.execute("INSERT OR IGNORE INTO users (email, org_id, role, status) VALUES (?,?,?,?)",
+                 [email, org_id, inv["role"] if "role" in inv.keys() else "member", "active"])
+    conn.commit()
+    conn.close()
+    # Issue a magic link token so they get logged straight in
+    new_token  = secrets.token_urlsafe(32)
+    expires    = (datetime.utcnow() + timedelta(minutes=15)).isoformat()
+    conn2 = get_db()
+    conn2.execute("INSERT INTO magic_tokens (email, token, expires_at) VALUES (?,?,?)",
+                  [email, new_token, expires])
+    conn2.commit()
+    conn2.close()
+    return RedirectResponse(url=f"{APP_URL}/api/auth/login/{new_token}")
+
+
+class _MemberUpdateRequest(_BM2):
+    role: str
+
+@app.put("/api/org/members/{member_email}", tags=["Org"])
+async def update_member(member_email: str, body: _MemberUpdateRequest, request: Request):
+    """Change a member's role. Admin only."""
+    workspace_id = _get_workspace(request)
+    user_email   = _get_user_email(request)
+    if not workspace_id:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    conn = get_db()
+    caller = conn.execute("SELECT role FROM users WHERE email=?", [user_email]).fetchone()
+    if not caller or caller["role"] != "admin":
+        conn.close()
+        raise HTTPException(status_code=403, detail="Only admins can change roles")
+    if body.role not in ("admin", "member"):
+        raise HTTPException(status_code=400, detail="role must be 'admin' or 'member'")
+    conn.execute(
+        "UPDATE users SET role=? WHERE email=? AND org_id=?",
+        [body.role, member_email, workspace_id],
+    )
+    conn.commit()
+    conn.close()
+    return {"status": "updated"}
+
+
+@app.delete("/api/org/members/{member_email}", tags=["Org"])
+async def remove_member(member_email: str, request: Request):
+    """Remove a member from the org. Admin only. Cannot remove yourself."""
+    workspace_id = _get_workspace(request)
+    user_email   = _get_user_email(request)
+    if not workspace_id:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    if member_email == user_email:
+        raise HTTPException(status_code=400, detail="You cannot remove yourself")
+    conn = get_db()
+    caller = conn.execute("SELECT role FROM users WHERE email=?", [user_email]).fetchone()
+    if not caller or caller["role"] != "admin":
+        conn.close()
+        raise HTTPException(status_code=403, detail="Only admins can remove members")
+    conn.execute(
+        "UPDATE users SET status='removed' WHERE email=? AND org_id=?",
+        [member_email, workspace_id],
+    )
+    conn.commit()
+    conn.close()
+    return {"status": "removed"}
+
+
+# ─── Saved Scenarios ──────────────────────────────────────────────────────────
+
+class _ScenarioSaveRequest(_BM2):
+    name:        str
+    levers_json: str
+    notes:       str = ""
+
+@app.get("/api/scenarios", tags=["Scenarios"])
+def list_scenarios(request: Request):
+    workspace_id = _get_workspace(request)
+    if not workspace_id:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    conn = get_db()
+    rows = conn.execute(
+        "SELECT id, name, levers_json, notes, created_at, updated_at "
+        "FROM saved_scenarios WHERE workspace_id=? ORDER BY updated_at DESC",
+        [workspace_id],
+    ).fetchall()
+    conn.close()
+    return {"scenarios": [dict(r) for r in rows]}
+
+@app.post("/api/scenarios", tags=["Scenarios"])
+async def save_scenario(body: _ScenarioSaveRequest, request: Request):
+    workspace_id = _get_workspace(request)
+    if not workspace_id:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    conn = get_db()
+    conn.execute(
+        "INSERT INTO saved_scenarios (workspace_id, name, levers_json, notes) VALUES (?,?,?,?)",
+        [workspace_id, body.name.strip(), body.levers_json, body.notes],
+    )
+    conn.commit()
+    new_id = conn.execute("SELECT last_insert_rowid() as id").fetchone()["id"]
+    conn.close()
+    return {"id": new_id, "status": "saved"}
+
+@app.put("/api/scenarios/{scenario_id}", tags=["Scenarios"])
+async def update_scenario(scenario_id: int, body: _ScenarioSaveRequest, request: Request):
+    workspace_id = _get_workspace(request)
+    if not workspace_id:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    conn = get_db()
+    conn.execute(
+        "UPDATE saved_scenarios SET name=?, levers_json=?, notes=?, updated_at=datetime('now') "
+        "WHERE id=? AND workspace_id=?",
+        [body.name.strip(), body.levers_json, body.notes, scenario_id, workspace_id],
+    )
+    conn.commit()
+    conn.close()
+    return {"status": "updated"}
+
+@app.delete("/api/scenarios/{scenario_id}", tags=["Scenarios"])
+async def delete_scenario(scenario_id: int, request: Request):
+    workspace_id = _get_workspace(request)
+    if not workspace_id:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    conn = get_db()
+    conn.execute(
+        "DELETE FROM saved_scenarios WHERE id=? AND workspace_id=?",
+        [scenario_id, workspace_id],
+    )
+    conn.commit()
+    conn.close()
+    return {"status": "deleted"}
+
 
 @app.delete("/api/workspace/data", tags=["Settings"])
 async def delete_workspace_data(request: Request):
@@ -7302,7 +7762,9 @@ except Exception as _elt_import_err:
     # Stub classes so the rest of the file doesn't crash
     class ConnectorError(Exception): pass
     class Transformer: pass
-    class GapDetector: pass
+    class GapDetector:
+        def __init__(self, *args, **kwargs): pass
+        def run(self): return {"gaps": [], "summary": {"total_gaps": 0, "critical": 0}, "error": "ELT modules unavailable"}
     def encrypt_credentials(c): return ""
     def decrypt_credentials(t): return {}
 
