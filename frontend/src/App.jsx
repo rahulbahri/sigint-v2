@@ -399,7 +399,8 @@ export default function App() {
   }
 
   async function seedDemo() {
-    await axios.get('/api/seed-multiyear')
+    setLoading(true)
+    try { await axios.get('/api/seed-multiyear') } catch {}
     loadAll()
   }
 
@@ -866,12 +867,20 @@ export default function App() {
 
               {/* ── No-data prompt for analysis tabs only ────────────────────── */}
               {noData && ['variance','board','dashboard','fingerprint','trends'].includes(tab) && (
-                <div className="flex flex-col items-center justify-center h-64 gap-4">
-                  <p className="text-slate-500 text-base">No data yet — upload a CSV to get started.</p>
+                <div className="flex flex-col items-center justify-center h-64 gap-6">
+                  <div className="text-center">
+                    <p className="text-slate-400 text-base font-medium mb-1">No data yet</p>
+                    <p className="text-slate-500 text-sm">Upload your own data or load 5 years of demo data to explore the platform.</p>
+                  </div>
                   <div className="flex gap-3">
                     <button onClick={() => setTab('upload')}
-                      className="px-5 py-2 rounded-lg bg-[#0055A4] hover:bg-[#003d80] text-white text-sm font-medium transition-colors">
+                      className="px-5 py-2 rounded-lg border border-slate-300 text-slate-600 hover:border-slate-400 hover:bg-slate-50 text-sm font-medium transition-colors">
                       Upload CSV
+                    </button>
+                    <button onClick={seedDemo}
+                      className="px-5 py-2 rounded-lg bg-[#0055A4] hover:bg-[#003d80] text-white text-sm font-medium transition-colors flex items-center gap-2">
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 2v6m0 0l3-3m-3 3L9 5M2 17l10 5 10-5M2 12l10 5 10-5"/></svg>
+                      Load Demo Data
                     </button>
                   </div>
                 </div>
