@@ -111,10 +111,6 @@ def health():
         "sentry": "enabled" if _SENTRY_DSN else "disabled",
     }
 
-@app.get("/api/sentry-debug", tags=["System"], include_in_schema=False)
-async def sentry_debug():
-    """Intentional divide-by-zero to verify Sentry is receiving events."""
-    _ = 1 / 0
 
 # ── Global error handler ──────────────────────────────────────────────────────
 
