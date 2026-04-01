@@ -1,4 +1,4 @@
-import { useState, useRef } from 'react'
+import { useState, useRef, useEffect } from 'react'
 import axios from 'axios'
 import { Upload, CheckCircle, AlertCircle, FileText, Trash2, GitBranch, Activity, AlertTriangle, Download } from 'lucide-react'
 
@@ -48,7 +48,7 @@ export default function CSVUpload({ onUploaded }) {
     setImporting(true); setImportResult(null); setImportError(null)
     const fd = new FormData(); fd.append('file', file)
     try {
-      const r = await axios.post('/api/import/data', fd, { headers: { 'Content-Type': 'multipart/form-data' } })
+      const r = await axios.post('/api/import/data', fd)
       setImportResult(r.data); onUploaded?.()
     } catch(e) { setImportError(e.response?.data?.detail || 'Import failed') }
     setImporting(false)
@@ -66,11 +66,11 @@ export default function CSVUpload({ onUploaded }) {
     try { const r = await axios.get('/api/uploads'); setUploads(r.data) } catch {}
   }
   async function handleFile(file) {
-    if (!file?.name.endsWith('.csv')) { setError('Please upload a .csv file'); return }
+    if (!/\.(csv|xlsx|xls)$/i.test(file?.name || '')) { setError('Please upload a .csv or .xlsx file'); return }
     setLoading(true); setResult(null); setError(null)
     const fd = new FormData(); fd.append('file', file)
     try {
-      const r = await axios.post('/api/upload', fd, { headers: { 'Content-Type': 'multipart/form-data' } })
+      const r = await axios.post('/api/upload', fd)
       setResult(r.data); onUploaded?.(); fetchUploads()
     } catch(e) { setError(e.response?.data?.detail || 'Upload failed') }
     setLoading(false)
@@ -92,11 +92,11 @@ export default function CSVUpload({ onUploaded }) {
     try { const r = await axios.get('/api/projection/uploads'); setProjUploads(r.data) } catch {}
   }
   async function handleProjFile(file) {
-    if (!file?.name.endsWith('.csv')) { setProjError('Please upload a .csv file'); return }
+    if (!/\.(csv|xlsx|xls)$/i.test(file?.name || '')) { setProjError('Please upload a .csv or .xlsx file'); return }
     setProjLoading(true); setProjResult(null); setProjError(null)
     const fd = new FormData(); fd.append('file', file)
     try {
-      const r = await axios.post('/api/projection/upload', fd, { headers: { 'Content-Type': 'multipart/form-data' } })
+      const r = await axios.post('/api/projection/upload', fd)
       setProjResult(r.data); onUploaded?.(); fetchProjUploads()
     } catch(e) { setProjError(e.response?.data?.detail || 'Upload failed') }
     setProjLoading(false)
@@ -112,7 +112,7 @@ export default function CSVUpload({ onUploaded }) {
   }
 
   // Fetch both on mount
-  useState(() => { fetchUploads(); fetchProjUploads() }, [])
+  useEffect(() => { fetchUploads(); fetchProjUploads() }, [])
 
   return (
     <div className="space-y-10 max-w-3xl">
@@ -202,7 +202,7 @@ export default function CSVUpload({ onUploaded }) {
             dragging ? 'border-[#0055A4] bg-blue-50' : 'border-slate-200 hover:border-slate-300 hover:bg-slate-50'
           }`}
         >
-          <input ref={fileRef} type="file" accept=".csv" className="hidden"
+          <input ref={fileRef} type="file" accept=".csv,.xlsx,.xls" className="hidden"
             onChange={e => handleFile(e.target.files[0])}/>
           {loading
             ? <div className="flex flex-col items-center gap-3">
@@ -211,7 +211,7 @@ export default function CSVUpload({ onUploaded }) {
               </div>
             : <div className="flex flex-col items-center gap-3">
                 <Upload size={36} className="text-slate-400"/>
-                <p className="text-slate-700 font-medium">Drop CSV here or click to browse</p>
+                <p className="text-slate-700 font-medium">Drop CSV or Excel file here, or click to browse</p>
                 <p className="text-slate-400 text-xs">
                   Accepts: date, revenue, cogs, opex, ar, mrr, arr, customers, churn, is_recurring, sm_allocated, headcount
                 </p>
@@ -358,7 +358,7 @@ export default function CSVUpload({ onUploaded }) {
             projDragging ? 'border-blue-400 bg-blue-50' : 'border-slate-200 hover:border-blue-300 hover:bg-blue-50/40'
           }`}
         >
-          <input ref={projFileRef} type="file" accept=".csv" className="hidden"
+          <input ref={projFileRef} type="file" accept=".csv,.xlsx,.xls" className="hidden"
             onChange={e => handleProjFile(e.target.files[0])}/>
           {projLoading
             ? <div className="flex flex-col items-center gap-3">
