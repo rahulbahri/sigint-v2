@@ -5,7 +5,8 @@ import {
   Upload, Code2, RefreshCw, ChevronRight,
   Activity, GitBranch, Network, Layers, BarChart2, BookOpen, Bell, Settings2, Target,
   Shield, Menu, X, Zap, LogOut, User, ShieldCheck, AlertCircle as AlertCircleIcon,
-  BookMarked, Sliders, MonitorPlay, Users,
+  BookMarked, Sliders, Users, Gauge, FlaskConical, Presentation,
+  Database, Lock,
 } from 'lucide-react'
 import Scorecard from './components/Scorecard.jsx'
 import Fingerprint2 from './components/Fingerprint.jsx'
@@ -33,42 +34,40 @@ import PricingPage from './components/PricingPage'
 import LoginPage from './components/LoginPage'
 import AdminPanel from './components/AdminPanel.jsx'
 import LegalPage from './components/LegalPage.jsx'
-import DataSourcesPage from './components/DataSourcesPage.jsx'
-import DataGapsPage from './components/DataGapsPage.jsx'
-import FieldMappingPage from './components/FieldMappingPage.jsx'
-import DataQualityPage from './components/DataQualityPage.jsx'
 import DecisionLog from './components/DecisionLog.jsx'
 import ScenarioPlanner from './components/ScenarioPlanner.jsx'
 import DocsPage from './components/DocsPage.jsx'
+import HomeScreen from './components/HomeScreen.jsx'
+import DataHealthPage from './components/DataHealthPage.jsx'
+import BoardPackGenerator from './components/BoardPackGenerator.jsx'
 
-// ── V2: Nav structured into labelled zones with business-friendly names ──────
+// ── Navigation — 4 groups + Labs ─────────────────────────────────────────────
 const NAV_GROUPS = [
   {
     label: 'Intelligence',
     tabs: [
-      { id: 'board',     label: 'Executive Brief',  Icon: Layers     },
-      { id: 'variance',  label: 'Variance Command', Icon: Activity   },
-      { id: 'decisions', label: 'Decision Log',     Icon: BookMarked },
+      { id: 'home',       label: 'Home',               Icon: Gauge      },
+      { id: 'board',      label: 'Executive Brief',     Icon: Layers     },
+      { id: 'board_pack', label: 'Board Pack',          Icon: Presentation},
+      { id: 'variance',   label: 'Variance Command',    Icon: Activity   },
+      { id: 'decisions',  label: 'Decision Log',        Icon: BookMarked },
     ],
   },
   {
     label: 'Analysis',
     tabs: [
-      { id: 'fingerprint', label: 'Performance Fingerprint', Icon: Fingerprint  },
-      { id: 'trends',      label: 'Trend Explorer',          Icon: TrendingUp   },
-      { id: 'forecast',    label: 'Forward Signals',         Icon: BarChart2    },
-      { id: 'projection',  label: 'Plan vs Actual',          Icon: GitBranch    },
-      { id: 'scenario',    label: 'Scenario Planner',        Icon: Sliders      },
+      { id: 'fingerprint', label: 'Performance Fingerprint', Icon: Fingerprint },
+      { id: 'trends',      label: 'Trend Explorer',          Icon: TrendingUp  },
+      { id: 'forecast',    label: 'Forward Signals',         Icon: BarChart2   },
+      { id: 'projection',  label: 'Plan vs Actual',          Icon: GitBranch   },
+      { id: 'scenario',    label: 'Scenario Planner',        Icon: Sliders     },
     ],
   },
   {
     label: 'Data',
     tabs: [
-      { id: 'sources',  label: 'Data Sources',    Icon: Zap             },
-      { id: 'gaps',     label: 'Data Gaps',       Icon: AlertCircleIcon },
-      { id: 'quality',  label: 'Data Quality',    Icon: ShieldCheck     },
-      { id: 'mappings', label: 'Field Mappings',  Icon: GitBranch       },
-      { id: 'upload',   label: 'Manual Upload',   Icon: Upload          },
+      { id: 'data_health', label: 'Data Health', Icon: Database },
+      { id: 'upload',      label: 'Manual Upload', Icon: Upload  },
     ],
   },
   {
@@ -83,21 +82,24 @@ const NAV_GROUPS = [
   },
 ]
 
-// Advanced tabs — shown in collapsible section
-const ADVANCED_TABS_BASE = [
-  { id: 'dashboard', label: 'Command Center',  Icon: LayoutDashboard },
-  { id: 'ontology',  label: 'KPI Causal Map',  Icon: Network         },
-  { id: 'docs',      label: 'Documentation',   Icon: BookOpen        },
-  { id: 'api',       label: 'API Reference',   Icon: Code2           },
-  { id: 'devdocs',   label: 'Dev Docs',        Icon: BookOpen        },
+// Labs tabs — hidden features, fully wired, accessible under Labs
+const LABS_TABS_BASE = [
+  { id: 'dashboard', label: 'Command Center (Full KPI Grid)', Icon: LayoutDashboard },
+  { id: 'ontology',  label: 'KPI Causal Map',                 Icon: Network         },
+  { id: 'docs',      label: 'Documentation',                  Icon: BookOpen        },
+  { id: 'api',       label: 'API Reference',                  Icon: Code2           },
+  { id: 'devdocs',   label: 'Dev Docs',                       Icon: BookOpen        },
 ]
 
-// Flat list kept for places that need to iterate all tabs (ADVANCED_TABS is derived at runtime based on devMode)
-const TABS_BASE = [...NAV_GROUPS.flatMap(g => g.tabs), ...ADVANCED_TABS_BASE]
+// Flat list for tab iteration
+const TABS_BASE = [...NAV_GROUPS.flatMap(g => g.tabs), ...LABS_TABS_BASE]
 
 const PAGE_TITLES = {
+  home:        'Home',
   board:       'Executive Brief',
+  board_pack:  'Board Pack Generator',
   variance:    'Variance Command Center',
+  decisions:   'Decision Log',
   dashboard:   'Command Center',
   fingerprint: 'Performance Fingerprint',
   trends:      'Trend Explorer',
@@ -105,12 +107,12 @@ const PAGE_TITLES = {
   ontology:    'KPI Causal Map',
   docs:        'Documentation',
   forecast:    'Forward Signals — 90-Day Outlook',
+  data_health: 'Data Health',
   sources:     'Data Sources',
   gaps:        'Data Gaps',
-  decisions:   'Decision Log',
-  scenario:    'Scenario Planner',
   quality:     'Data Quality',
   mappings:    'Field Mappings',
+  scenario:    'Scenario Planner',
   upload:      'Manual Upload',
   alerts:      'Slack Alerts',
   targets:     'KPI Targets',
@@ -161,7 +163,7 @@ function kpiStatus(avg, target, direction) {
 }
 
 export default function App() {
-  const [tab, setTab]                             = useState('variance')
+  const [tab, setTab]                             = useState('home')
   const [sidebarOpen, setSidebarOpen]             = useState(false)
   const [summary, setSummary]                     = useState(null)
   const [kpiDefs, setKpiDefs]                     = useState([])
@@ -179,7 +181,7 @@ export default function App() {
   const [companyStage, setCompanyStage]           = useState(() => localStorage.getItem('axiom_stage') || 'series_b')
   const [benchmarks, setBenchmarks]               = useState({})
   const [showOnboarding, setShowOnboarding]       = useState(() => !localStorage.getItem('axiom_onboarded'))
-  const [advancedOpen, setAdvancedOpen]           = useState(false)
+  const [labsOpen, setLabsOpen]                   = useState(false)
   const [devMode]                                 = useState(() => localStorage.getItem('axiom_dev_mode') === 'true')
   const [companySettings, setCompanySettings]     = useState({})
   const [authToken, setAuthToken]                 = useState('')
@@ -237,10 +239,10 @@ export default function App() {
   }, [authToken])
   const isAdmin = userEmail === 'rahul@axiomsync.ai'
 
-  // Dev mode: filter DevDocs from advanced tabs unless dev mode is on
-  const ADVANCED_TABS = devMode
-    ? ADVANCED_TABS_BASE
-    : ADVANCED_TABS_BASE.filter(t => t.id !== 'devdocs')
+  // Dev mode: filter DevDocs from Labs tabs unless dev mode is on
+  const LABS_TABS = devMode
+    ? LABS_TABS_BASE
+    : LABS_TABS_BASE.filter(t => t.id !== 'devdocs')
 
   // ── Derived filter sets ───────────────────────────────────────────────────
   const yearSet  = useMemo(() => new Set(selectedYears),  [selectedYears])
@@ -634,22 +636,22 @@ export default function App() {
               </div>
             )}
 
-            {/* Advanced section */}
+            {/* Labs section — all maintained features, hidden from main nav */}
             <div className="mt-2">
               <button
-                onClick={() => setAdvancedOpen(!advancedOpen)}
-                className="flex items-center gap-2 w-full px-3 py-1.5 text-[10px] font-bold text-slate-400 uppercase tracking-widest hover:text-slate-500 transition-colors"
+                onClick={() => setLabsOpen(!labsOpen)}
+                className="flex items-center gap-2 w-full px-3 py-1.5 text-[10px] font-bold text-slate-400 uppercase tracking-widest hover:text-slate-300 transition-colors"
               >
-                <ChevronRight size={10} className={`transition-transform ${advancedOpen ? 'rotate-90' : ''}`}/>
-                Advanced
+                <ChevronRight size={10} className={`transition-transform ${labsOpen ? 'rotate-90' : ''}`}/>
+                <FlaskConical size={10}/>
+                Labs
               </button>
-              {advancedOpen && ADVANCED_TABS.map(({ id, label, Icon }) => (
+              {labsOpen && LABS_TABS.map(({ id, label, Icon }) => (
                 <button key={id} onClick={() => setTab(id)}
-                  className={`flex items-center gap-2.5 w-full px-4 py-2 rounded-xl text-[12px] font-medium transition-all duration-150 ${
-                    tab === id ? 'bg-[#0055A4] text-white shadow-md' : 'text-slate-500 hover:bg-slate-100 hover:text-slate-700'
-                  }`}>
-                  <Icon size={14}/>
-                  {label}
+                  className={`sidebar-link w-full text-left ${tab === id ? 'active' : ''}`}>
+                  <Icon size={15} className="flex-shrink-0"/>
+                  <span className="flex-1 truncate">{label}</span>
+                  {tab === id && <ChevronRight size={12} className="text-[#00AEEF]"/>}
                 </button>
               ))}
             </div>
@@ -745,7 +747,7 @@ export default function App() {
         </header>
 
         {/* Cockpit mode switcher — shown on Intelligence + Analysis tabs */}
-        {!loading && (tab === 'board' || tab === 'variance' || tab === 'fingerprint' || tab === 'dashboard') && (
+        {!loading && ['board','variance','fingerprint','dashboard'].includes(tab) && (
           <div className="flex items-center gap-1.5 px-6 py-2 border-b border-slate-100 bg-slate-50/60 overflow-x-auto flex-shrink-0">
             <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mr-1 shrink-0">View:</span>
             <button
@@ -836,26 +838,31 @@ export default function App() {
 
           {!loading && (
             <>
-              {/* ── Tabs always accessible (no data required) ─────────────────── */}
-              {tab === 'sources'    && <DataSourcesPage />}
-              {tab === 'gaps'       && <DataGapsPage />}
-              {tab === 'quality'    && <DataQualityPage />}
-              {tab === 'mappings'   && <FieldMappingPage />}
-              {tab === 'upload'     && <CSVUpload onUploaded={loadAll}/>}
-              {tab === 'alerts'     && <SlackAlerts filteredFingerprint={filteredFingerprint}/>}
-              {tab === 'targets'    && <TargetsEditor />}
-              {tab === 'audit'      && <AuditLog />}
-              {tab === 'company'    && <CompanySettings onSave={(updated) => setCompanySettings(prev => ({ ...prev, ...updated }))}/>}
-              {tab === 'team'       && <TeamSettings authToken={authToken} />}
-              {tab === 'api'        && <APIReference kpiDefs={kpiDefs}/>}
-              {tab === 'devdocs'    && <DevDocs />}
-              {tab === 'docs'       && <DocsPage />}
-              {tab === 'admin'      && isAdmin && <AdminPanel />}
-              {tab === 'decisions'  && <DecisionLog authToken={authToken} fingerprint={fingerprint} />}
-              {tab === 'scenario'   && <ScenarioPlanner fingerprint={filteredFingerprint} authToken={authToken} />}
-              {tab === 'ontology'   && <OntologyPage />}
-              {tab === 'forecast'   && <ForecastPage />}
-              {tab === 'projection' && (
+              {/* ── Home screen ───────────────────────────────────────────────── */}
+              {tab === 'home' && (
+                <HomeScreen
+                  onNavigate={setTab}
+                  onAskAnika={(q) => { setPrefillQuestion(q); document.querySelector('[data-anika-toggle]')?.click() }}
+                />
+              )}
+
+              {/* ── Always-accessible tabs (no data required) ─────────────────── */}
+              {tab === 'data_health' && <DataHealthPage />}
+              {tab === 'upload'      && <CSVUpload onUploaded={loadAll}/>}
+              {tab === 'alerts'      && <SlackAlerts filteredFingerprint={filteredFingerprint}/>}
+              {tab === 'targets'     && <TargetsEditor />}
+              {tab === 'audit'       && <AuditLog />}
+              {tab === 'company'     && <CompanySettings onSave={(updated) => setCompanySettings(prev => ({ ...prev, ...updated }))}/>}
+              {tab === 'team'        && <TeamSettings authToken={authToken} />}
+              {tab === 'api'         && <APIReference kpiDefs={kpiDefs}/>}
+              {tab === 'devdocs'     && <DevDocs />}
+              {tab === 'docs'        && <DocsPage />}
+              {tab === 'admin'       && isAdmin && <AdminPanel />}
+              {tab === 'decisions'   && <DecisionLog authToken={authToken} fingerprint={fingerprint} />}
+              {tab === 'scenario'    && <ScenarioPlanner fingerprint={filteredFingerprint} authToken={authToken} onNavigateToDecisions={() => setTab('decisions')} />}
+              {tab === 'ontology'    && <OntologyPage />}
+              {tab === 'board_pack'  && <BoardPackGenerator companySettings={companySettings} />}
+              {tab === 'projection'  && (
                 <ProjectionBridge
                   bridgeData={filteredBridgeData}
                   projectionMonthly={filteredProjectionMonthly}
@@ -865,12 +872,37 @@ export default function App() {
                 />
               )}
 
+              {/* ── Forward Signals — gated at 18 months of data ──────────────── */}
+              {tab === 'forecast' && (
+                (summary?.months_of_data ?? 0) >= 18
+                  ? <ForecastPage />
+                  : (
+                    <div className="flex flex-col items-center justify-center h-64 gap-4 text-center max-w-md mx-auto">
+                      <div className="w-12 h-12 rounded-2xl bg-amber-50 border border-amber-200 flex items-center justify-center">
+                        <Lock size={20} className="text-amber-500"/>
+                      </div>
+                      <div>
+                        <p className="text-slate-700 text-base font-semibold mb-1">Forward Signals Locked</p>
+                        <p className="text-slate-500 text-sm leading-relaxed">
+                          Forward Signals requires at least 18 months of data for statistically reliable forecasts.
+                          You currently have <strong>{summary?.months_of_data ?? 0}</strong> month{(summary?.months_of_data ?? 0) !== 1 ? 's' : ''}.
+                          This will unlock automatically once you reach 18 months.
+                        </p>
+                      </div>
+                      <button onClick={() => setTab('upload')}
+                        className="px-5 py-2 bg-[#0055A4] hover:bg-[#003d80] text-white text-sm font-medium rounded-lg transition-colors">
+                        Upload More Data
+                      </button>
+                    </div>
+                  )
+              )}
+
               {/* ── No-data prompt for analysis tabs only ────────────────────── */}
               {noData && ['variance','board','dashboard','fingerprint','trends'].includes(tab) && (
                 <div className="flex flex-col items-center justify-center h-64 gap-6">
                   <div className="text-center">
-                    <p className="text-slate-400 text-base font-medium mb-1">No data yet</p>
-                    <p className="text-slate-500 text-sm">Upload your own data or load 5 years of demo data to explore the platform.</p>
+                    <p className="text-slate-600 text-base font-semibold mb-1">No data yet</p>
+                    <p className="text-slate-400 text-sm">Upload your own data or load 5 years of demo data to explore the platform.</p>
                   </div>
                   <div className="flex gap-3">
                     <button onClick={() => setTab('upload')}

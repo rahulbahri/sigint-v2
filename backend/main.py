@@ -82,9 +82,11 @@ from routers import (  # noqa: E402 — after middleware setup
     auth,
     benchmarks,
     billing,
+    board_pack,
     connectors,
     decisions,
     forecast,
+    health,
     jobs,
     ontology,
     org,
@@ -95,7 +97,8 @@ from routers import (  # noqa: E402 — after middleware setup
 
 for _router_mod in [
     admin, alerts, analytics, annotations, auth, benchmarks, billing,
-    connectors, decisions, forecast, jobs, ontology, org, scenarios, settings, upload,
+    board_pack, connectors, decisions, forecast, health, jobs,
+    ontology, org, scenarios, settings, upload,
 ]:
     app.include_router(_router_mod.router)
 
