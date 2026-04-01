@@ -105,7 +105,16 @@ from datetime import datetime  # noqa: E402
 
 @app.get("/api/health", tags=["System"])
 def health():
-    return {"status": "ok", "timestamp": datetime.utcnow().isoformat()}
+    return {
+        "status": "ok",
+        "timestamp": datetime.utcnow().isoformat(),
+        "sentry": "enabled" if _SENTRY_DSN else "disabled",
+    }
+
+@app.get("/api/sentry-debug", tags=["System"], include_in_schema=False)
+async def sentry_debug():
+    """Intentional divide-by-zero to verify Sentry is receiving events."""
+    _ = 1 / 0
 
 # ── Global error handler ──────────────────────────────────────────────────────
 
