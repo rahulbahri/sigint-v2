@@ -2,6 +2,7 @@
 main.py — Thin app factory: wires together routers, CORS, middleware, static files.
 All business logic lives in routers/ and core/.
 """
+import os
 from pathlib import Path
 
 from fastapi import FastAPI, Request
@@ -12,6 +13,19 @@ from fastapi.staticfiles import StaticFiles
 from core.config import _ALLOWED_ORIGINS
 from core.database import get_db, _migrate_workspace_data  # noqa: F401 — imported for side-effect init
 from core.security import rate_limit_middleware
+
+# ── Sentry error tracking (no-op if SENTRY_DSN is not set) ───────────────────
+_SENTRY_DSN = os.environ.get("SENTRY_DSN", "")
+if _SENTRY_DSN:
+    import sentry_sdk
+    from sentry_sdk.integrations.fastapi import FastApiIntegration
+    from sentry_sdk.integrations.starlette import StarletteIntegration
+    sentry_sdk.init(
+        dsn=_SENTRY_DSN,
+        integrations=[StarletteIntegration(), FastApiIntegration()],
+        traces_sample_rate=0.2,   # capture 20% of transactions for performance
+        send_default_pii=False,   # never send emails / tokens to Sentry
+    )
 
 # ── App factory ───────────────────────────────────────────────────────────────
 

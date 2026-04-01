@@ -6,9 +6,17 @@ import base64
 from fastapi import APIRouter, HTTPException, Request, UploadFile, File
 
 from core.database import get_db
-from core.deps import _get_workspace
+from core.deps import _get_workspace, _require_workspace
 
 router = APIRouter()
+
+# Explicit allowlist — table names used in the workspace data-reset endpoint.
+# Never derive this from user input; only these tables may be cleared.
+_WORKSPACE_DATA_TABLES = (
+    "monthly_data", "uploads", "kpi_targets", "projection_monthly_data",
+    "projection_uploads", "kpi_accountability", "annotations",
+    "recommendation_outcomes", "audit_log", "company_settings",
+)
 
 # ─── Company Settings ────────────────────────────────────────────────────────
 
@@ -92,18 +100,17 @@ async def upload_logo(request: Request, file: UploadFile = File(...)):
 @router.delete("/api/workspace/data", tags=["Settings"])
 async def delete_workspace_data(request: Request):
     """Delete ALL data for the current workspace. Irreversible."""
-    workspace_id = _get_workspace(request)
-    if not workspace_id:
-        raise HTTPException(status_code=401, detail="Authentication required")
+    workspace_id = _require_workspace(request)
     conn = get_db()
     try:
-        for tbl in ["monthly_data", "uploads", "kpi_targets", "projection_monthly_data",
-                    "projection_uploads", "kpi_accountability", "annotations",
-                    "recommendation_outcomes", "audit_log", "company_settings"]:
+        for tbl in _WORKSPACE_DATA_TABLES:
+            # tbl is always a member of the hardcoded _WORKSPACE_DATA_TABLES tuple —
+            # never user-supplied, so the f-string is safe here.
             conn.execute(f"DELETE FROM {tbl} WHERE workspace_id=?", [workspace_id])
         conn.commit()
-        conn.close()
         return {"message": "All workspace data deleted successfully"}
-    except Exception:
-        conn.close()
+    except Exception as e:
+        conn.rollback()
         raise HTTPException(status_code=500, detail="Failed to delete workspace data")
+    finally:
+        conn.close()

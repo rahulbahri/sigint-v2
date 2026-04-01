@@ -19,3 +19,4 @@ pip-audit>=2.7.0
 alembic>=1.13.0
 rq>=1.16.0
 redis>=5.0.0
+sentry-sdk[fastapi]>=1.40.0

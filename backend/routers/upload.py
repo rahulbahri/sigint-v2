@@ -13,7 +13,7 @@ from typing import Optional
 from fastapi import APIRouter, File, HTTPException, Request, UploadFile
 
 from core.database import get_db, _audit
-from core.deps import _get_workspace
+from core.deps import _get_workspace, _require_workspace
 from core.kpi_defs import normalize_columns, aggregate_monthly
 
 router = APIRouter()
@@ -39,7 +39,7 @@ async def upload_csv(request: Request, file: UploadFile = File(...)):
 
     Returns column mapping detected and KPI preview.
     """
-    workspace_id = _get_workspace(request)
+    workspace_id = _require_workspace(request)
     _allowed_exts = {".csv", ".CSV", ".xlsx", ".xls"}
     _ext = os.path.splitext(file.filename or "")[1]
     if _ext not in _allowed_exts:
@@ -91,7 +91,7 @@ async def upload_csv(request: Request, file: UploadFile = File(...)):
 @router.get("/api/uploads", tags=["Data Ingestion"])
 def list_uploads(request: Request):
     """List all previously uploaded files."""
-    workspace_id = _get_workspace(request)
+    workspace_id = _require_workspace(request)
     conn = get_db()
     rows = conn.execute("SELECT * FROM uploads WHERE workspace_id=? ORDER BY id DESC", [workspace_id]).fetchall()
     conn.close()
