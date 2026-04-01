@@ -189,6 +189,7 @@ export default function App() {
   const [showPricing, setShowPricing]             = useState(false)
   const [showLegal, setShowLegal]                 = useState(false)
   const [cockpitMode, setCockpitMode]             = useState(() => localStorage.getItem('axiom_cockpit_mode') || null)
+  const [prefillDecision, setPrefillDecision]     = useState(null)
 
   // ── Validate stored token with backend on every load ─────────────────────
   useEffect(() => {
@@ -858,8 +859,8 @@ export default function App() {
               {tab === 'devdocs'     && <DevDocs />}
               {tab === 'docs'        && <DocsPage />}
               {tab === 'admin'       && isAdmin && <AdminPanel />}
-              {tab === 'decisions'   && <DecisionLog authToken={authToken} fingerprint={fingerprint} />}
-              {tab === 'scenario'    && <ScenarioPlanner fingerprint={filteredFingerprint} authToken={authToken} onNavigateToDecisions={() => setTab('decisions')} />}
+              {tab === 'decisions'   && <DecisionLog authToken={authToken} fingerprint={fingerprint} prefillDecision={prefillDecision} onPrefillConsumed={() => setPrefillDecision(null)} />}
+              {tab === 'scenario'    && <ScenarioPlanner fingerprint={filteredFingerprint} authToken={authToken} onNavigateToDecisions={(data) => { setPrefillDecision(data); setTab('decisions') }} />}
               {tab === 'ontology'    && <OntologyPage />}
               {tab === 'board_pack'  && <BoardPackGenerator companySettings={companySettings} />}
               {tab === 'projection'  && (

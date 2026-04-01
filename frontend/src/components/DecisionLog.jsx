@@ -17,7 +17,7 @@ function fmt(dtStr) {
   return dtStr.slice(0, 10)
 }
 
-export default function DecisionLog({ authToken, fingerprint }) {
+export default function DecisionLog({ authToken, fingerprint, prefillDecision, onPrefillConsumed }) {
   const [decisions, setDecisions] = useState([])
   const [loading, setLoading]     = useState(true)
   const [showForm, setShowForm]   = useState(false)
@@ -28,6 +28,21 @@ export default function DecisionLog({ authToken, fingerprint }) {
   const [saving, setSaving]       = useState(false)
   const [formError, setFormError] = useState('')
   const [outcomeInput, setOutcomeInput] = useState({})
+
+  // Pre-fill from Scenario Planner "Push to Decision Log"
+  useEffect(() => {
+    if (prefillDecision) {
+      setForm({
+        title:        prefillDecision.title        || '',
+        the_decision: prefillDecision.the_decision || '',
+        rationale:    prefillDecision.rationale    || '',
+        decided_by:   prefillDecision.decided_by   || 'CFO',
+        kpi_context:  prefillDecision.kpi_context  || [],
+      })
+      setShowForm(true)
+      onPrefillConsumed?.()
+    }
+  }, [prefillDecision]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const headers = authToken ? { Authorization: `Bearer ${authToken}` } : {}
 

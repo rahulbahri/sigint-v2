@@ -141,7 +141,7 @@ function projectImpact(baseValues, leverValues) {
 }
 
 // ── Component ─────────────────────────────────────────────────────────────────
-export default function ScenarioPlanner({ fingerprint, authToken }) {
+export default function ScenarioPlanner({ fingerprint, authToken, onNavigateToDecisions }) {
   const initialLevers = Object.fromEntries(LEVERS.map(l => [l.id, l.default]))
   const [levers, setLevers]             = useState(initialLevers)
   const [scenarioName, setScenarioName] = useState('What-If Scenario')
@@ -455,9 +455,54 @@ export default function ScenarioPlanner({ fingerprint, authToken }) {
             </div>
           )}
 
+          {/* Push to Decision Log */}
+          {hasChanges && onNavigateToDecisions && (
+            <button
+              onClick={() => {
+                // Build a pre-filled decision from the current scenario levers + projected impact
+                const leverSummary = LEVERS
+                  .filter(l => levers[l.id] !== 0)
+                  .map(l => `${l.label}: ${levers[l.id] > 0 ? '+' : ''}${levers[l.id]}${l.unit}`)
+                  .join(', ')
+                const impactSummary = OUTPUT_KPIS
+                  .map(kpi => {
+                    const base  = baseValues[kpi.key]
+                    const proj  = projected[kpi.key]
+                    const delta = proj != null && base != null ? proj - base : null
+                    return delta != null && Math.abs(delta) >= 0.1
+                      ? `${kpi.name}: ${delta > 0 ? '+' : ''}${delta.toFixed(1)}`
+                      : null
+                  })
+                  .filter(Boolean)
+                  .join(', ')
+                onNavigateToDecisions({
+                  title:        scenarioName,
+                  the_decision: `Based on scenario "${scenarioName}": ${leverSummary}`,
+                  rationale:    impactSummary
+                    ? `Projected impact: ${impactSummary}.`
+                    : 'Scenario analysis — see lever adjustments above.',
+                  decided_by:   'CFO',
+                  kpi_context:  OUTPUT_KPIS
+                    .filter(kpi => {
+                      const base = baseValues[kpi.key]
+                      const proj = projected[kpi.key]
+                      return base != null && proj != null && Math.abs(proj - base) >= 0.1
+                    })
+                    .map(kpi => kpi.key),
+                })
+              }}
+              className="mt-3 w-full flex items-center justify-center gap-2 px-4 py-2.5
+                         border border-[#0055A4] text-[#0055A4] rounded-xl text-[12px] font-bold
+                         hover:bg-[#0055A4] hover:text-white transition-all"
+            >
+              <BookMarked size={13}/>
+              Push to Decision Log
+            </button>
+          )}
+
           <p className="text-[10px] text-slate-400 mt-3 leading-relaxed">
             Projections are directional estimates based on calibrated causal sensitivity coefficients.
-            Save to Decision Log to preserve the reasoning behind your scenario.
+            Use &ldquo;Push to Decision Log&rdquo; to record the reasoning behind this scenario.
           </p>
         </div>
       </div>
