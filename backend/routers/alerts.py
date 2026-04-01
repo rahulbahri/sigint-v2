@@ -583,72 +583,139 @@ def export_data_xlsx(request: Request):
     )
 
 
-# ─── Data Import: Excel ───────────────────────────────────────────────────────
+# ─── Data Import: Excel or CSV ────────────────────────────────────────────────
 
 @router.post("/api/import/data")
-async def import_data_xlsx(file: UploadFile = File(...)):
-    """Import KPI data from a previously exported (and edited) Excel file.
+async def import_data(request: Request, file: UploadFile = File(...)):
+    """Import KPI data from a previously exported (and edited) Excel or CSV file.
 
-    Supports both the legacy single-header format (data from row 2) and the
-    new enriched format (4-row header block; data from row 5).  Row 1 always
-    contains the machine-readable KPI keys — rows 2-4 are metadata and are
-    skipped automatically.
+    Accepted formats:
+    - .xlsx  — exported from Download KPI Data; must contain a 'KPI Data' sheet.
+    - .csv   — same structure as the xlsx KPI Data sheet (exported via Save As CSV).
+
+    Both formats support the enriched 4-row header block (rows 2-4 are metadata
+    and are skipped automatically). Row 1 always holds machine-readable KPI keys.
+    Requires authentication; data is scoped to the current workspace.
     """
-    import openpyxl
+    import pandas as pd
 
+    workspace_id = _get_workspace(request)
+    if not workspace_id:
+        raise HTTPException(status_code=401, detail="Authentication required")
+
+    fname = (file.filename or "").lower()
     contents = await file.read()
-    wb = openpyxl.load_workbook(io.BytesIO(contents), data_only=True)
-    ws = wb["KPI Data"]
 
-    # Row 1 always holds the machine-readable keys (Year, Month, kpi_key, ...)
-    headers = [ws.cell(row=1, column=c).value for c in range(1, ws.max_column + 1)]
-    if headers[0] != "Year" or headers[1] != "Month":
-        raise HTTPException(status_code=400, detail="Invalid file format — expected Year, Month in row 1 columns A–B")
-
-    kpi_keys = headers[2:]
-
-    # Detect format: new enriched (row 2 col A = "Full Name") vs legacy (data at row 2)
-    row2_a = ws.cell(row=2, column=1).value
-    data_start_row = 5 if str(row2_a).strip().lower() in ("full name", "unit", "used for") else 2
-
-    month_map = {"Jan":1,"Feb":2,"Mar":3,"Apr":4,"May":5,"Jun":6,
-                 "Jul":7,"Aug":8,"Sep":9,"Oct":10,"Nov":11,"Dec":12}
+    month_map = {"jan":1,"feb":2,"mar":3,"apr":4,"may":5,"jun":6,
+                 "jul":7,"aug":8,"sep":9,"oct":10,"nov":11,"dec":12}
 
     records: list[tuple] = []
-    for row in ws.iter_rows(min_row=data_start_row, values_only=True):
-        if row[0] is None:
-            continue
-        year = int(row[0])
-        month_raw = row[1]
-        month = month_map.get(str(month_raw), None) or int(month_raw)
-        data = {}
-        for i, k in enumerate(kpi_keys):
-            if k is None:
+
+    if fname.endswith(".csv"):
+        # ── CSV path ──────────────────────────────────────────────────────────
+        try:
+            df = pd.read_csv(io.StringIO(contents.decode("utf-8", errors="replace")))
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"Could not parse CSV: {e}")
+
+        if "Year" not in df.columns or "Month" not in df.columns:
+            raise HTTPException(status_code=400,
+                detail="Invalid file — expected 'Year' and 'Month' columns. "
+                       "Please use a file exported from Download KPI Data.")
+
+        kpi_keys = [c for c in df.columns if c not in ("Year", "Month")]
+
+        # Detect enriched format: first data row is a metadata row (Full Name / Unit / Used For)
+        if not df.empty and str(df.iloc[0, 0]).strip().lower() in ("full name", "unit", "used for", ""):
+            df = df.iloc[3:].reset_index(drop=True)
+
+        for _, row in df.iterrows():
+            try:
+                year = int(row["Year"])
+                mo_raw = str(row["Month"]).strip()
+                month = month_map.get(mo_raw.lower()) or int(mo_raw)
+            except (ValueError, TypeError):
                 continue
-            v = row[2 + i]
-            if v is not None:
-                data[k] = float(v)
-        records.append((year, month, json.dumps(data)))
+            data = {}
+            for k in kpi_keys:
+                v = row.get(k)
+                if v is not None and str(v).strip() not in ("", "nan", "None"):
+                    try:
+                        data[k] = float(v)
+                    except (ValueError, TypeError):
+                        pass
+            if data:
+                records.append((year, month, json.dumps(data)))
+
+    elif fname.endswith(".xlsx") or fname.endswith(".xls"):
+        # ── Excel path ────────────────────────────────────────────────────────
+        import openpyxl
+        try:
+            wb = openpyxl.load_workbook(io.BytesIO(contents), data_only=True)
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"Could not open Excel file: {e}")
+
+        if "KPI Data" not in wb.sheetnames:
+            raise HTTPException(status_code=400,
+                detail="Sheet 'KPI Data' not found. Please use a file exported from Download KPI Data.")
+        ws = wb["KPI Data"]
+
+        headers = [ws.cell(row=1, column=c).value for c in range(1, ws.max_column + 1)]
+        if headers[0] != "Year" or headers[1] != "Month":
+            raise HTTPException(status_code=400,
+                detail="Invalid file format — expected Year, Month in row 1 columns A–B")
+
+        kpi_keys = headers[2:]
+        row2_a = ws.cell(row=2, column=1).value
+        data_start_row = 5 if str(row2_a).strip().lower() in ("full name", "unit", "used for") else 2
+
+        for row in ws.iter_rows(min_row=data_start_row, values_only=True):
+            if row[0] is None:
+                continue
+            try:
+                year = int(row[0])
+                mo_raw = str(row[1]).strip()
+                month = month_map.get(mo_raw.lower()) or int(mo_raw)
+            except (ValueError, TypeError):
+                continue
+            data = {}
+            for i, k in enumerate(kpi_keys):
+                if k is None:
+                    continue
+                v = row[2 + i]
+                if v is not None:
+                    try:
+                        data[k] = float(v)
+                    except (ValueError, TypeError):
+                        pass
+            if data:
+                records.append((year, month, json.dumps(data)))
+    else:
+        raise HTTPException(status_code=400,
+            detail=f"Unsupported file type. Please upload a .csv or .xlsx file exported from Download KPI Data.")
 
     if not records:
-        raise HTTPException(status_code=400, detail="No data rows found in file")
+        raise HTTPException(status_code=400, detail="No data rows found in file.")
 
     conn = get_db()
-    for year, month, data_json in records:
-        existing = conn.execute(
-            "SELECT id FROM monthly_data WHERE year=? AND month=?", (year, month)
-        ).fetchone()
-        if existing:
-            conn.execute(
-                "UPDATE monthly_data SET data_json=? WHERE year=? AND month=?",
-                (data_json, year, month)
-            )
-        else:
-            conn.execute(
-                "INSERT INTO monthly_data (year, month, data_json) VALUES (?,?,?)",
-                (year, month, data_json)
-            )
-    conn.commit()
-    conn.close()
+    try:
+        for year, month, data_json in records:
+            existing = conn.execute(
+                "SELECT id FROM monthly_data WHERE year=? AND month=? AND workspace_id=?",
+                (year, month, workspace_id)
+            ).fetchone()
+            if existing:
+                conn.execute(
+                    "UPDATE monthly_data SET data_json=? WHERE year=? AND month=? AND workspace_id=?",
+                    (data_json, year, month, workspace_id)
+                )
+            else:
+                conn.execute(
+                    "INSERT INTO monthly_data (year, month, data_json, workspace_id) VALUES (?,?,?,?)",
+                    (year, month, data_json, workspace_id)
+                )
+        conn.commit()
+    finally:
+        conn.close()
 
     return {"status": "ok", "rows_imported": len(records)}

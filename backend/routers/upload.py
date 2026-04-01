@@ -52,8 +52,34 @@ async def upload_csv(request: Request, file: UploadFile = File(...)):
     except Exception as e:
         raise HTTPException(400, "Could not parse file. Please ensure it is a valid CSV with column headers.")
 
+    # ── Detect accidental KPI-export upload ────────────────────────────────
+    # The exported axiom_kpi_data file has columns Year, Month, revenue_growth, ...
+    # rather than raw transaction columns (date, revenue, cogs, ...).
+    # Catch it early and return a clear error instead of silently storing 0 months.
+    _kpi_export_cols = {"revenue_growth", "gross_margin", "operating_margin", "arr_growth"}
+    _df_lower_cols = {c.lower().replace(" ", "_") for c in df.columns}
+    if "year" in _df_lower_cols and "month" in _df_lower_cols and _kpi_export_cols & _df_lower_cols:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "This looks like a KPI export file (axiom_kpi_data.csv / .xlsx), not a raw transactions file. "
+                "To re-import it, use the 'Upload Edited File' button in the Export & Edit section above. "
+                "To load actuals, upload a CSV with columns: date, revenue, cogs, opex, ar, customers, churn."
+            ),
+        )
+
     col_map      = normalize_columns(df)
     monthly_agg  = aggregate_monthly(df, col_map)
+
+    if len(monthly_agg) == 0:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "No monthly data could be extracted from this file. "
+                "Ensure the file has a 'date' column and at least a 'revenue' column. "
+                "Download the template for the correct format."
+            ),
+        )
 
     conn = get_db()
     try:
@@ -87,6 +113,119 @@ async def upload_csv(request: Request, file: UploadFile = File(...)):
         "kpis_computed":    [k for k in monthly_agg.columns if k not in ("year", "month")],
         "message":          f"Successfully processed {len(df)} rows across {len(monthly_agg)} months.",
     }
+
+@router.get("/api/seed-demo-actuals", tags=["System"])
+def seed_demo_actuals(request: Request):
+    """
+    Seed 36 months of realistic demo actuals (2022–2024) — a B2B SaaS company
+    growing from ~$450K/month to ~$980K/month.  Generates enough history to
+    unlock all platform features including Forward Signals (requires 18+ months).
+
+    Monthly params: (month_offset, base_revenue, cogs_pct, f_opex, v_opex_pct,
+                     dso, rec_pct, churn_pct, cust, new_c, sm_pct)
+    """
+    import random, math
+    random.seed(42)
+
+    # 36-month growth arc  Jan-2022 → Dec-2024
+    # Revenue ramps from $450K → $980K, margins improve, churn falls
+    def _mo_params(i):  # i = 0..35
+        t = i / 35.0
+        rev      = 450_000 + 530_000 * (t ** 0.85)
+        cogs_pct = 44.0  - 7.0  * t
+        f_opex   = 160_000 + 20_000 * t
+        v_opex   = 10.5  - 2.5  * t
+        dso      = 55    - 16   * t
+        rec_pct  = 58.0  + 22.0 * t
+        churn    = 6.8   - 4.6  * t
+        cust     = int(200 + 260 * t)
+        new_c    = max(4, int(10 + 12 * t))
+        sm_pct   = 0.38
+        return (rev, cogs_pct, f_opex, v_opex, dso, rec_pct, churn, cust, new_c, sm_pct)
+
+    _RAW_SEGS = [
+        ("Enterprise", 0.15, 5.2, 0.50),
+        ("Mid-Market", 0.40, 1.4, 0.26),
+        ("SMB",        0.45, 0.52, 0.15),
+    ]
+    _wt_avg = sum(s * m for _, s, m, _ in _RAW_SEGS)
+    SEGS    = [(nm, s, m / _wt_avg, sd) for nm, s, m, sd in _RAW_SEGS]
+
+    START_YEAR, START_MONTH = 2022, 1
+    rows_per_month = 280  # ~10K total rows across 36 months
+
+    tx_rows = []
+    for i in range(36):
+        yr  = START_YEAR + (START_MONTH + i - 1) // 12
+        mo  = (START_MONTH + i - 1) % 12 + 1
+        rev, cogs_pct, f_opex, v_opex_pct, dso, rec_pct, churn_pct, cust, new_c, sm_pct = _mo_params(i)
+        total_opex  = f_opex + rev * v_opex_pct / 100
+        avg_rev_row = rev / rows_per_month
+
+        for _ in range(rows_per_month):
+            r = random.random(); cum = 0.0
+            for _, share, mult, std in SEGS:
+                cum += share
+                if r <= cum:
+                    break
+            noise    = max(0.25, 1 + random.gauss(0, std))
+            row_rev  = avg_rev_row * mult * noise
+            row_cogs = row_rev * (cogs_pct / 100) * random.gauss(1.0, 0.03)
+            row_opex = (total_opex / rows_per_month) * random.gauss(1.0, 0.04)
+            row_ar   = row_rev * (dso / 30) * random.gauss(1.0, 0.06)
+            is_rec   = 1 if random.random() < rec_pct / 100 else 0
+            row_sm   = row_opex * sm_pct * random.gauss(1.0, 0.05)
+            row_churn= 1 if random.random() < churn_pct / 100 else 0
+            day      = random.randint(1, 28)
+            tx_rows.append({
+                "date":         f"{yr}-{mo:02d}-{day:02d}",
+                "revenue":      round(max(80.0,  row_rev),  2),
+                "cogs":         round(max(0.0,   row_cogs), 2),
+                "opex":         round(max(0.0,   row_opex), 2),
+                "ar":           round(max(0.0,   row_ar),   2),
+                "is_recurring": is_rec,
+                "churn":        row_churn,
+                "sm_allocated": round(max(0.0,   row_sm),   2),
+                "customers":    1,
+            })
+
+    df      = pd.DataFrame(tx_rows)
+    col_map = normalize_columns(df)
+    agg     = aggregate_monthly(df, col_map)
+
+    workspace_id = _get_workspace(request)
+    if not workspace_id:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+
+    conn = get_db()
+    try:
+        cur = conn.execute(
+            "INSERT INTO uploads (filename, uploaded_at, row_count, detected_columns, workspace_id) VALUES (?,?,?,?,?)",
+            ("demo_actuals_36mo.csv", datetime.utcnow().isoformat(), len(df),
+             json.dumps({c: c for c in df.columns}), workspace_id)
+        )
+        upload_id = cur.lastrowid
+        for _, row in agg.iterrows():
+            yr = int(row["year"]); mo = int(row["month"])
+            row_dict = {k: (None if isinstance(v, float) and np.isnan(v) else v)
+                        for k, v in row.items() if k not in ("year", "month")}
+            conn.execute(
+                "INSERT INTO monthly_data (upload_id, year, month, data_json, workspace_id) VALUES (?,?,?,?,?)",
+                (upload_id, yr, mo, json.dumps(row_dict), workspace_id)
+            )
+        _audit(conn, "data_seed", "Demo actuals seeded", "upload", str(upload_id))
+        conn.commit()
+    finally:
+        conn.close()
+
+    return {
+        "seeded": True,
+        "months": len(agg),
+        "transactions": len(df),
+        "upload_id": upload_id,
+        "message": f"Demo actuals seeded — 36 months (2022–2024) of B2B SaaS growth data.",
+    }
+
 
 @router.get("/api/uploads", tags=["Data Ingestion"])
 def list_uploads(request: Request):

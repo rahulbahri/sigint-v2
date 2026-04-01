@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from 'react'
 import axios from 'axios'
-import { Upload, CheckCircle, AlertCircle, FileText, Trash2, GitBranch, Activity, AlertTriangle, Download } from 'lucide-react'
+import { Upload, CheckCircle, AlertCircle, FileText, Trash2, GitBranch, Activity, AlertTriangle, Download, Database } from 'lucide-react'
 
 const ACTUALS_TEMPLATE = `date,revenue,cogs,opex,ar,customers,churn,is_recurring,sm_allocated,arr
 2025-01-15,25000,9500,7200,28000,1,0,1,3200,18000
@@ -44,7 +44,7 @@ export default function CSVUpload({ onUploaded }) {
   }
 
   async function handleImportFile(file) {
-    if (!file?.name.endsWith('.xlsx')) { setImportError('Please select the .xlsx file you exported.'); return }
+    if (!/\.(xlsx|csv)$/i.test(file?.name || '')) { setImportError('Please select the .xlsx or .csv file you exported.'); return }
     setImporting(true); setImportResult(null); setImportError(null)
     const fd = new FormData(); fd.append('file', file)
     try {
@@ -55,11 +55,12 @@ export default function CSVUpload({ onUploaded }) {
   }
 
   // ── Actuals state ────────────────────────────────────────────────────────
-  const [dragging, setDragging] = useState(false)
-  const [result,   setResult]   = useState(null)
-  const [error,    setError]    = useState(null)
-  const [loading,  setLoading]  = useState(false)
-  const [uploads,  setUploads]  = useState([])
+  const [dragging,    setDragging]    = useState(false)
+  const [result,      setResult]      = useState(null)
+  const [error,       setError]       = useState(null)
+  const [loading,     setLoading]     = useState(false)
+  const [seeding,     setSeeding]     = useState(false)
+  const [uploads,     setUploads]     = useState([])
   const fileRef = useRef()
 
   async function fetchUploads() {
@@ -77,6 +78,16 @@ export default function CSVUpload({ onUploaded }) {
   }
   async function deleteUpload(id) {
     await axios.delete(`/api/uploads/${id}`); fetchUploads(); onUploaded?.()
+  }
+  async function seedDemoActuals() {
+    setSeeding(true); setResult(null); setError(null)
+    try {
+      const r = await axios.get('/api/seed-demo-actuals')
+      setResult({ message: r.data.message, rows_processed: r.data.transactions,
+                  months_detected: r.data.months, upload_id: r.data.upload_id, kpis_computed: [] })
+      onUploaded?.(); fetchUploads()
+    } catch(e) { setError(e.response?.data?.detail || 'Seed failed') }
+    setSeeding(false)
   }
 
   // ── Projection state ─────────────────────────────────────────────────────
@@ -147,7 +158,7 @@ export default function CSVUpload({ onUploaded }) {
             <Upload size={14}/>
             {importing ? 'Importing…' : 'Upload Edited File'}
           </button>
-          <input ref={importRef} type="file" accept=".xlsx" className="hidden"
+          <input ref={importRef} type="file" accept=".xlsx,.csv" className="hidden"
             onChange={e => handleImportFile(e.target.files[0])}/>
         </div>
 
@@ -219,6 +230,22 @@ export default function CSVUpload({ onUploaded }) {
           }
         </div>
 
+        {/* Demo seed */}
+        <div className="flex items-center gap-3">
+          <div className="flex-1 h-px bg-slate-200"/>
+          <span className="text-[10px] text-slate-400 uppercase tracking-wide">or load demo data</span>
+          <div className="flex-1 h-px bg-slate-200"/>
+        </div>
+        <button
+          onClick={seedDemoActuals}
+          disabled={seeding}
+          className="w-full flex items-center justify-center gap-2 py-2.5 rounded-xl font-medium
+                     text-sm bg-[#0055A4]/8 border border-[#0055A4]/25 text-[#0055A4]
+                     hover:bg-[#0055A4]/15 transition-all disabled:opacity-50">
+          <Database size={14}/>
+          {seeding ? 'Seeding…' : 'Load Demo Actuals — 36 months of B2B SaaS growth data (2022–2024)'}
+        </button>
+
         {result && (
           <div className="card p-5 border-l-4 border-l-emerald-500 bg-emerald-50/60">
             <div className="flex items-center gap-2 mb-3">
@@ -227,7 +254,7 @@ export default function CSVUpload({ onUploaded }) {
             </div>
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
               {[['Rows', result.rows_processed], ['Months', result.months_detected],
-                ['KPIs', result.kpis_computed?.length], ['Upload', `#${result.upload_id}`]].map(([l, v]) => (
+                ['KPIs', result.kpis_computed?.length ?? '—'], ['Upload', `#${result.upload_id}`]].map(([l, v]) => (
                 <div key={l} className="bg-white rounded-lg p-3 text-center border border-emerald-100">
                   <div className="text-slate-800 font-bold">{v}</div>
                   <div className="text-slate-500 text-xs">{l}</div>
