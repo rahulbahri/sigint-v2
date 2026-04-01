@@ -45,6 +45,7 @@ export default function MonthlyTrend({ fingerprint, onKpiClick, periodLabel }) {
   const [editingMonth, setEditingMonth] = useState(null)
   const [editText, setEditText]         = useState('')
   const inputRef = useRef(null)
+  const [dropdownOpen, setDropdownOpen] = useState(false)
 
   function handleChartClick(data) {
     if (!data?.activeLabel) return
@@ -124,23 +125,68 @@ export default function MonthlyTrend({ fingerprint, onKpiClick, periodLabel }) {
 
   return (
     <div className="space-y-5">
-      {/* KPI selector */}
+      {/* KPI selector — compact multi-select dropdown */}
       <div className="card p-4">
-        <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-3">Select KPIs to overlay</p>
-        <div className="flex flex-wrap gap-2">
-          {fingerprint.map((kpi, i) => (
-            <button key={kpi.key} onClick={() => toggle(kpi.key)}
-              className={`px-3 py-1.5 rounded-full text-xs font-medium border transition-all ${
-                selected.includes(kpi.key)
-                  ? 'text-white border-transparent'
-                  : 'border-slate-200 text-slate-500 bg-slate-50 hover:border-slate-300 hover:bg-white'
-              }`}
-              style={selected.includes(kpi.key)
-                ? { background: COLORS[i % COLORS.length], borderColor: COLORS[i % COLORS.length] }
-                : {}}>
-              {kpi.name}
+        <div className="flex items-center justify-between mb-2">
+          <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider">KPIs to overlay</p>
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-slate-400">{selected.length} selected</span>
+            <button
+              onClick={() => setSelected(selected.length === fingerprint.length ? [] : fingerprint.map(k => k.key))}
+              className="text-xs text-[#0055A4] hover:underline font-medium">
+              {selected.length === fingerprint.length ? 'Deselect all' : 'Select all'}
             </button>
-          ))}
+          </div>
+        </div>
+        <div className="relative">
+          <button
+            onClick={() => setDropdownOpen(o => !o)}
+            className="w-full flex items-center justify-between px-3 py-2 rounded-lg border border-slate-200 bg-white hover:border-slate-300 transition-colors text-sm text-slate-600">
+            <span className="flex flex-wrap gap-1.5 flex-1 min-w-0">
+              {selected.length === 0 && <span className="text-slate-400 text-xs">No KPIs selected — click to choose</span>}
+              {selected.slice(0, 4).map(key => {
+                const kpi = fingerprint.find(k => k.key === key)
+                const i   = fingerprint.findIndex(k => k.key === key)
+                if (!kpi) return null
+                return (
+                  <span key={key}
+                    className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium text-white"
+                    style={{ background: COLORS[i % COLORS.length] }}>
+                    {kpi.name}
+                    <button
+                      onClick={e => { e.stopPropagation(); toggle(key) }}
+                      className="opacity-70 hover:opacity-100 leading-none font-bold">×</button>
+                  </span>
+                )
+              })}
+              {selected.length > 4 && (
+                <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-medium bg-slate-100 text-slate-600">
+                  +{selected.length - 4} more
+                </span>
+              )}
+            </span>
+            <svg className={`ml-2 flex-shrink-0 w-4 h-4 text-slate-400 transition-transform ${dropdownOpen ? 'rotate-180' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7"/></svg>
+          </button>
+          {dropdownOpen && (
+            <div className="absolute z-20 mt-1 w-full bg-white border border-slate-200 rounded-xl shadow-lg max-h-64 overflow-y-auto">
+              {fingerprint.map((kpi, i) => (
+                <label key={kpi.key}
+                  className="flex items-center gap-3 px-3 py-2 hover:bg-slate-50 cursor-pointer transition-colors">
+                  <input
+                    type="checkbox"
+                    checked={selected.includes(kpi.key)}
+                    onChange={() => toggle(kpi.key)}
+                    className="rounded"
+                    style={{ accentColor: COLORS[i % COLORS.length] }}
+                  />
+                  <span className="flex items-center gap-2 flex-1 min-w-0">
+                    <span className="w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ background: COLORS[i % COLORS.length] }}/>
+                    <span className="text-sm text-slate-700 truncate">{kpi.name}</span>
+                  </span>
+                </label>
+              ))}
+            </div>
+          )}
         </div>
       </div>
 

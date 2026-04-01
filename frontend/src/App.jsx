@@ -39,6 +39,7 @@ import FieldMappingPage from './components/FieldMappingPage.jsx'
 import DataQualityPage from './components/DataQualityPage.jsx'
 import DecisionLog from './components/DecisionLog.jsx'
 import ScenarioPlanner from './components/ScenarioPlanner.jsx'
+import DocsPage from './components/DocsPage.jsx'
 
 // ── V2: Nav structured into labelled zones with business-friendly names ──────
 const NAV_GROUPS = [
@@ -86,6 +87,7 @@ const NAV_GROUPS = [
 const ADVANCED_TABS_BASE = [
   { id: 'dashboard', label: 'Command Center',  Icon: LayoutDashboard },
   { id: 'ontology',  label: 'KPI Causal Map',  Icon: Network         },
+  { id: 'docs',      label: 'Documentation',   Icon: BookOpen        },
   { id: 'api',       label: 'API Reference',   Icon: Code2           },
   { id: 'devdocs',   label: 'Dev Docs',        Icon: BookOpen        },
 ]
@@ -101,6 +103,7 @@ const PAGE_TITLES = {
   trends:      'Trend Explorer',
   projection:  'Plan vs Actual',
   ontology:    'KPI Causal Map',
+  docs:        'Documentation',
   forecast:    'Forward Signals — 90-Day Outlook',
   sources:     'Data Sources',
   gaps:        'Data Gaps',
@@ -830,21 +833,52 @@ export default function App() {
             </div>
           )}
 
-          {!loading && noData && (
-            <div className="flex flex-col items-center justify-center h-64 gap-4">
-              <p className="text-slate-500 text-base">No data yet — upload a CSV to get started.</p>
-              <div className="flex gap-3">
-                <button onClick={() => setTab('upload')}
-                  className="px-5 py-2 rounded-lg bg-[#0055A4] hover:bg-[#003d80] text-white text-sm font-medium transition-colors">
-                  Upload CSV
-                </button>
-              </div>
-            </div>
-          )}
-
-          {!loading && !noData && (
+          {!loading && (
             <>
-              {tab === 'variance' && (
+              {/* ── Tabs always accessible (no data required) ─────────────────── */}
+              {tab === 'sources'    && <DataSourcesPage />}
+              {tab === 'gaps'       && <DataGapsPage />}
+              {tab === 'quality'    && <DataQualityPage />}
+              {tab === 'mappings'   && <FieldMappingPage />}
+              {tab === 'upload'     && <CSVUpload onUploaded={loadAll}/>}
+              {tab === 'alerts'     && <SlackAlerts filteredFingerprint={filteredFingerprint}/>}
+              {tab === 'targets'    && <TargetsEditor />}
+              {tab === 'audit'      && <AuditLog />}
+              {tab === 'company'    && <CompanySettings onSave={(updated) => setCompanySettings(prev => ({ ...prev, ...updated }))}/>}
+              {tab === 'team'       && <TeamSettings authToken={authToken} />}
+              {tab === 'api'        && <APIReference kpiDefs={kpiDefs}/>}
+              {tab === 'devdocs'    && <DevDocs />}
+              {tab === 'docs'       && <DocsPage />}
+              {tab === 'admin'      && isAdmin && <AdminPanel />}
+              {tab === 'decisions'  && <DecisionLog authToken={authToken} fingerprint={fingerprint} />}
+              {tab === 'scenario'   && <ScenarioPlanner fingerprint={filteredFingerprint} authToken={authToken} />}
+              {tab === 'ontology'   && <OntologyPage />}
+              {tab === 'forecast'   && <ForecastPage />}
+              {tab === 'projection' && (
+                <ProjectionBridge
+                  bridgeData={filteredBridgeData}
+                  projectionMonthly={filteredProjectionMonthly}
+                  onUploaded={loadAll}
+                  onAskAnika={(kpiName) => setPrefillQuestion(`Why is ${kpiName} below projection?`)}
+                  onNavigateToUpload={() => setTab('upload')}
+                />
+              )}
+
+              {/* ── No-data prompt for analysis tabs only ────────────────────── */}
+              {noData && ['variance','board','dashboard','fingerprint','trends'].includes(tab) && (
+                <div className="flex flex-col items-center justify-center h-64 gap-4">
+                  <p className="text-slate-500 text-base">No data yet — upload a CSV to get started.</p>
+                  <div className="flex gap-3">
+                    <button onClick={() => setTab('upload')}
+                      className="px-5 py-2 rounded-lg bg-[#0055A4] hover:bg-[#003d80] text-white text-sm font-medium transition-colors">
+                      Upload CSV
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* ── Data-dependent analysis tabs ─────────────────────────────── */}
+              {!noData && tab === 'variance' && (
                 <VarianceCommand
                   fingerprint={filteredFingerprint}
                   bridgeData={filteredBridgeData}
@@ -854,7 +888,7 @@ export default function App() {
                   onKpiClick={openKpi}
                 />
               )}
-              {tab === 'board' && (
+              {!noData && tab === 'board' && (
                 <BoardReady
                   fingerprint={filteredFingerprint}
                   bridgeData={filteredBridgeData}
@@ -865,10 +899,9 @@ export default function App() {
                   companySettings={companySettings}
                 />
               )}
-              {tab === 'dashboard'   && (
+              {!noData && tab === 'dashboard' && (
                 <>
                   <SummaryBar summary={filteredSummary} onRefresh={loadAll} onSeed={seedDemo}/>
-                  {/* Board View toggle */}
                   <div className="flex justify-end mb-3">
                     <div className="flex items-center gap-1 bg-slate-100 rounded-lg p-1">
                       <button
@@ -890,62 +923,9 @@ export default function App() {
                   <Scorecard fingerprint={filteredFingerprint} kpiDefs={kpiDefs} onKpiClick={openKpi} boardView={boardView} periodLabel={periodLabel} benchmarks={benchmarks} companyStage={companyStage}/>
                 </>
               )}
-              {tab === 'fingerprint' && <Fingerprint2 fingerprint={yearFilteredFingerprint} onKpiClick={openKpi}/>}
-              {tab === 'trends'      && <MonthlyTrend fingerprint={filteredFingerprint} monthly={filteredMonthly} onKpiClick={openKpi} periodLabel={periodLabel}/>}
-              {tab === 'projection'  && (
-                <ProjectionBridge
-                  bridgeData={filteredBridgeData}
-                  projectionMonthly={filteredProjectionMonthly}
-                  onUploaded={loadAll}
-                  onAskAnika={(kpiName) => setPrefillQuestion(`Why is ${kpiName} below projection?`)}
-                  onNavigateToUpload={() => setTab('upload')}
-                />
-              )}
-              {tab === 'decisions'   && <DecisionLog authToken={authToken} fingerprint={fingerprint} />}
-              {tab === 'scenario'    && <ScenarioPlanner fingerprint={filteredFingerprint} authToken={authToken} />}
-              {tab === 'ontology'    && <OntologyPage />}
-              {tab === 'forecast'    && <ForecastPage />}
-              {tab === 'sources'     && <DataSourcesPage />}
-              {tab === 'gaps'        && <DataGapsPage />}
-              {tab === 'quality'     && <DataQualityPage />}
-              {tab === 'mappings'    && <FieldMappingPage />}
-              {tab === 'upload'      && <CSVUpload onUploaded={loadAll}/>}
-              {tab === 'alerts'      && <SlackAlerts filteredFingerprint={filteredFingerprint}/>}
-              {tab === 'targets'     && <TargetsEditor />}
-              {tab === 'audit'      && <AuditLog />}
-              {tab === 'company'     && <CompanySettings onSave={(updated) => setCompanySettings(prev => ({ ...prev, ...updated }))}/>}
-              {tab === 'team'        && <TeamSettings authToken={authToken} />}
-              {tab === 'api'         && <APIReference kpiDefs={kpiDefs}/>}
-              {tab === 'devdocs'     && <DevDocs />}
-              {tab === 'admin'       && isAdmin && <AdminPanel />}
+              {!noData && tab === 'fingerprint' && <Fingerprint2 fingerprint={yearFilteredFingerprint} onKpiClick={openKpi}/>}
+              {!noData && tab === 'trends'      && <MonthlyTrend fingerprint={filteredFingerprint} monthly={filteredMonthly} onKpiClick={openKpi} periodLabel={periodLabel}/>}
             </>
-          )}
-
-          {!loading && (tab === 'decisions')           && <DecisionLog authToken={authToken} fingerprint={fingerprint} />}
-          {!loading && (tab === 'scenario')            && <ScenarioPlanner fingerprint={fingerprint} authToken={authToken} />}
-          {!loading && noData && tab === 'ontology'   && <OntologyPage />}
-          {!loading && noData && tab === 'forecast'   && <ForecastPage />}
-          {!loading && (tab === 'sources')            && <DataSourcesPage />}
-          {!loading && (tab === 'gaps')               && <DataGapsPage />}
-          {!loading && (tab === 'quality')            && <DataQualityPage />}
-          {!loading && (tab === 'mappings')           && <FieldMappingPage />}
-          {!loading && noData && tab === 'upload'     && <CSVUpload onUploaded={loadAll}/>}
-          {!loading && noData && tab === 'alerts'     && <SlackAlerts filteredFingerprint={[]}/>}
-          {!loading && noData && tab === 'targets'    && <TargetsEditor />}
-          {!loading && noData && tab === 'audit'     && <AuditLog />}
-          {!loading && noData && tab === 'company'    && <CompanySettings onSave={(updated) => setCompanySettings(prev => ({ ...prev, ...updated }))}/>}
-          {!loading && noData && tab === 'team'       && <TeamSettings authToken={authToken} />}
-          {!loading && noData && tab === 'api'        && <APIReference kpiDefs={kpiDefs}/>}
-          {!loading && noData && tab === 'devdocs'    && <DevDocs />}
-          {!loading && tab === 'admin' && isAdmin     && <AdminPanel />}
-          {!loading && noData && tab === 'projection' && (
-            <ProjectionBridge
-              bridgeData={filteredBridgeData}
-              projectionMonthly={filteredProjectionMonthly}
-              onUploaded={loadAll}
-              onAskAnika={(kpiName) => setPrefillQuestion(`Why is ${kpiName} below projection?`)}
-              onNavigateToUpload={() => setTab('upload')}
-            />
           )}
         </main>
       </div>

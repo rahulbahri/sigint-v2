@@ -1,0 +1,686 @@
+import { useState, useEffect, useRef } from 'react'
+import {
+  Search, BookOpen, Zap, BarChart2, GitBranch, TrendingUp, Activity,
+  UploadCloud, Sliders, Database, AlertCircle, ShieldCheck, Map,
+  FileSpreadsheet, Target, Bell, Settings, ChevronRight, Info,
+  CheckCircle2, AlertTriangle, ArrowRight, Layers
+} from 'lucide-react'
+
+// ── Category badge definitions ──────────────────────────────────────────────
+const CATEGORIES = {
+  intelligence: { label: 'Intelligence', color: 'bg-blue-500/20 text-blue-300 border-blue-500/30' },
+  analysis:     { label: 'Analysis',     color: 'bg-purple-500/20 text-purple-300 border-purple-500/30' },
+  data:         { label: 'Data',         color: 'bg-emerald-500/20 text-emerald-300 border-emerald-500/30' },
+  settings:     { label: 'Settings',     color: 'bg-slate-500/20 text-slate-300 border-slate-500/30' },
+}
+
+// ── Section definitions ──────────────────────────────────────────────────────
+const SECTIONS = [
+  {
+    id: 'getting-started',
+    title: 'Getting Started',
+    icon: Layers,
+    category: null,
+    purpose: 'Your end-to-end workflow for getting value from Signals Intelligence.',
+    isIntro: true,
+    steps: [
+      { label: 'Connect your data', detail: 'Go to Data Sources and connect at least one revenue source (Stripe, QuickBooks, or Shopify recommended for first connection).' },
+      { label: 'Set KPI targets', detail: 'Navigate to KPI Targets and enter your annual plan figures for each metric. Variance and Forecast features depend on these values.' },
+      { label: 'Review Executive Brief', detail: 'Check the Executive Brief for an AI-generated summary of your current performance. This becomes your weekly board-prep starting point.' },
+      { label: 'Act on Variance Command', detail: 'Open Variance Command to see which KPIs are at risk. Assign owners and due dates to any red or yellow KPIs.' },
+      { label: 'Log decisions', detail: 'Every time your team makes a strategic decision informed by platform data, record it in the Decision Log with its rationale and expected outcome.' },
+    ],
+    tip: 'New workspaces typically reach full value within one week of connecting data and setting targets. Start with one data source — you can add more later without losing any existing history.',
+  },
+  {
+    id: 'executive-brief',
+    title: 'Executive Brief',
+    icon: BookOpen,
+    category: 'intelligence',
+    purpose: 'AI-generated, board-ready summary of overall business performance.',
+    when: 'Review weekly before board meetings or investor updates.',
+    steps: [
+      'Open Executive Brief from the left navigation.',
+      'Scan the KPI status cards at the top — green means on track, red means attention needed.',
+      'Read the AI-generated trend narratives for context on why KPIs are moving.',
+      'Click any KPI card to drill down into the underlying monthly data.',
+      'Use the actionable insights panel at the bottom to prioritise this week\'s focus areas.',
+    ],
+    tips: [
+      { type: 'info', text: 'The brief regenerates automatically each time new data syncs. No manual refresh needed.' },
+      { type: 'info', text: 'Narrative language is calibrated to be suitable for board and investor audiences. You can copy it directly into slide decks.' },
+    ],
+  },
+  {
+    id: 'variance-command',
+    title: 'Variance Command',
+    icon: Zap,
+    category: 'intelligence',
+    purpose: 'Real-time view of every KPI flagged as at-risk or critical.',
+    when: 'Check at the start of each week and immediately after data syncs.',
+    steps: [
+      'Open Variance Command to see all KPIs sorted by severity.',
+      'Red KPIs (>10% below target) require immediate owner assignment.',
+      'Yellow KPIs (3–10% below target) should have a resolution plan this sprint.',
+      'Green KPIs (on track) need only a quick review.',
+      'Click any KPI row to assign an owner, set a due date, and add a comment.',
+      'Track resolution progress in the same row over subsequent weeks.',
+    ],
+    tips: [
+      { type: 'warning', text: 'Do not dismiss red KPIs without assigning an owner. Unowned issues are invisible to the rest of the team.' },
+      { type: 'info',    text: 'Threshold percentages (3% / 10%) can be adjusted in Settings if your business has different tolerance levels.' },
+    ],
+  },
+  {
+    id: 'decision-log',
+    title: 'Decision Log',
+    icon: GitBranch,
+    category: 'intelligence',
+    purpose: 'A permanent record of strategic decisions linked to KPI context and outcomes.',
+    when: 'Log every major decision at the time it is made; review outcomes monthly.',
+    steps: [
+      'Click "New Decision" to open the entry form.',
+      'Write a concise title and the full rationale for the decision.',
+      'Tag the relevant KPIs that informed or will be affected by the decision.',
+      'Set an expected outcome (e.g., "+5% revenue in 90 days") and a review date.',
+      'Return on the review date to record the actual outcome and mark the decision as resolved or ongoing.',
+    ],
+    tips: [
+      { type: 'info', text: 'Include decisions that turn out to be wrong — the log\'s value is in pattern recognition over time, not just in celebrating wins.' },
+      { type: 'info', text: 'Decision Log entries are visible to all workspace members by default. Use the visibility toggle to mark sensitive entries as restricted.' },
+    ],
+  },
+  {
+    id: 'performance-fingerprint',
+    title: 'Performance Fingerprint',
+    icon: Activity,
+    category: 'analysis',
+    purpose: 'Heatmap of all KPIs across every time period, revealing seasonal patterns at a glance.',
+    when: 'Use quarterly for period comparisons and before annual planning cycles.',
+    steps: [
+      'Open Performance Fingerprint from the Analysis section.',
+      'Each cell in the heatmap represents one KPI in one month — darker green means further above target, deeper red means further below.',
+      'Hover any cell to see the exact value and percentage against target.',
+      'Use the year selector to compare the same periods across multiple years.',
+      'Click "Export" to download the heatmap as a PNG suitable for board decks.',
+    ],
+    tips: [
+      { type: 'info', text: 'Seasonal patterns (e.g., Q4 revenue spikes, summer churn increases) typically become visible after 18+ months of data.' },
+      { type: 'info', text: 'The fingerprint is most informative when all KPI targets are set. Cells without targets appear grey.' },
+    ],
+  },
+  {
+    id: 'trend-explorer',
+    title: 'Trend Explorer',
+    icon: TrendingUp,
+    category: 'analysis',
+    purpose: 'Multi-KPI line chart overlay for spotting correlations and turning points.',
+    when: 'Use when investigating why a KPI changed or when preparing a performance narrative.',
+    steps: [
+      'Open Trend Explorer and use the KPI dropdown to add up to 6 KPIs to the chart.',
+      'Toggle between "Raw Values" and "% of Target" using the view switcher — % of Target is better for comparing KPIs with different units.',
+      'Hover the chart to read exact values at each month.',
+      'Click any month on the chart to open the annotation panel.',
+      'Add an event annotation (e.g., "Launched new pricing", "Key hire joined") — annotations appear as markers on the chart.',
+      'Share annotated charts via the export button.',
+    ],
+    tips: [
+      { type: 'info', text: 'Annotating key events turns the Trend Explorer into a living business narrative that new team members can read to understand company history.' },
+      { type: 'warning', text: 'Comparing KPIs with very different scales (e.g., revenue in millions vs. churn rate in %) is clearer in "% of Target" mode.' },
+    ],
+  },
+  {
+    id: 'forward-signals',
+    title: 'Forward Signals',
+    icon: BarChart2,
+    category: 'analysis',
+    purpose: '90-day probabilistic forecast using Monte Carlo simulation with P10/P50/P90 confidence bands.',
+    when: 'Review weekly. If P50 is below target, act now. If P10 is below target, prepare a contingency plan.',
+    steps: [
+      'Open Forward Signals to see the 90-day forecast for each KPI.',
+      'P50 (median line) represents the most likely outcome given current trends.',
+      'P90 (upper band) is the optimistic scenario — 90% of simulations landed below this.',
+      'P10 (lower band) is the pessimistic scenario — only 10% of simulations landed below this.',
+      'Use the KPI selector to focus on the metrics most critical to your current quarter.',
+      'If P50 falls below target in the next 30 days, escalate immediately in Variance Command.',
+    ],
+    tips: [
+      { type: 'warning', text: 'Forecasts are only as accurate as your historical data. Fewer than 6 months of data produces wide confidence bands — treat them as directional, not precise.' },
+      { type: 'info',    text: 'The simulation reruns automatically after each data sync. Manual refresh is available via the refresh icon.' },
+    ],
+  },
+  {
+    id: 'plan-vs-actual',
+    title: 'Plan vs Actual',
+    icon: FileSpreadsheet,
+    category: 'analysis',
+    purpose: 'Compare your uploaded financial model or annual plan against actual performance, with gap analysis by KPI.',
+    when: 'Upload at the start of each fiscal year; review monthly variance thereafter.',
+    steps: [
+      'Click "Upload Plan" and select your financial model CSV (download the template first if needed).',
+      'The platform automatically maps CSV columns to canonical KPIs using your Field Mappings configuration.',
+      'Review the gap analysis table — positive gaps (actual > plan) appear green, negative gaps appear red.',
+      'Use the month filter to isolate specific quarters or periods.',
+      'Export the gap analysis as a CSV for inclusion in board packs.',
+    ],
+    tips: [
+      { type: 'info',    text: 'You can upload multiple plan versions (e.g., original budget vs. revised forecast). Each upload is versioned and labelled with a timestamp.' },
+      { type: 'warning', text: 'Ensure your plan CSV uses the same date format (YYYY-MM) as the platform expects. Mismatched formats cause silent mapping failures.' },
+    ],
+  },
+  {
+    id: 'scenario-planner',
+    title: 'Scenario Planner',
+    icon: Sliders,
+    category: 'analysis',
+    purpose: 'Model the downstream KPI impact of strategic decisions before committing to them.',
+    when: 'Use before any major hiring, pricing, or operational decision.',
+    steps: [
+      'Open Scenario Planner and click "New Scenario".',
+      'Name the scenario (e.g., "Hire 3 AEs in Q3") and set the lever values (headcount, price change, churn reduction %).',
+      'Review the projected KPI changes in the impact panel on the right.',
+      'Save the scenario to compare it against other saved scenarios side by side.',
+      'Share a scenario with a team member using the share button — they can view but not edit without explicit permission.',
+    ],
+    tips: [
+      { type: 'info',    text: 'Saved scenarios are preserved indefinitely. Build a library of rejected scenarios — they often become relevant again.' },
+      { type: 'warning', text: 'Scenario Planner uses simplified linear models. For complex non-linear effects, treat its output as directional guidance only.' },
+    ],
+  },
+  {
+    id: 'data-sources',
+    title: 'Data Sources',
+    icon: Database,
+    category: 'data',
+    purpose: 'Connect Stripe, QuickBooks, HubSpot, Xero, Shopify, and Salesforce for automatic data sync.',
+    when: 'Connect your primary revenue source first, then add supporting sources.',
+    steps: [
+      'Open Data Sources from the Data section of the sidebar.',
+      'Click "Connect" next to your primary data source.',
+      'Enter your API key or complete the OAuth flow as prompted.',
+      'Wait for the initial sync to complete — this can take 2–10 minutes depending on data volume.',
+      'Verify the connection shows "Connected" with a recent sync timestamp.',
+      'Repeat for additional sources. Each source enriches a different set of KPIs.',
+    ],
+    tips: [
+      { type: 'info',    text: 'Stripe is recommended as the first connection for SaaS businesses — it unlocks revenue, ARR, churn, and MRR KPIs immediately.' },
+      { type: 'info',    text: 'Data syncs automatically every 24 hours. You can trigger a manual sync at any time using the "Sync Now" button.' },
+      { type: 'warning', text: 'Disconnecting a source does not delete historical data. Reconnecting the same source after a gap will resume from where it left off.' },
+    ],
+  },
+  {
+    id: 'data-gaps',
+    title: 'Data Gaps',
+    icon: AlertCircle,
+    category: 'data',
+    purpose: 'Automatically detects missing months or KPIs with insufficient data coverage.',
+    when: 'Review before every board meeting and before running forecasts.',
+    steps: [
+      'Open Data Gaps to see a list of all detected gaps sorted by severity.',
+      'Each gap shows which KPI is affected, which months are missing, and the recommended action.',
+      'For gaps that can be filled via CSV, click "Upload Data" to go directly to Manual Upload with the correct template.',
+      'For gaps caused by a disconnected source, click "Reconnect" to go to Data Sources.',
+      'After filling a gap, return to Data Gaps to confirm the issue is resolved.',
+    ],
+    tips: [
+      { type: 'warning', text: 'Forecasts with known data gaps will show a warning banner. Do not present gap-affected forecasts to investors without acknowledging the limitation.' },
+      { type: 'info',    text: 'Gaps older than 3 years can generally be marked as "accepted" if backfilling is not feasible — this removes them from the active issues list.' },
+    ],
+  },
+  {
+    id: 'data-quality',
+    title: 'Data Quality',
+    icon: ShieldCheck,
+    category: 'data',
+    purpose: 'Flags statistical anomalies, duplicate records, and inconsistent values across all data sources.',
+    when: 'Resolve all critical issues before relying on forecasts or presenting data externally.',
+    steps: [
+      'Open Data Quality to see all flagged issues grouped by severity: Critical, Warning, and Info.',
+      'Critical issues (red) should be resolved before any external reporting — they indicate data that is likely wrong.',
+      'Warning issues (yellow) indicate probable inconsistencies — investigate before using the affected KPI in decisions.',
+      'Info issues (grey) are low-confidence flags — review when time permits.',
+      'Click any issue to see the affected records and the recommended resolution.',
+      'After resolving an issue, click "Mark Resolved" to dismiss it and log the action.',
+    ],
+    tips: [
+      { type: 'warning', text: 'Duplicate records in Stripe or QuickBooks are common after plan migrations. Data Quality will surface these automatically.' },
+      { type: 'info',    text: 'Resolving a data quality issue may change historical KPI values. Downstream pages (Forecasts, Fingerprint) will update on next load.' },
+    ],
+  },
+  {
+    id: 'field-mappings',
+    title: 'Field Mappings',
+    icon: Map,
+    category: 'data',
+    purpose: 'Maps your source data field names to the platform\'s canonical KPI schema.',
+    when: 'Confirm uncertain mappings immediately after connecting each new data source.',
+    steps: [
+      'Open Field Mappings to see all detected source fields alongside their proposed canonical mappings.',
+      'Fields shown with a green checkmark have been automatically mapped with high confidence.',
+      'Fields shown with a yellow question mark require your confirmation — click to review and approve or correct the mapping.',
+      'Fields shown in grey are unrecognised — either map them manually to a canonical KPI or mark as "Ignore".',
+      'Save all changes when done. Mappings are applied retroactively to all existing data.',
+    ],
+    tips: [
+      { type: 'warning', text: 'Incorrect mappings silently corrupt KPI calculations. Always review uncertain mappings before running reports.' },
+      { type: 'info',    text: 'Mappings are saved per data source. If you reconnect a source, existing mappings are preserved and do not need to be re-entered.' },
+    ],
+  },
+  {
+    id: 'manual-upload',
+    title: 'Manual Upload',
+    icon: UploadCloud,
+    category: 'data',
+    purpose: 'Upload CSV files with historical data for KPIs not covered by direct integrations.',
+    when: 'Use for historical data backfill or for metrics tracked in spreadsheets (e.g., NPS, support tickets).',
+    steps: [
+      'Open Manual Upload and click "Download Template" for the KPI type you want to upload.',
+      'Fill in the template with your historical data — the required columns are listed in the template header.',
+      'Save as CSV (UTF-8 encoding recommended).',
+      'Drag and drop the file onto the upload area, or click to browse.',
+      'Review the preview table to confirm the data parsed correctly before confirming the upload.',
+      'Click "Confirm Upload" — data is ingested immediately and KPIs update within seconds.',
+    ],
+    tips: [
+      { type: 'info',    text: 'Multi-year historical uploads (3–5 years) produce significantly more accurate forecasts and seasonal patterns. Upload as much history as you have.' },
+      { type: 'warning', text: 'Date column must use YYYY-MM format. Any other date format will fail validation with an error message showing the first offending row.' },
+      { type: 'info',    text: 'Uploading data for a period that already has data from a connected source will create a duplicate warning in Data Quality. Resolve by selecting which source to trust.' },
+    ],
+  },
+  {
+    id: 'kpi-targets',
+    title: 'KPI Targets',
+    icon: Target,
+    category: 'settings',
+    purpose: 'Set and manage target values for each KPI. All variance and forecast calculations depend on these values.',
+    when: 'Set targets at the start of each fiscal year. Update immediately if strategy changes mid-year.',
+    steps: [
+      'Open KPI Targets from the Settings section.',
+      'Click "Edit" next to any KPI to enter or update its target value.',
+      'Set the target direction (higher is better vs. lower is better) — this affects how variance is calculated.',
+      'Optionally set monthly sub-targets if your plan is non-linear across the year.',
+      'Click "Save All" when done.',
+      'Return to Variance Command — it will immediately reflect the new targets.',
+    ],
+    tips: [
+      { type: 'warning', text: 'Changing a target retroactively will change all historical variance calculations. This is intentional but can be surprising — always communicate target changes to stakeholders.' },
+      { type: 'info',    text: 'KPIs without targets will appear grey in all variance views. Set targets for every KPI you want to track actively.' },
+    ],
+  },
+  {
+    id: 'slack-alerts',
+    title: 'Slack Alerts',
+    icon: Bell,
+    category: 'settings',
+    purpose: 'Receive automated KPI alerts in Slack when metrics cross red thresholds.',
+    when: 'Configure once at workspace setup. Test before your first board cycle.',
+    steps: [
+      'Open Slack Alerts from Settings.',
+      'In your Slack workspace, go to Apps → Incoming Webhooks → Add New Webhook.',
+      'Select the channel where alerts should post (a dedicated #kpi-alerts channel is recommended).',
+      'Copy the webhook URL provided by Slack.',
+      'Paste the URL into the Webhook URL field in the platform and click "Test" — a test message should appear in your Slack channel within 10 seconds.',
+      'Toggle "Enable Alerts" to activate. Alerts will fire automatically when KPIs cross red thresholds.',
+    ],
+    tips: [
+      { type: 'info',    text: 'Alerts include the KPI name, current value, target, and a direct link back to Variance Command. No manual investigation needed to understand the alert.' },
+      { type: 'info',    text: 'Alert frequency is capped at one message per KPI per 24 hours to prevent notification fatigue.' },
+      { type: 'warning', text: 'Slack webhooks expire if unused for 30 days. Re-test your webhook monthly to confirm it is still active.' },
+    ],
+  },
+  {
+    id: 'admin-panel',
+    title: 'Admin Panel',
+    icon: Settings,
+    category: 'settings',
+    purpose: 'User management, workspace diagnostics, and system health monitoring. Operator access only.',
+    when: 'Use when onboarding new team members, diagnosing sync issues, or reviewing system status.',
+    steps: [
+      'Admin Panel is accessible only to users with the Operator role.',
+      'Use User Management to invite team members, assign roles, and revoke access.',
+      'Use Workspace Diagnostics to inspect data pipeline health, sync logs, and error traces.',
+      'Use System Health to view uptime, API rate limit consumption, and background task queue depth.',
+      'All admin actions are logged in the Audit Log, which is immutable and cannot be deleted.',
+    ],
+    tips: [
+      { type: 'warning', text: 'Admin Panel actions (role changes, data deletions) are permanent. Confirm with a second Operator before taking destructive actions.' },
+      { type: 'info',    text: 'If a data source sync is stuck, use Workspace Diagnostics → Force Resync before contacting support. This resolves 90% of stuck-sync issues.' },
+    ],
+  },
+]
+
+// ── Helper: category badge ───────────────────────────────────────────────────
+function CategoryBadge({ category }) {
+  if (!category) return null
+  const meta = CATEGORIES[category]
+  return (
+    <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium border ${meta.color}`}>
+      {meta.label}
+    </span>
+  )
+}
+
+// ── Helper: tip/warning block ────────────────────────────────────────────────
+function TipBlock({ type, text }) {
+  if (type === 'warning') {
+    return (
+      <div className="flex gap-2.5 p-3 rounded-lg bg-amber-500/10 border border-amber-500/20">
+        <AlertTriangle size={15} className="text-amber-400 mt-0.5 shrink-0" />
+        <p className="text-sm text-amber-200/90 leading-relaxed">{text}</p>
+      </div>
+    )
+  }
+  return (
+    <div className="flex gap-2.5 p-3 rounded-lg bg-[#00AEEF]/10 border border-[#00AEEF]/20">
+      <Info size={15} className="text-[#00AEEF] mt-0.5 shrink-0" />
+      <p className="text-sm text-blue-200/90 leading-relaxed">{text}</p>
+    </div>
+  )
+}
+
+// ── Getting Started card ─────────────────────────────────────────────────────
+function GettingStartedCard({ section }) {
+  const Icon = section.icon
+  return (
+    <div id={section.id} className="scroll-mt-6">
+      <div className="rounded-xl border border-[#00AEEF]/30 bg-gradient-to-br from-[#003366]/60 via-[#0d1117] to-[#1a1f2e] p-6 shadow-lg">
+        <div className="flex items-center gap-3 mb-4">
+          <div className="w-10 h-10 rounded-lg bg-[#00AEEF]/20 border border-[#00AEEF]/30 flex items-center justify-center">
+            <Icon size={20} className="text-[#00AEEF]" />
+          </div>
+          <div>
+            <h2 className="text-white font-semibold text-lg leading-none">{section.title}</h2>
+            <p className="text-slate-400 text-sm mt-1">{section.purpose}</p>
+          </div>
+        </div>
+
+        <div className="space-y-3 mb-5">
+          {section.steps.map((step, i) => (
+            <div key={i} className="flex gap-3 items-start">
+              <div className="flex-shrink-0 w-6 h-6 rounded-full bg-[#00AEEF]/20 border border-[#00AEEF]/40 flex items-center justify-center mt-0.5">
+                <span className="text-[#00AEEF] text-xs font-bold">{i + 1}</span>
+              </div>
+              <div>
+                <span className="text-white text-sm font-medium">{step.label}</span>
+                <p className="text-slate-400 text-sm mt-0.5 leading-relaxed">{step.detail}</p>
+              </div>
+            </div>
+          ))}
+        </div>
+
+        <TipBlock type="info" text={section.tip} />
+      </div>
+    </div>
+  )
+}
+
+// ── Section card ─────────────────────────────────────────────────────────────
+function SectionCard({ section }) {
+  const Icon = section.icon
+  return (
+    <div id={section.id} className="scroll-mt-6">
+      <div className="rounded-xl border border-white/8 bg-[#0d1117] hover:border-white/12 transition-colors shadow-md">
+        {/* Header */}
+        <div className="px-5 pt-5 pb-4 border-b border-white/6">
+          <div className="flex items-start justify-between gap-3">
+            <div className="flex items-center gap-3">
+              <div className="w-9 h-9 rounded-lg bg-white/5 border border-white/8 flex items-center justify-center shrink-0">
+                <Icon size={17} className="text-slate-300" />
+              </div>
+              <div>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <h2 className="text-white font-semibold text-base leading-none">{section.title}</h2>
+                  <CategoryBadge category={section.category} />
+                </div>
+                <p className="text-slate-400 text-sm mt-1.5 leading-relaxed">{section.purpose}</p>
+              </div>
+            </div>
+          </div>
+          {section.when && (
+            <div className="mt-3 flex items-start gap-2 text-xs text-slate-500">
+              <CheckCircle2 size={13} className="mt-0.5 shrink-0 text-slate-600" />
+              <span><span className="text-slate-400 font-medium">When to use: </span>{section.when}</span>
+            </div>
+          )}
+        </div>
+
+        {/* Steps */}
+        <div className="px-5 py-4">
+          <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-3">How to use</p>
+          <ol className="space-y-2">
+            {section.steps.map((step, i) => (
+              <li key={i} className="flex gap-3 items-start">
+                <span className="flex-shrink-0 w-5 h-5 rounded-full bg-slate-800 border border-slate-700 flex items-center justify-center text-slate-400 text-xs font-medium mt-0.5">
+                  {i + 1}
+                </span>
+                <span className="text-slate-300 text-sm leading-relaxed">{step}</span>
+              </li>
+            ))}
+          </ol>
+        </div>
+
+        {/* Tips */}
+        {section.tips && section.tips.length > 0 && (
+          <div className="px-5 pb-5 space-y-2">
+            {section.tips.map((tip, i) => (
+              <TipBlock key={i} type={tip.type} text={tip.text} />
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+// ── Sidebar nav link ─────────────────────────────────────────────────────────
+function SidebarLink({ section, active, onClick }) {
+  const Icon = section.icon
+  return (
+    <button
+      onClick={() => onClick(section.id)}
+      className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-left transition-colors text-sm
+        ${active
+          ? 'bg-[#00AEEF]/15 text-[#00AEEF] border border-[#00AEEF]/25'
+          : 'text-slate-400 hover:text-slate-200 hover:bg-white/5 border border-transparent'
+        }`}
+    >
+      <Icon size={14} className="shrink-0" />
+      <span className="truncate">{section.title}</span>
+    </button>
+  )
+}
+
+// ── Group label ──────────────────────────────────────────────────────────────
+function SidebarGroupLabel({ label }) {
+  return (
+    <p className="px-3 pt-4 pb-1 text-xs font-semibold text-slate-600 uppercase tracking-wider select-none">
+      {label}
+    </p>
+  )
+}
+
+// ── Main DocsPage component ──────────────────────────────────────────────────
+export default function DocsPage() {
+  const [query, setQuery] = useState('')
+  const [activeId, setActiveId] = useState('getting-started')
+  const contentRef = useRef(null)
+
+  const filtered = SECTIONS.filter(s =>
+    query.trim() === '' ||
+    s.title.toLowerCase().includes(query.toLowerCase()) ||
+    s.purpose.toLowerCase().includes(query.toLowerCase()) ||
+    (s.category && CATEGORIES[s.category].label.toLowerCase().includes(query.toLowerCase()))
+  )
+
+  // Highlight active section on scroll
+  useEffect(() => {
+    const container = contentRef.current
+    if (!container) return
+
+    function onScroll() {
+      const ids = SECTIONS.map(s => s.id)
+      let current = ids[0]
+      for (const id of ids) {
+        const el = document.getElementById(id)
+        if (!el) continue
+        const rect = el.getBoundingClientRect()
+        if (rect.top <= 120) current = id
+      }
+      setActiveId(current)
+    }
+
+    container.addEventListener('scroll', onScroll, { passive: true })
+    return () => container.removeEventListener('scroll', onScroll)
+  }, [])
+
+  function scrollTo(id) {
+    const el = document.getElementById(id)
+    if (el) {
+      el.scrollIntoView({ behavior: 'smooth', block: 'start' })
+      setActiveId(id)
+    }
+  }
+
+  const GROUPS = [
+    { label: 'Start here',   ids: ['getting-started'] },
+    { label: 'Intelligence', ids: ['executive-brief', 'variance-command', 'decision-log'] },
+    { label: 'Analysis',     ids: ['performance-fingerprint', 'trend-explorer', 'forward-signals', 'plan-vs-actual', 'scenario-planner'] },
+    { label: 'Data',         ids: ['data-sources', 'data-gaps', 'data-quality', 'field-mappings', 'manual-upload'] },
+    { label: 'Settings',     ids: ['kpi-targets', 'slack-alerts', 'admin-panel'] },
+  ]
+
+  return (
+    <div className="flex h-full min-h-screen bg-[#080d14] text-white">
+
+      {/* ── Left sidebar ─────────────────────────────────────────────────── */}
+      <aside className="hidden lg:flex flex-col w-60 xl:w-64 shrink-0 sticky top-0 h-screen overflow-y-auto border-r border-white/6 bg-[#0a0f1a]">
+        <div className="px-4 pt-5 pb-3 border-b border-white/6">
+          <div className="flex items-center gap-2 mb-1">
+            <BookOpen size={16} className="text-[#00AEEF]" />
+            <span className="text-white font-semibold text-sm">Documentation</span>
+          </div>
+          <p className="text-xs text-slate-500">Signals Intelligence platform guide</p>
+        </div>
+
+        <nav className="flex-1 px-2 pb-6">
+          {GROUPS.map(group => (
+            <div key={group.label}>
+              <SidebarGroupLabel label={group.label} />
+              {group.ids.map(id => {
+                const section = SECTIONS.find(s => s.id === id)
+                if (!section) return null
+                return (
+                  <SidebarLink
+                    key={id}
+                    section={section}
+                    active={activeId === id}
+                    onClick={scrollTo}
+                  />
+                )
+              })}
+            </div>
+          ))}
+        </nav>
+      </aside>
+
+      {/* ── Main content ─────────────────────────────────────────────────── */}
+      <main
+        ref={contentRef}
+        className="flex-1 overflow-y-auto"
+      >
+        <div className="max-w-3xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+
+          {/* Page header */}
+          <div className="mb-8">
+            <div className="flex items-center gap-2 text-slate-500 text-sm mb-3">
+              <span>Signals Intelligence</span>
+              <ChevronRight size={14} />
+              <span className="text-slate-300">Documentation</span>
+            </div>
+            <h1 className="text-2xl font-bold text-white mb-2">Platform User Guide</h1>
+            <p className="text-slate-400 leading-relaxed">
+              Everything you need to get maximum value from Signals Intelligence — from connecting your first data source to running board-ready forecasts.
+            </p>
+          </div>
+
+          {/* Search bar */}
+          <div className="mb-8">
+            <div className="flex items-center gap-2.5 bg-[#0d1117] border border-white/10 rounded-xl px-4 py-2.5 focus-within:border-[#00AEEF]/40 transition-colors">
+              <Search size={16} className="text-slate-500 shrink-0" />
+              <input
+                type="text"
+                placeholder="Search sections, topics, or categories…"
+                value={query}
+                onChange={e => setQuery(e.target.value)}
+                className="flex-1 bg-transparent text-slate-200 text-sm placeholder-slate-600 outline-none"
+              />
+              {query && (
+                <button
+                  onClick={() => setQuery('')}
+                  className="text-slate-600 hover:text-slate-400 transition-colors text-xs"
+                >
+                  Clear
+                </button>
+              )}
+            </div>
+
+            {/* Category filter pills */}
+            <div className="flex gap-2 mt-3 flex-wrap">
+              {Object.entries(CATEGORIES).map(([key, meta]) => (
+                <button
+                  key={key}
+                  onClick={() => setQuery(meta.label)}
+                  className={`px-2.5 py-1 rounded-full text-xs font-medium border transition-colors
+                    ${query === meta.label
+                      ? meta.color
+                      : 'bg-transparent text-slate-500 border-slate-700 hover:border-slate-600 hover:text-slate-400'
+                    }`}
+                >
+                  {meta.label}
+                </button>
+              ))}
+              {query && (
+                <button
+                  onClick={() => setQuery('')}
+                  className="px-2.5 py-1 rounded-full text-xs font-medium border border-slate-700 text-slate-500 hover:border-slate-600 hover:text-slate-400 transition-colors"
+                >
+                  All sections
+                </button>
+              )}
+            </div>
+          </div>
+
+          {/* No results */}
+          {filtered.length === 0 && (
+            <div className="text-center py-16">
+              <Search size={32} className="text-slate-700 mx-auto mb-3" />
+              <p className="text-slate-400 font-medium">No sections match "{query}"</p>
+              <p className="text-slate-600 text-sm mt-1">Try a different search term or browse by category.</p>
+            </div>
+          )}
+
+          {/* Section cards */}
+          <div className="space-y-5">
+            {filtered.map(section =>
+              section.isIntro
+                ? <GettingStartedCard key={section.id} section={section} />
+                : <SectionCard key={section.id} section={section} />
+            )}
+          </div>
+
+          {/* Footer */}
+          {filtered.length > 0 && (
+            <div className="mt-12 pt-6 border-t border-white/6 text-center">
+              <p className="text-slate-600 text-sm">
+                Need help beyond this guide?{' '}
+                <a href="mailto:support@signalsintelligence.com" className="text-[#00AEEF] hover:underline">
+                  Contact support
+                </a>
+              </p>
+            </div>
+          )}
+        </div>
+      </main>
+    </div>
+  )
+}
