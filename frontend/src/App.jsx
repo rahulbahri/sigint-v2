@@ -382,8 +382,8 @@ export default function App() {
         axios.get('/api/kpi-definitions'),
         axios.get('/api/monthly'),
         axios.get('/api/fingerprint'),
-        axios.get('/api/bridge'),
-        axios.get('/api/projection/monthly'),
+        axios.get('/api/bridge').catch(() => ({ data: { has_projection: false } })),
+        axios.get('/api/projection/monthly').catch(() => ({ data: [] })),
         axios.get('/api/available-years').catch(() => ({ data: [] })),
       ])
       setSummary(s.data); setKpiDefs(k.data)

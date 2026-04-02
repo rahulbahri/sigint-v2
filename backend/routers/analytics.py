@@ -12,10 +12,11 @@ from typing import Optional, List
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
+from pydantic import BaseModel
 
 from core.database import get_db
 from core.deps import _get_workspace, _require_workspace
-from core.kpi_defs import KPI_DEFS, CAUSATION_RULES, ALL_CAUSATION_RULES, BENCHMARKS
+from core.kpi_defs import KPI_DEFS, CAUSATION_RULES, ALL_CAUSATION_RULES, BENCHMARKS, compute_gap_status
 
 router = APIRouter()
 
@@ -852,6 +853,164 @@ def export_board_deck(request: Request, stage: str = "series_b"):
         media_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",
         headers={"Content-Disposition": "attachment; filename=board-deck.pptx"},
     )
+
+
+# ─── KPI Targets ─────────────────────────────────────────────────────────────
+
+@router.put("/api/targets/{kpi_key}", tags=["Configuration"])
+async def update_target(request: Request, kpi_key: str):
+    """Upsert the target value (and optionally unit/direction) for a KPI."""
+    import re as _re
+    workspace_id = _get_workspace(request)
+    if not workspace_id:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    if not _re.match(r'^[a-z_]+$', kpi_key):
+        raise HTTPException(status_code=400, detail="Invalid KPI key format")
+
+    body = await request.json()
+    target_value = float(body.get("target", body.get("target_value", 0)))
+    unit         = body.get("unit") or next(
+        (k["unit"]      for k in KPI_DEFS if k["key"] == kpi_key), "pct"
+    )
+    direction    = body.get("direction") or next(
+        (k["direction"] for k in KPI_DEFS if k["key"] == kpi_key), "higher"
+    )
+
+    now = datetime.utcnow().isoformat()
+    conn = get_db()
+    try:
+        conn.execute(
+            """INSERT INTO kpi_targets (kpi_key, target_value, unit, direction, workspace_id, last_updated)
+               VALUES (?,?,?,?,?,?)
+               ON CONFLICT(kpi_key, workspace_id) DO UPDATE
+               SET target_value=excluded.target_value,
+                   unit=excluded.unit,
+                   direction=excluded.direction,
+                   last_updated=excluded.last_updated""",
+            (kpi_key, target_value, unit, direction, workspace_id, now)
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    return {"kpi_key": kpi_key, "target_value": target_value, "unit": unit, "direction": direction}
+
+
+# ─── Plan vs Actual Bridge ───────────────────────────────────────────────────
+
+@router.get("/api/bridge", tags=["Projection"])
+def bridge_analysis(request: Request, year: Optional[int] = None):
+    """
+    Compare projected vs actual KPIs month-by-month.
+    Returns gap analysis, status (green/yellow/red), and causation rules for each KPI.
+    """
+    workspace_id = _get_workspace(request)
+    conn = get_db()
+    try:
+        if year:
+            proj_rows   = conn.execute("SELECT * FROM projection_monthly_data WHERE workspace_id=? AND year=?", [workspace_id, year]).fetchall()
+            actual_rows = conn.execute("SELECT * FROM monthly_data WHERE workspace_id=? AND year=?", [workspace_id, year]).fetchall()
+        else:
+            proj_rows   = conn.execute("SELECT * FROM projection_monthly_data WHERE workspace_id=?", [workspace_id]).fetchall()
+            actual_rows = conn.execute("SELECT * FROM monthly_data WHERE workspace_id=?", [workspace_id]).fetchall()
+    finally:
+        conn.close()
+
+    if not proj_rows:
+        return {"has_projection": False}
+
+    # Build projection lookup: (year, month) -> kpi_dict
+    proj_by_period: dict = {}
+    for row in proj_rows:
+        proj_by_period[(row["year"], row["month"])] = json.loads(row["data_json"])
+
+    # Build actuals lookup: (year, month) -> kpi_dict (merge if multiple uploads)
+    actual_by_period: dict = {}
+    for row in actual_rows:
+        key = (row["year"], row["month"])
+        actual_by_period.setdefault(key, {})
+        actual_by_period[key].update(json.loads(row["data_json"]))
+
+    # Find overlapping periods
+    overlap = sorted(set(proj_by_period.keys()) & set(actual_by_period.keys()))
+    if not overlap:
+        return {"has_projection": True, "has_overlap": False, "summary": {}, "kpis": {}}
+
+    kpis_out: dict = {}
+    for kdef in KPI_DEFS:
+        key       = kdef["key"]
+        direction = kdef["direction"]
+        months_data: dict = {}
+
+        for (yr, mo) in overlap:
+            proj_val   = proj_by_period[(yr, mo)].get(key)
+            actual_val = actual_by_period[(yr, mo)].get(key)
+            if proj_val is None or actual_val is None:
+                continue
+            if proj_val == 0:
+                continue
+
+            if direction == "higher":
+                gap_pct = (actual_val - proj_val) / abs(proj_val) * 100
+            else:
+                gap_pct = (proj_val - actual_val) / abs(proj_val) * 100
+
+            period_key = f"{yr}-{mo:02d}"
+            months_data[period_key] = {
+                "actual":    round(float(actual_val), 2),
+                "projected": round(float(proj_val), 2),
+                "gap":       round(float(actual_val - proj_val), 2),
+                "gap_pct":   round(float(gap_pct), 2),
+            }
+
+        if not months_data:
+            continue
+
+        actuals       = [v["actual"]    for v in months_data.values()]
+        projecteds    = [v["projected"] for v in months_data.values()]
+        avg_actual    = round(float(np.mean(actuals)), 2)
+        avg_projected = round(float(np.mean(projecteds)), 2)
+        avg_gap       = round(float(avg_actual - avg_projected), 2)
+        if avg_projected != 0:
+            if direction == "higher":
+                avg_gap_pct = round((avg_actual - avg_projected) / abs(avg_projected) * 100, 2)
+            else:
+                avg_gap_pct = round((avg_projected - avg_actual) / abs(avg_projected) * 100, 2)
+        else:
+            avg_gap_pct = 0.0
+        overall_status = compute_gap_status(avg_gap_pct)
+
+        kpis_out[key] = {
+            "name":           kdef["name"],
+            "unit":           kdef["unit"],
+            "direction":      direction,
+            "avg_actual":     avg_actual,
+            "avg_projected":  avg_projected,
+            "avg_gap":        avg_gap,
+            "avg_gap_pct":    avg_gap_pct,
+            "overall_status": overall_status,
+            "months":         months_data,
+            "causation":      CAUSATION_RULES.get(key, {
+                "root_causes": [], "downstream_impact": [], "corrective_actions": []
+            }),
+        }
+
+    on_track = sum(1 for k in kpis_out.values() if -3 <= k["avg_gap_pct"])
+    behind   = sum(1 for k in kpis_out.values() if k["avg_gap_pct"] < -3)
+    ahead    = sum(1 for k in kpis_out.values() if k["avg_gap_pct"] >= 3)
+    on_track = on_track - ahead
+
+    return {
+        "has_projection":  True,
+        "has_overlap":     True,
+        "summary": {
+            "on_track":              on_track,
+            "behind":                behind,
+            "ahead":                 ahead,
+            "total_months_compared": len(overlap),
+        },
+        "kpis": kpis_out,
+    }
 
 
 # ─── KPI Annotations CRUD ───────────────────────────────────────────────────

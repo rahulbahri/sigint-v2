@@ -198,6 +198,38 @@ def seed_demo_actuals(request: Request):
     if not workspace_id:
         raise HTTPException(status_code=401, detail="Not authenticated")
 
+    # Default KPI targets for a typical B2B SaaS company
+    _DEFAULT_TARGETS = [
+        ("revenue_growth",        6.0,   "higher"),
+        ("gross_margin",          62.0,  "higher"),
+        ("operating_margin",      18.0,  "higher"),
+        ("ebitda_margin",         22.0,  "higher"),
+        ("cash_conv_cycle",       42.0,  "lower"),
+        ("dso",                   35.0,  "lower"),
+        ("ar_turnover",           8.5,   "higher"),
+        ("avg_collection_period", 43.0,  "lower"),
+        ("cei",                   90.0,  "higher"),
+        ("ar_aging_current",      75.0,  "higher"),
+        ("ar_aging_overdue",      25.0,  "lower"),
+        ("billable_utilization",  72.0,  "higher"),
+        ("nrr",                   105.0, "higher"),
+        ("opex_ratio",            42.0,  "lower"),
+        ("contribution_margin",   46.0,  "higher"),
+        ("revenue_quality",       80.0,  "higher"),
+        ("cac_payback",           10.0,  "lower"),
+        ("sales_efficiency",      3.0,   "higher"),
+        ("customer_concentration",28.0,  "lower"),
+        ("recurring_revenue",     80.0,  "higher"),
+        ("churn_rate",            2.5,   "lower"),
+        ("burn_multiple",         1.2,   "lower"),
+        ("operating_leverage",    1.2,   "higher"),
+        ("growth_efficiency",     3.0,   "higher"),
+        ("revenue_momentum",      1.0,   "higher"),
+        ("margin_volatility",     2.0,   "lower"),
+        ("customer_ltv",          80.0,  "higher"),
+        ("pricing_power_index",   3.0,   "higher"),
+    ]
+
     conn = get_db()
     try:
         # Clear existing actuals for this workspace to prevent duplicate rows
@@ -217,6 +249,26 @@ def seed_demo_actuals(request: Request):
                 "INSERT INTO monthly_data (upload_id, year, month, data_json, workspace_id) VALUES (?,?,?,?,?)",
                 (upload_id, yr, mo, json.dumps(row_dict), workspace_id)
             )
+        # Seed default KPI targets so the dashboard shows status (green/yellow/red)
+        # Only set targets that the workspace doesn't already have customised
+        existing_targets = {
+            r["kpi_key"]
+            for r in conn.execute(
+                "SELECT kpi_key FROM kpi_targets WHERE workspace_id=?", (workspace_id,)
+            ).fetchall()
+        }
+        now_iso = datetime.utcnow().isoformat()
+        for kpi_key, target_value, direction in _DEFAULT_TARGETS:
+            if kpi_key not in existing_targets:
+                conn.execute(
+                    """INSERT INTO kpi_targets (kpi_key, target_value, direction, workspace_id, last_updated)
+                       VALUES (?,?,?,?,?)
+                       ON CONFLICT(kpi_key, workspace_id) DO UPDATE
+                       SET target_value=excluded.target_value,
+                           direction=excluded.direction,
+                           last_updated=excluded.last_updated""",
+                    (kpi_key, target_value, direction, workspace_id, now_iso)
+                )
         conn.commit()
         _audit("data_seed", "upload", str(upload_id), "Demo actuals seeded")
     finally:
