@@ -877,30 +877,8 @@ export default function App() {
                 />
               )}
 
-              {/* ── Forward Signals — gated at 18 months of data ──────────────── */}
-              {tab === 'forecast' && (
-                (summary?.months_of_data ?? 0) >= 18
-                  ? <ForecastPage />
-                  : (
-                    <div className="flex flex-col items-center justify-center h-64 gap-4 text-center max-w-md mx-auto">
-                      <div className="w-12 h-12 rounded-2xl bg-amber-50 border border-amber-200 flex items-center justify-center">
-                        <Lock size={20} className="text-amber-500"/>
-                      </div>
-                      <div>
-                        <p className="text-slate-700 text-base font-semibold mb-1">Forward Signals Locked</p>
-                        <p className="text-slate-500 text-sm leading-relaxed">
-                          Forward Signals requires at least 18 months of data for statistically reliable forecasts.
-                          You currently have <strong>{summary?.months_of_data ?? 0}</strong> month{(summary?.months_of_data ?? 0) !== 1 ? 's' : ''}.
-                          This will unlock automatically once you reach 18 months.
-                        </p>
-                      </div>
-                      <button onClick={() => setTab('upload')}
-                        className="px-5 py-2 bg-[#0055A4] hover:bg-[#003d80] text-white text-sm font-medium rounded-lg transition-colors">
-                        Upload More Data
-                      </button>
-                    </div>
-                  )
-              )}
+              {/* ── Forward Signals — always accessible, handles insufficient data internally ── */}
+              {tab === 'forecast' && <ForecastPage monthsOfData={summary?.months_of_data ?? 0} onNavigateUpload={() => setTab('upload')} />}
 
               {/* ── No-data prompt for analysis tabs only ────────────────────── */}
               {noData && ['variance','board','dashboard','fingerprint','trends'].includes(tab) && (

@@ -13,6 +13,43 @@ const CORE_KPIS = new Set([
   'operating_margin', 'recurring_revenue', 'cash_conv_cycle', 'customer_concentration'
 ])
 
+// ── All 33 KPI definitions with what data they need ─────────────────────────
+const ALL_KPI_DEFS = [
+  { key: 'revenue_growth',       name: 'Revenue Growth Rate',         needs: 'Monthly revenue figures' },
+  { key: 'gross_margin',         name: 'Gross Margin %',              needs: 'Revenue + cost of goods sold' },
+  { key: 'operating_margin',     name: 'Operating Margin %',          needs: 'Revenue + operating expenses' },
+  { key: 'ebitda_margin',        name: 'EBITDA Margin %',             needs: 'Revenue + EBITDA figure' },
+  { key: 'cash_conv_cycle',      name: 'Cash Conversion Cycle',       needs: 'AR, inventory, and AP data' },
+  { key: 'dso',                  name: 'Days Sales Outstanding',      needs: 'Accounts receivable + revenue' },
+  { key: 'ar_turnover',          name: 'AR Turnover Ratio',           needs: 'Revenue + avg accounts receivable' },
+  { key: 'avg_collection_period',name: 'Avg Collection Period',       needs: 'Accounts receivable + revenue' },
+  { key: 'cei',                  name: 'Collections Effectiveness',   needs: 'Beginning AR + invoices + ending AR' },
+  { key: 'ar_aging_current',     name: 'AR Current (0–30 days)',      needs: 'AR aging report by bucket' },
+  { key: 'ar_aging_overdue',     name: 'AR Overdue (30+ days)',       needs: 'AR aging report by bucket' },
+  { key: 'billable_utilization', name: 'Billable Utilization Rate',   needs: 'Billable hours + total capacity' },
+  { key: 'arr_growth',           name: 'ARR Growth Rate',             needs: 'ARR figures month-over-month' },
+  { key: 'nrr',                  name: 'Net Revenue Retention',       needs: 'Starting MRR, churn, and expansion MRR' },
+  { key: 'burn_multiple',        name: 'Burn Multiple',               needs: 'Net cash burn + net new ARR' },
+  { key: 'opex_ratio',           name: 'Operating Expense Ratio',     needs: 'Total OpEx + revenue' },
+  { key: 'contribution_margin',  name: 'Contribution Margin %',       needs: 'Revenue + variable costs' },
+  { key: 'revenue_quality',      name: 'Revenue Quality Ratio',       needs: 'Recurring vs. total revenue split' },
+  { key: 'cac_payback',          name: 'CAC Payback Period',          needs: 'Sales & marketing spend + new customers + ARPU' },
+  { key: 'sales_efficiency',     name: 'Sales Efficiency Ratio',      needs: 'New ARR + sales & marketing spend' },
+  { key: 'customer_concentration',name:'Customer Concentration',      needs: 'Revenue by customer or cohort' },
+  { key: 'recurring_revenue',    name: 'Recurring Revenue Ratio',     needs: 'MRR + total revenue' },
+  { key: 'churn_rate',           name: 'Monthly Churn Rate',          needs: 'Customers lost + starting customer count' },
+  { key: 'operating_leverage',   name: 'Operating Leverage Index',    needs: 'Revenue growth vs. OpEx growth rates' },
+  { key: 'growth_efficiency',    name: 'Growth Efficiency Index',     needs: 'ARR growth + sales & marketing spend' },
+  { key: 'revenue_momentum',     name: 'Revenue Momentum Index',      needs: 'Sequential monthly revenue changes' },
+  { key: 'revenue_fragility',    name: 'Strategic Revenue Fragility', needs: 'Customer concentration + churn data' },
+  { key: 'burn_convexity',       name: 'Burn Convexity',              needs: 'Monthly cash burn trend data' },
+  { key: 'margin_volatility',    name: 'Margin Volatility Index',     needs: '12+ months of gross margin data' },
+  { key: 'pipeline_conversion',  name: 'Pipeline Conversion Rate',    needs: 'Sales pipeline stages + won deals' },
+  { key: 'customer_decay_slope', name: 'Customer Decay Curve Slope',  needs: 'Cohort-level customer retention data' },
+  { key: 'customer_ltv',         name: 'Customer Lifetime Value',     needs: 'ARPU + gross margin + churn rate' },
+  { key: 'pricing_power_index',  name: 'Pricing Power Index',         needs: 'Historical price changes + retention impact' },
+]
+
 // ── Formatting helpers ───────────────────────────────────────────────────────
 const UNIT_FMT = {
   pct: v => `${v?.toFixed(1)}%`,
@@ -172,12 +209,12 @@ export default function VarianceCommand({ fingerprint, bridgeData, benchmarks, c
           </p>
         </div>
         <div className="flex items-center gap-2">
-          {/* Toggle Core 12 / All */}
+          {/* Toggle Core 12 / All 33 */}
           <button
             onClick={() => setShowAll(v => !v)}
             className="px-3 py-1.5 rounded-lg border border-slate-200 text-[11px] font-medium text-slate-600 hover:bg-slate-50 transition-all"
           >
-            {showAll ? 'Show Core 12' : `Show All ${fp.length}`}
+            {showAll ? 'Show Core 12' : `Show All ${ALL_KPI_DEFS.length}`}
           </button>
           {/* Weekly Briefing — opens as rendered HTML in new tab */}
           <button
@@ -323,6 +360,35 @@ export default function VarianceCommand({ fingerprint, bridgeData, benchmarks, c
           </div>
         </div>
       )}
+
+      {/* ── KPIs not in your data (shown only in "Show All" mode) ────────── */}
+      {showAll && (() => {
+        const fpKeys = new Set(fp.map(k => k.key))
+        const missingKpis = ALL_KPI_DEFS.filter(d => !fpKeys.has(d.key))
+        if (!missingKpis.length) return null
+        return (
+          <div className="bg-slate-50 rounded-2xl border border-slate-200 px-4 py-4">
+            <div className="flex items-center gap-2 mb-3">
+              <FileQuestion size={13} className="text-slate-400" />
+              <span className="text-[11px] font-semibold text-slate-500">
+                Not in your data ({missingKpis.length} KPIs)
+              </span>
+              <span className="text-[10px] text-slate-400 ml-1">— upload the required data to unlock these</span>
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+              {missingKpis.map(d => (
+                <div key={d.key} className="flex items-start gap-2.5 bg-white rounded-xl px-3 py-2.5 border border-slate-100">
+                  <div className="w-1.5 h-1.5 rounded-full bg-slate-300 flex-shrink-0 mt-1.5" />
+                  <div>
+                    <p className="text-[11px] font-semibold text-slate-500">{d.name}</p>
+                    <p className="text-[10px] text-slate-400 mt-0.5">Needs: {d.needs}</p>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )
+      })()}
     </div>
   )
 }

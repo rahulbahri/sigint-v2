@@ -328,15 +328,11 @@ export default function ForecastPage() {
           setBuilding(false)
           return
         }
-        if (s === 'not_trained' && i > 5) {
-          // After a few seconds "not_trained" means the task returned early
-          setError('Not enough monthly data to train the model. Upload at least 2 months of KPI history.')
-          setBuilding(false)
-          return
-        }
-        // s === 'building' → keep polling
+        // Never abort early on 'not_trained' — multi-worker deployments can
+        // serve the poll from a different process that hasn't seen the build start.
+        // Keep polling until we get 'ready', 'error', or the full 120-second timeout.
       }
-      setError('Training timed out after 2 minutes. The server may still be working — try refreshing.')
+      setError('Training is taking longer than expected. Click "Refresh Status" below to check if it completed.')
     } catch {
       setError('Failed to start training. Make sure data is loaded and try again.')
     }

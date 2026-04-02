@@ -30,6 +30,12 @@ _LOCK      = threading.Lock()
 def _init_forecast_tables():
     conn = get_db()
     conn.executescript("""
+        CREATE TABLE IF NOT EXISTS forecast_build_status (
+            workspace_id TEXT PRIMARY KEY,
+            status TEXT DEFAULT 'not_trained',
+            message TEXT DEFAULT '',
+            updated_at TEXT
+        );
         CREATE TABLE IF NOT EXISTS markov_models (
             id INTEGER PRIMARY KEY,
             kpis TEXT,
@@ -257,6 +263,39 @@ def _build_deduped_causal_map(causal_pairs, kpis):
     return causal_map
 
 
+def _set_build_status(workspace_id: str, status: str, message: str = ""):
+    """Persist build status to DB so any worker can read it."""
+    try:
+        c = get_db()
+        c.execute(
+            """INSERT INTO forecast_build_status (workspace_id, status, message, updated_at)
+               VALUES (?,?,?,?)
+               ON CONFLICT(workspace_id) DO UPDATE
+               SET status=excluded.status, message=excluded.message, updated_at=excluded.updated_at""",
+            (workspace_id, status, message, datetime.utcnow().isoformat())
+        )
+        c.commit()
+        c.close()
+    except Exception as e:
+        print(f"[Forecast] _set_build_status failed: {e}")
+
+
+def _get_build_status(workspace_id: str):
+    """Read build status from DB (cross-worker safe)."""
+    try:
+        c = get_db()
+        row = c.execute(
+            "SELECT status, message FROM forecast_build_status WHERE workspace_id=?",
+            [workspace_id]
+        ).fetchone()
+        c.close()
+        if row:
+            return row["status"], row["message"]
+    except Exception:
+        pass
+    return "not_trained", ""
+
+
 def _build_markov_task(workspace_id: str = ""):
     history       = _mrk_monthly_history(workspace_id)
     dated_history = _mrk_monthly_history_dated(workspace_id)
@@ -268,6 +307,7 @@ def _build_markov_task(workspace_id: str = ""):
         print(f"[Forecast] {msg} (workspace={workspace_id!r})")
         with _LOCK:
             _ERROR[workspace_id] = msg
+        _set_build_status(workspace_id, "error", msg)
         return
 
     current_values = {}
@@ -327,9 +367,11 @@ def _build_markov_task(workspace_id: str = ""):
         )
         conn.commit()
         print(f"[Forecast] Model trained: {len(kpis)} KPIs (workspace={workspace_id!r})")
+        _set_build_status(workspace_id, "ready", f"Trained {len(kpis)} KPIs")
     except Exception as _db_err:
         print(f"[Forecast][ERROR] DB write failed for workspace={workspace_id!r}: {_db_err}")
         import traceback as _tb2; _tb2.print_exc()
+        _set_build_status(workspace_id, "error", str(_db_err))
         raise
     finally:
         conn.close()
@@ -523,6 +565,8 @@ def forecast_build(request: Request):
             return {"status": "building", "message": "Training already in progress"}
         _BUILDING[workspace_id] = True
         _ERROR.pop(workspace_id, None)
+    # Write "building" to DB so any worker sees the correct status
+    _set_build_status(workspace_id, "building", "Training started")
 
     def _bg():
         try:
@@ -530,8 +574,10 @@ def forecast_build(request: Request):
         except Exception:
             import traceback as _tb
             _tb.print_exc()
+            msg = "Training failed — check server logs."
             with _LOCK:
-                _ERROR[workspace_id] = "Training failed — check server logs."
+                _ERROR[workspace_id] = msg
+            _set_build_status(workspace_id, "error", msg)
         finally:
             with _LOCK:
                 _BUILDING[workspace_id] = False
@@ -551,12 +597,21 @@ def forecast_project(request: Request, req: _ProjectRequest):
 @router.get("/api/forecast/model")
 def forecast_model(request: Request):
     workspace_id = _get_workspace(request)
+
+    # Check DB-persisted status first (cross-worker safe)
+    db_status, db_msg = _get_build_status(workspace_id)
+
+    # In-memory check as a fast override (valid on same worker)
     with _LOCK:
-        if _BUILDING.get(workspace_id):
-            return {"status": "building", "message": "Training in progress…"}
-        err = _ERROR.get(workspace_id)
-    if err:
-        return {"status": "error", "message": err}
+        mem_building = _BUILDING.get(workspace_id, False)
+        mem_err      = _ERROR.get(workspace_id)
+
+    if mem_building or db_status == "building":
+        return {"status": "building", "message": "Training in progress…"}
+    if mem_err:
+        return {"status": "error", "message": mem_err}
+    if db_status == "error":
+        return {"status": "error", "message": db_msg}
 
     conn = get_db()
     row = conn.execute(

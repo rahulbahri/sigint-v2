@@ -4,7 +4,7 @@ import {
   TrendingUp, TrendingDown, Minus, AlertTriangle,
   CheckCircle2, Zap, ArrowRight, RefreshCw,
   Activity, Target, Shield, BarChart2,
-  X, ChevronRight, Info, Clock
+  X, ChevronRight, Info, Clock, Eye
 } from 'lucide-react'
 
 // ── KPI contextual info dictionary ───────────────────────────────────────────
@@ -455,17 +455,44 @@ function ScoreBar({ label, value, weight, Icon, onClick }) {
 // ── Health narrative ──────────────────────────────────────────────────────────
 function healthNarrative(health) {
   if (!health) return ''
-  const { score, color, momentum_trend, kpis_green = 0, kpis_red = 0, kpis_grey = 0, target_achievement = 0 } = health
-  const grade = score >= 80 ? 'excellent' : score >= 65 ? 'good' : score >= 50 ? 'moderate' : 'concerning'
-  const momText = momentum_trend === 'improving' ? 'momentum is building'
-    : momentum_trend === 'declining' ? 'momentum is declining'
-    : 'momentum is stable'
-  const parts = [`Your company health is in ${grade} shape at ${score}/100.`]
-  if (kpis_grey > 3) parts.push(`${kpis_grey} KPIs have no target set — configuring these will give you a more accurate score.`)
-  else if (kpis_green > 0) parts.push(`${kpis_green} KPI${kpis_green > 1 ? 's are' : ' is'} on track.`)
-  if (kpis_red > 0) parts.push(`${kpis_red} KPI${kpis_red > 1 ? 's need' : ' needs'} immediate attention.`)
-  parts.push(`Overall ${momText}.`)
-  return parts.join(' ')
+  const {
+    score, color, momentum_trend,
+    kpis_green = 0, kpis_yellow = 0, kpis_red = 0, kpis_grey = 0,
+    target_achievement = 0, momentum = 0
+  } = health
+
+  const total = kpis_green + kpis_yellow + kpis_red + kpis_grey
+  const tracked = kpis_green + kpis_yellow + kpis_red
+
+  // Opening — score-based verdict
+  const opener =
+    score >= 80 ? `At ${score}/100 your business is in strong health.` :
+    score >= 65 ? `At ${score}/100 your business is performing well overall.` :
+    score >= 50 ? `At ${score}/100 there are areas of the business that need attention.` :
+    score >= 35 ? `At ${score}/100 several KPIs are significantly off-target.` :
+                  `At ${score}/100 urgent action is needed across multiple KPIs.`
+
+  // Targets context
+  const targetLine = kpis_grey > 3
+    ? `${kpis_grey} of ${total} KPIs have no target — set them in KPI Targets to unlock a more accurate score.`
+    : tracked > 0
+      ? `Of ${tracked} tracked KPIs, ${kpis_green} are on target${kpis_red > 0 ? `, ${kpis_red} are critical` : ''}${kpis_yellow > 0 ? ` and ${kpis_yellow} need watching` : ''}.`
+      : null
+
+  // Momentum line
+  const momLine =
+    momentum_trend === 'improving' ? 'Momentum is building — more KPIs are improving than declining.' :
+    momentum_trend === 'declining' ? 'Momentum is declining — act quickly to prevent further deterioration.' :
+    'Momentum is stable with no strong directional trend.'
+
+  // Action prompt
+  const actionLine =
+    kpis_red > 0 ? `Start with the ${kpis_red} critical KPI${kpis_red > 1 ? 's' : ''} below.` :
+    kpis_grey > 3 ? 'Go to Settings → KPI Targets to configure benchmarks.' :
+    kpis_yellow > 0 ? `Watch the ${kpis_yellow} amber KPI${kpis_yellow > 1 ? 's' : ''} closely this month.` :
+    'All tracked KPIs are on target — maintain the discipline.'
+
+  return [opener, targetLine, momLine, actionLine].filter(Boolean).join(' ')
 }
 
 // ── Format data period ────────────────────────────────────────────────────────
@@ -596,6 +623,7 @@ export default function HomeScreen({ onNavigate, onAskAnika }) {
                 <button onClick={() => setShowScoreModal(true)} className="text-slate-300 hover:text-slate-500 transition-colors" title="How is this calculated?">
                   <Info size={11} />
                 </button>
+                <span className="text-[9px] text-slate-300 ml-auto cursor-pointer hover:text-slate-400" onClick={() => setShowScoreModal(true)}>click to explain ↗</span>
               </div>
               <div className="space-y-2.5">
                 <ScoreBar label="Momentum"           value={health?.momentum ?? 0}           weight="30%" Icon={Activity} onClick={() => setShowScoreModal(true)}/>
@@ -611,6 +639,7 @@ export default function HomeScreen({ onNavigate, onAskAnika }) {
                 <button onClick={() => setShowDistModal(true)} className="text-slate-300 hover:text-slate-500 transition-colors">
                   <Info size={11} />
                 </button>
+                <span className="text-[9px] text-slate-300 ml-auto cursor-pointer hover:text-slate-400" onClick={() => setShowDistModal(true)}>click to explore ↗</span>
               </div>
               <button onClick={() => setShowDistModal(true)} className="grid grid-cols-4 gap-2 w-full text-left hover:bg-slate-50 rounded-xl p-1.5 -mx-1.5 transition-colors group">
                 {[
@@ -654,6 +683,7 @@ export default function HomeScreen({ onNavigate, onAskAnika }) {
               <AlertTriangle size={13} className="text-red-500" />
               <h2 className="text-slate-700 text-[11px] font-bold uppercase tracking-wider">Needs Attention</h2>
               <span className="bg-red-100 text-red-700 text-[10px] font-bold px-1.5 py-0.5 rounded-full">{needs_attention.length}</span>
+              <span className="text-[9px] text-slate-300 italic">— click any card to explore</span>
             </div>
             <button onClick={() => onNavigate?.('variance')}
               className="text-[11px] text-slate-400 hover:text-[#0055A4] flex items-center gap-1 transition-colors font-medium">
@@ -677,6 +707,7 @@ export default function HomeScreen({ onNavigate, onAskAnika }) {
               <CheckCircle2 size={13} className="text-emerald-500" />
               <h2 className="text-slate-700 text-[11px] font-bold uppercase tracking-wider">Doing Well</h2>
               <span className="bg-emerald-100 text-emerald-700 text-[10px] font-bold px-1.5 py-0.5 rounded-full">{doing_well.length}</span>
+              <span className="text-[9px] text-slate-300 italic">— click any card to explore</span>
             </div>
             <button onClick={() => onNavigate?.('board')}
               className="text-[11px] text-slate-400 hover:text-[#0055A4] flex items-center gap-1 transition-colors font-medium">
@@ -692,19 +723,45 @@ export default function HomeScreen({ onNavigate, onAskAnika }) {
         </div>
       )}
 
-      {/* ── No data state ───────────────────────────────────────────────── */}
+      {/* ── No colored KPIs: either no data or no targets set ────────────── */}
       {(!needs_attention?.length && !doing_well?.length) && (
-        <div className="card p-8 flex flex-col items-center gap-4 text-center">
-          <BarChart2 size={28} className="text-slate-300" />
-          <div>
-            <p className="text-slate-600 text-sm font-semibold mb-1">No data yet</p>
-            <p className="text-slate-400 text-[12px]">Upload your financial data or load demo data to see your health score.</p>
-          </div>
-          <button onClick={() => onNavigate?.('upload')}
-            className="px-4 py-2 border border-slate-300 rounded-lg text-slate-600 hover:border-slate-400 text-[12px] font-medium transition-colors">
-            Upload Data
-          </button>
-        </div>
+        health?.kpis_grey > 0
+          ? /* Has data but no targets */ (
+            <div className="card p-6 border-l-4 border-amber-400 bg-amber-50/30">
+              <div className="flex items-start gap-4">
+                <Target size={22} className="text-amber-500 flex-shrink-0 mt-0.5" />
+                <div className="flex-1">
+                  <p className="text-slate-700 text-[13px] font-bold mb-1">
+                    {health.kpis_grey} KPI{health.kpis_grey !== 1 ? 's have' : ' has'} no target set
+                  </p>
+                  <p className="text-slate-500 text-[12px] leading-relaxed mb-3">
+                    Your data is loaded but KPI targets are not configured. Without targets, all KPIs show as grey
+                    and the Needs Attention / Doing Well sections stay empty. Set targets to unlock red/green status,
+                    the full health score, clickable KPI cards, and Slack alerts.
+                  </p>
+                  <button
+                    onClick={() => onNavigate?.('targets')}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-amber-500 hover:bg-amber-600 text-white text-[11px] font-semibold rounded-lg transition-colors"
+                  >
+                    Configure KPI Targets <ArrowRight size={11}/>
+                  </button>
+                </div>
+              </div>
+            </div>
+          )
+          : /* No data at all */ (
+            <div className="card p-8 flex flex-col items-center gap-4 text-center">
+              <BarChart2 size={28} className="text-slate-300" />
+              <div>
+                <p className="text-slate-600 text-sm font-semibold mb-1">No data yet</p>
+                <p className="text-slate-400 text-[12px]">Upload your financial data or load demo data to see your health score.</p>
+              </div>
+              <button onClick={() => onNavigate?.('upload')}
+                className="px-4 py-2 border border-slate-300 rounded-lg text-slate-600 hover:border-slate-400 text-[12px] font-medium transition-colors">
+                Upload Data
+              </button>
+            </div>
+          )
       )}
 
       {/* ── Quick navigation ────────────────────────────────────────────── */}
