@@ -44,8 +44,9 @@ try:
     from connectors.netsuite_connector      import NetSuiteConnector
     from connectors.sage_intacct_connector  import SageIntacctConnector
     from connectors.snowflake_connector     import SnowflakeConnector
-    from elt.transformer  import Transformer
-    from elt.gap_detector import GapDetector
+    from elt.transformer     import Transformer
+    from elt.gap_detector    import GapDetector
+    from elt.kpi_aggregator  import aggregate_canonical_to_monthly
     _ELT_OK = True
     print("[ELT] Connector modules loaded OK")
 except Exception as _elt_import_err:
@@ -196,7 +197,20 @@ def _run_elt_sync(workspace_id: str, source_name: str, credentials: dict) -> dic
         )
         conn.commit()
         _audit("data_synced", source_name, workspace_id, f"ELT sync: {total_upserted} records")
-        return {"synced": True, "records_upserted": total_upserted}
+
+        # ── KPI Aggregation: bridge canonical → monthly_data ──────────────
+        agg_result = {"skipped": "aggregator not available"}
+        try:
+            agg_conn = get_db()
+            agg_result = aggregate_canonical_to_monthly(agg_conn, workspace_id)
+            agg_conn.close()
+            print(f"[ELT] KPI aggregation: {agg_result.get('months_written', 0)} months "
+                  f"for workspace={workspace_id!r}")
+        except Exception as agg_exc:
+            print(f"[ELT] KPI aggregation failed (non-fatal): {agg_exc}")
+            agg_result = {"error": str(agg_exc)}
+
+        return {"synced": True, "records_upserted": total_upserted, "kpi_aggregation": agg_result}
     except ConnectorError as ce:
         conn.execute(
             "UPDATE connector_configs SET sync_status='error', last_error=? "
@@ -643,6 +657,29 @@ async def sync_connector(source: str, request: Request):
                 _SYNCING.pop(_k, None)
     _enqueue(_bg_sync)
     return {"message": f"Sync started for {source}"}
+
+
+# ─── Recompute KPIs from canonical data ──────────────────────────────────────
+
+@router.post("/api/connectors/compute-kpis", tags=["ELT"])
+async def compute_kpis_from_canonical(request: Request):
+    """
+    Manually trigger KPI aggregation from canonical tables into monthly_data.
+    Useful after field mapping changes or manual corrections.
+    """
+    workspace_id = _get_workspace(request)
+    if not workspace_id:
+        raise HTTPException(status_code=401, detail="Unauthorised")
+    if not _ELT_OK:
+        raise HTTPException(status_code=503, detail="ELT modules unavailable")
+    conn = get_db()
+    try:
+        result = aggregate_canonical_to_monthly(conn, workspace_id)
+        return {"status": "ok", **result}
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Aggregation failed: {exc}")
+    finally:
+        conn.close()
 
 
 # ─── Field mappings: list + confirm ───────────────────────────────────────────
