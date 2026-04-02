@@ -309,24 +309,30 @@ def _build_markov_task(workspace_id: str = ""):
 
     now = datetime.utcnow().isoformat()
     conn = get_db()
-    conn.execute("DELETE FROM markov_models WHERE workspace_id=?", [workspace_id])
-    conn.execute(
-        "INSERT INTO markov_models (kpis, thresholds, self_matrices, cross_matrices, "
-        "current_states, upstream_kpis, days_back, trained_at, regime_data, workspace_id) "
-        "VALUES (?,?,?,?,?,?,?,?,?,?)",
-        (json.dumps(kpis),
-         json.dumps(value_ranges),
-         json.dumps(mean_deltas),
-         json.dumps(std_deltas),
-         json.dumps(current_values),
-         json.dumps(upstream_kpis),
-         365, now,
-         json.dumps(regime_data) if regime_data else None,
-         workspace_id)
-    )
-    conn.commit()
-    conn.close()
-    print(f"[Forecast] Model trained: {len(kpis)} KPIs (workspace={workspace_id!r})")
+    try:
+        conn.execute("DELETE FROM markov_models WHERE workspace_id=?", [workspace_id])
+        conn.execute(
+            "INSERT INTO markov_models (kpis, thresholds, self_matrices, cross_matrices, "
+            "current_states, upstream_kpis, days_back, trained_at, regime_data, workspace_id) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?)",
+            (json.dumps(kpis),
+             json.dumps(value_ranges),
+             json.dumps(mean_deltas),
+             json.dumps(std_deltas),
+             json.dumps(current_values),
+             json.dumps(upstream_kpis),
+             365, now,
+             json.dumps(regime_data) if regime_data else None,
+             workspace_id)
+        )
+        conn.commit()
+        print(f"[Forecast] Model trained: {len(kpis)} KPIs (workspace={workspace_id!r})")
+    except Exception as _db_err:
+        print(f"[Forecast][ERROR] DB write failed for workspace={workspace_id!r}: {_db_err}")
+        import traceback as _tb2; _tb2.print_exc()
+        raise
+    finally:
+        conn.close()
 
 
 def _project_scenario(horizon_days: int, overrides: dict, n_samples: int,

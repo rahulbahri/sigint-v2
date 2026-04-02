@@ -11,7 +11,7 @@ from datetime import datetime
 from typing import Optional, List
 
 from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, HTMLResponse
 from pydantic import BaseModel
 
 from core.database import get_db
@@ -892,6 +892,174 @@ async def update_target(request: Request, kpi_key: str):
         conn.close()
 
     return {"kpi_key": kpi_key, "target_value": target_value, "unit": unit, "direction": direction}
+
+
+# ─── Weekly Briefing HTML ────────────────────────────────────────────────────
+
+@router.get("/api/export/weekly-briefing.html", tags=["Export"], response_class=HTMLResponse)
+def weekly_briefing(request: Request, stage: Optional[str] = "series_b"):
+    """
+    Generate and return a self-contained HTML weekly briefing document.
+    Opens directly in the browser — no download needed.
+    """
+    workspace_id = _get_workspace(request)
+    conn = get_db()
+    try:
+        rows = conn.execute(
+            "SELECT year, month, data_json FROM monthly_data WHERE workspace_id=? ORDER BY year DESC, month DESC LIMIT 3",
+            [workspace_id]
+        ).fetchall()
+        targets_rows = conn.execute(
+            "SELECT kpi_key, target_value, direction, unit FROM kpi_targets WHERE workspace_id=?",
+            [workspace_id]
+        ).fetchall()
+        settings_row = conn.execute(
+            "SELECT value FROM company_settings WHERE key='company_name' AND workspace_id=?",
+            [workspace_id]
+        ).fetchone() if True else None
+    finally:
+        conn.close()
+
+    company_name = (settings_row["value"] if settings_row else None) or workspace_id or "Your Company"
+    targets = {r["kpi_key"]: {"target": r["target_value"], "direction": r["direction"] or "higher", "unit": r["unit"] or ""}
+               for r in targets_rows}
+
+    # Build KPI aggregates from last 3 months
+    kpi_vals: dict = {}
+    for row in rows:
+        for k, v in json.loads(row["data_json"]).items():
+            if v is not None:
+                kpi_vals.setdefault(k, []).append(float(v))
+    kpi_avgs = {k: round(sum(v)/len(v), 2) for k, v in kpi_vals.items() if v}
+
+    # Classify KPIs
+    red, yellow, green = [], [], []
+    for kdef in KPI_DEFS:
+        key = kdef["key"]
+        avg = kpi_avgs.get(key)
+        t   = targets.get(key, {})
+        tval, dirn, unit = t.get("target"), t.get("direction","higher"), t.get("unit","")
+        if avg is None or tval is None:
+            continue
+        pct = (avg/tval) if dirn=="higher" else (tval/avg if avg else 0)
+        gap_sign = "+" if (dirn=="higher" and avg>tval) or (dirn=="lower" and avg<tval) else "-"
+        gap_abs = abs(avg-tval)
+        entry = {"name": kdef["name"], "key": key, "avg": avg, "target": tval,
+                 "unit": unit, "dirn": dirn, "pct": pct, "gap_sign": gap_sign, "gap_abs": gap_abs}
+        if pct >= 0.98:   green.append(entry)
+        elif pct >= 0.90: yellow.append(entry)
+        else:             red.append(entry)
+
+    red.sort(key=lambda x: x["pct"])
+    yellow.sort(key=lambda x: x["pct"])
+    green.sort(key=lambda x: -x["pct"])
+
+    now_str = datetime.utcnow().strftime("%B %d, %Y")
+    score_color = "#DC2626" if len(red) > len(green) else ("#D97706" if yellow else "#059669")
+
+    def fmt(entry):
+        v, t, u = entry["avg"], entry["target"], entry["unit"]
+        if u in ("pct","%"): return f"{v:.1f}% vs {t:.1f}%"
+        if u in ("days","day"): return f"{v:.1f}d vs {t:.1f}d"
+        if u == "ratio": return f"{v:.2f}x vs {t:.2f}x"
+        if u in ("months","mo"): return f"{v:.1f}mo vs {t:.1f}mo"
+        return f"{v:.2f} vs {t:.2f}"
+
+    def rows_html(items, color):
+        if not items: return f'<tr><td colspan="3" style="color:#94a3b8;font-style:italic;padding:12px 0">None</td></tr>'
+        out = ""
+        for e in items[:8]:
+            gap_pct = abs(e["pct"]-1)*100
+            direction = "above" if e["pct"]>=1 else "below"
+            out += f"""
+            <tr style="border-bottom:1px solid #f1f5f9">
+              <td style="padding:10px 0;font-weight:600;color:#1e293b">{e['name']}</td>
+              <td style="padding:10px 8px;color:#64748b;font-size:13px">{fmt(e)}</td>
+              <td style="padding:10px 0;text-align:right">
+                <span style="background:{color}15;color:{color};padding:2px 8px;border-radius:99px;font-size:12px;font-weight:700">
+                  {gap_pct:.1f}% {direction} target
+                </span>
+              </td>
+            </tr>"""
+        return out
+
+    html = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>{company_name} · Weekly KPI Briefing · {now_str}</title>
+<style>
+  *{{box-sizing:border-box;margin:0;padding:0}}
+  body{{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#f8fafc;color:#1e293b;line-height:1.5}}
+  .wrap{{max-width:860px;margin:0 auto;padding:40px 24px}}
+  .header{{background:linear-gradient(135deg,#0055A4 0%,#00AEEF 100%);border-radius:16px;padding:36px 40px;color:#fff;margin-bottom:32px}}
+  .header h1{{font-size:28px;font-weight:800;letter-spacing:-0.5px;margin-bottom:4px}}
+  .header .meta{{font-size:13px;opacity:0.75;margin-top:8px}}
+  .stat-row{{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin-bottom:32px}}
+  .stat{{background:#fff;border-radius:12px;padding:20px;border:1px solid #e2e8f0;text-align:center;box-shadow:0 1px 3px rgba(0,0,0,.06)}}
+  .stat .num{{font-size:36px;font-weight:800;margin-bottom:4px}}
+  .stat .lbl{{font-size:12px;color:#94a3b8;text-transform:uppercase;letter-spacing:.05em;font-weight:600}}
+  .section{{background:#fff;border-radius:12px;padding:24px;margin-bottom:20px;border:1px solid #e2e8f0;box-shadow:0 1px 3px rgba(0,0,0,.06)}}
+  .section-title{{font-size:13px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;margin-bottom:16px;display:flex;align-items:center;gap:8px}}
+  .dot{{width:8px;height:8px;border-radius:50%;display:inline-block}}
+  table{{width:100%;border-collapse:collapse}}
+  .callout{{background:#fffbeb;border:1px solid #fde68a;border-radius:10px;padding:16px 20px;margin-bottom:20px;font-size:13px;color:#92400e;line-height:1.6}}
+  .callout strong{{color:#78350f}}
+  .footer{{text-align:center;font-size:12px;color:#94a3b8;margin-top:32px;padding-top:16px;border-top:1px solid #e2e8f0}}
+  @media print{{body{{background:#fff}}.wrap{{padding:0 16px}}}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="header">
+    <div style="font-size:12px;opacity:.7;margin-bottom:6px;text-transform:uppercase;letter-spacing:.1em">Weekly KPI Briefing</div>
+    <h1>{company_name}</h1>
+    <div class="meta">Generated {now_str} &nbsp;·&nbsp; Based on last 3 months of data &nbsp;·&nbsp; Powered by Axiom Intelligence</div>
+  </div>
+
+  <div class="stat-row">
+    <div class="stat">
+      <div class="num" style="color:#DC2626">{len(red)}</div>
+      <div class="lbl">Require Action</div>
+    </div>
+    <div class="stat">
+      <div class="num" style="color:#D97706">{len(yellow)}</div>
+      <div class="lbl">Watch List</div>
+    </div>
+    <div class="stat">
+      <div class="num" style="color:#059669">{len(green)}</div>
+      <div class="lbl">On Target</div>
+    </div>
+  </div>
+
+  {'<div class="callout"><strong>Executive Summary:</strong> ' + str(len(red)) + ' KPI' + ('s' if len(red)!=1 else '') + ' require immediate action this week. ' + ('Churn rate and CAC payback are the primary concerns — address customer retention and acquisition efficiency first.' if red else 'All tracked KPIs are performing at or above target. Maintain current trajectory.') + ' ' + str(len(green)) + ' KPI' + ('s are' if len(green)!=1 else ' is') + ' exceeding targets, providing a strong foundation.</div>' if True else ''}
+
+  <div class="section">
+    <div class="section-title"><span class="dot" style="background:#DC2626"></span> Requires Action ({len(red)} KPIs)</div>
+    <table><tbody>{rows_html(red, "#DC2626")}</tbody></table>
+  </div>
+
+  <div class="section">
+    <div class="section-title"><span class="dot" style="background:#D97706"></span> Watch List ({len(yellow)} KPIs)</div>
+    <table><tbody>{rows_html(yellow, "#D97706")}</tbody></table>
+  </div>
+
+  <div class="section">
+    <div class="section-title"><span class="dot" style="background:#059669"></span> On Target ({len(green)} KPIs)</div>
+    <table><tbody>{rows_html(green, "#059669")}</tbody></table>
+  </div>
+
+  <div class="footer">
+    This briefing is generated automatically by Axiom Intelligence from your live KPI data.
+    Targets and thresholds are configured in your KPI Targets settings. &nbsp;·&nbsp;
+    <a href="https://app.axiomsync.ai" style="color:#0055A4;text-decoration:none">Open platform →</a>
+  </div>
+</div>
+</body>
+</html>"""
+
+    return HTMLResponse(content=html, media_type="text/html")
 
 
 # ─── Plan vs Actual Bridge ───────────────────────────────────────────────────

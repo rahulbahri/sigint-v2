@@ -179,14 +179,9 @@ export default function VarianceCommand({ fingerprint, bridgeData, benchmarks, c
           >
             {showAll ? 'Show Core 12' : `Show All ${fp.length}`}
           </button>
-          {/* Download Weekly Briefing */}
+          {/* Weekly Briefing — opens as rendered HTML in new tab */}
           <button
-            onClick={() => {
-              const a = document.createElement('a')
-              a.href = `/api/export/weekly-briefing.html?stage=${companyStage || 'series_b'}`
-              a.download = 'weekly-briefing.html'
-              a.click()
-            }}
+            onClick={() => window.open(`/api/export/weekly-briefing.html?stage=${companyStage || 'series_b'}`, '_blank')}
             className="flex items-center gap-1.5 px-3 py-2 bg-[#0055A4] hover:bg-[#003d80] rounded-xl text-[11px] text-white font-semibold transition-all"
           >
             <Download size={12} /> Weekly Briefing

@@ -42,7 +42,28 @@ def get_home(request: Request):
 
     health = compute_health_score(conn, workspace_id)
 
-    # Pull last 3 months of data for recent trend sparklines
+    # Data period (min/max year-month) for "last updated" display
+    period_row = conn.execute(
+        "SELECT MIN(year*100+month) as mn, MAX(year*100+month) as mx FROM monthly_data WHERE workspace_id=?",
+        [workspace_id]
+    ).fetchone()
+    latest_upload = conn.execute(
+        "SELECT uploaded_at FROM uploads WHERE workspace_id=? ORDER BY id DESC LIMIT 1",
+        [workspace_id]
+    ).fetchone()
+
+    def _ym(val):
+        if not val: return None
+        yr, mo = divmod(int(val), 100)
+        return f"{yr}-{mo:02d}"
+
+    data_period = {
+        "from": _ym(period_row["mn"]) if period_row and period_row["mn"] else None,
+        "to":   _ym(period_row["mx"]) if period_row and period_row["mx"] else None,
+        "uploaded_at": latest_upload["uploaded_at"] if latest_upload else None,
+    }
+
+    # Pull last 6 months of data for recent trend sparklines
     rows = conn.execute(
         "SELECT year, month, data_json FROM monthly_data WHERE workspace_id=? ORDER BY year DESC, month DESC LIMIT 6",
         [workspace_id]
@@ -80,6 +101,7 @@ def get_home(request: Request):
 
     return {
         "health":          health,
+        "data_period":     data_period,
         "needs_attention": [_kpi_spotlight(k) for k in health["needs_attention"]],
         "doing_well":      [_kpi_spotlight(k) for k in health["doing_well"]],
     }
