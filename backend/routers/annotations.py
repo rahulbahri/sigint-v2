@@ -10,7 +10,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel as _BM
 
-from core.database import get_db
+from core.database import get_db, _audit
 from core.deps import _get_workspace
 from core.kpi_defs import KPI_DEFS, ALL_CAUSATION_RULES, BENCHMARKS, EXTENDED_ONTOLOGY_METRICS
 
@@ -25,15 +25,6 @@ def _compute_fingerprint_data(targets_override=None, workspace_id: str = ""):
     from routers.analytics import _compute_fingerprint_data as _cfp
     return _cfp(targets_override=targets_override, workspace_id=workspace_id)
 
-
-# ── Audit helper ──────────────────────────────────────────────────────────────
-
-def _audit(conn, event_type: str, description: str,
-           entity_type: str = None, entity_id: str = None, user: str = "system"):
-    conn.execute(
-        'INSERT INTO audit_log (event_type, entity_type, entity_id, description, "user") VALUES (?,?,?,?,?)',
-        (event_type, entity_type, entity_id, description, user)
-    )
 
 
 # ─── Annotations (v2 table: kpi_annotations) ─────────────────────────────────
@@ -178,9 +169,9 @@ def put_accountability(request: Request, kpi_key: str, body: dict):
             status = excluded.status,
             last_updated = excluded.last_updated
     """, (kpi_key, owner, due_date, status, now, workspace_id))
-    _audit(conn, "accountability_update", f"Accountability updated for {kpi_key}", "accountability", kpi_key)
     conn.commit()
     conn.close()
+    _audit("accountability_update", "accountability", kpi_key, f"Accountability updated for {kpi_key}")
     return {"status": "ok", "accountability": {"kpi_key": kpi_key, "owner": owner, "due_date": due_date, "status": status, "last_updated": now}}
 
 

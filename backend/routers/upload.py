@@ -99,10 +99,11 @@ async def upload_csv(request: Request, file: UploadFile = File(...)):
                 "INSERT INTO monthly_data (upload_id, year, month, data_json, workspace_id) VALUES (?,?,?,?,?)",
                 (upload_id, yr, mo, json.dumps(row_dict), workspace_id)
             )
-        _audit(conn, "data_upload", "KPI data uploaded", "upload", str(upload_id))
         conn.commit()
     finally:
         conn.close()
+
+    _audit("data_upload", "upload", str(upload_id), "KPI data uploaded")
 
     return {
         "upload_id":        upload_id,
@@ -199,6 +200,9 @@ def seed_demo_actuals(request: Request):
 
     conn = get_db()
     try:
+        # Clear existing actuals for this workspace to prevent duplicate rows
+        conn.execute("DELETE FROM monthly_data WHERE workspace_id=?", (workspace_id,))
+        conn.execute("DELETE FROM uploads WHERE workspace_id=?", (workspace_id,))
         cur = conn.execute(
             "INSERT INTO uploads (filename, uploaded_at, row_count, detected_columns, workspace_id) VALUES (?,?,?,?,?)",
             ("demo_actuals_36mo.csv", datetime.utcnow().isoformat(), len(df),
@@ -213,8 +217,8 @@ def seed_demo_actuals(request: Request):
                 "INSERT INTO monthly_data (upload_id, year, month, data_json, workspace_id) VALUES (?,?,?,?,?)",
                 (upload_id, yr, mo, json.dumps(row_dict), workspace_id)
             )
-        _audit(conn, "data_seed", "Demo actuals seeded", "upload", str(upload_id))
         conn.commit()
+        _audit("data_seed", "upload", str(upload_id), "Demo actuals seeded")
     finally:
         conn.close()
 
