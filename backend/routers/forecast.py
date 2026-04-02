@@ -281,16 +281,29 @@ def _set_build_status(workspace_id: str, status: str, message: str = ""):
 
 
 def _get_build_status(workspace_id: str):
-    """Read build status from DB (cross-worker safe)."""
+    """Read build status from DB (cross-worker safe).
+    Returns (status, message). If status has been 'building' for >10 min,
+    automatically resets to 'error' so users can retry."""
     try:
         c = get_db()
         row = c.execute(
-            "SELECT status, message FROM forecast_build_status WHERE workspace_id=?",
+            "SELECT status, message, updated_at FROM forecast_build_status WHERE workspace_id=?",
             [workspace_id]
         ).fetchone()
         c.close()
         if row:
-            return row["status"], row["message"]
+            status, message = row["status"], row["message"]
+            # Stale check: if building for more than 10 minutes, reset
+            if status == "building" and row["updated_at"]:
+                try:
+                    started = datetime.fromisoformat(row["updated_at"])
+                    if (datetime.utcnow() - started).total_seconds() > 600:
+                        _set_build_status(workspace_id, "error",
+                                          "Training timed out (exceeded 10 minutes). Please retry.")
+                        return "error", "Training timed out (exceeded 10 minutes). Please retry."
+                except Exception:
+                    pass
+            return status, message
     except Exception:
         pass
     return "not_trained", ""
@@ -319,7 +332,15 @@ def _build_markov_task(workspace_id: str = ""):
         if len(values) < 2:
             continue
         arr    = np.array(values, dtype=float)
+        # Filter out NaN/inf values before computing deltas
+        arr    = arr[np.isfinite(arr)]
+        if len(arr) < 2:
+            continue
         deltas = np.diff(arr).tolist()
+        # Filter out NaN deltas as well
+        deltas = [d for d in deltas if np.isfinite(d)]
+        if not deltas:
+            continue
 
         current_values[kpi] = float(arr[-1])
         mean_deltas[kpi]    = float(np.mean(deltas))
@@ -384,13 +405,9 @@ def _project_scenario(horizon_days: int, overrides: dict, n_samples: int,
         "SELECT * FROM markov_models WHERE workspace_id=? ORDER BY id DESC LIMIT 1",
         [workspace_id],
     ).fetchone()
-    if not row:
-        row = conn.execute(
-            "SELECT * FROM markov_models ORDER BY id DESC LIMIT 1"
-        ).fetchone()
     conn.close()
     if not row:
-        return {"status": "no_model", "message": "Train model first"}
+        return {"status": "no_model", "message": "No trained model found for this workspace. Please train the forecast model first."}
 
     kpis         = json.loads(row["kpis"])
     value_ranges = json.loads(row["thresholds"])
@@ -571,10 +588,10 @@ def forecast_build(request: Request):
     def _bg():
         try:
             _build_markov_task(workspace_id)
-        except Exception:
+        except Exception as exc:
             import traceback as _tb
             _tb.print_exc()
-            msg = "Training failed — check server logs."
+            msg = f"Training failed: {exc}"
             with _LOCK:
                 _ERROR[workspace_id] = msg
             _set_build_status(workspace_id, "error", msg)
@@ -618,10 +635,6 @@ def forecast_model(request: Request):
         "SELECT * FROM markov_models WHERE workspace_id=? ORDER BY id DESC LIMIT 1",
         [workspace_id],
     ).fetchone()
-    if not row:
-        row = conn.execute(
-            "SELECT * FROM markov_models WHERE workspace_id='' ORDER BY id DESC LIMIT 1"
-        ).fetchone()
     conn.close()
     if not row:
         return {"status": "not_trained"}

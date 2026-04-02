@@ -580,9 +580,6 @@ export default function App() {
         {/* Navigation + AI Panel */}
         <div className="flex-1 flex flex-col min-h-0">
 
-          {/* ── Onboarding Checklist ──────────────────────────── */}
-          <OnboardingChecklist fingerprint={filteredFingerprint} onNavigate={setTab} authToken={authToken} />
-
           {/* ── Anika co-pilot CTA — prominent, always visible ── */}
           <div className="px-3 pt-3 pb-1">
             <button
@@ -672,13 +669,6 @@ export default function App() {
 
         {/* Footer */}
         <div className="px-4 py-4 border-t border-white/10 space-y-2">
-          <button
-            onClick={() => setShowPricing(true)}
-            className="w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-left text-[12px] font-medium text-indigo-300 hover:bg-indigo-500/15 transition-colors"
-          >
-            <Zap size={13} className="text-indigo-400" />
-            View Pricing
-          </button>
           {/* Logged-in user + logout */}
           {authToken && (
             <div className="flex items-center gap-2 px-2 py-1.5 rounded-lg bg-white/5">
@@ -712,11 +702,6 @@ export default function App() {
                        hover:border-white/25 transition-all">
             <RefreshCw size={11}/> Refresh
           </button>
-          <a href="/api/docs" target="_blank"
-             className="w-full flex items-center justify-center gap-2 py-2 rounded-lg
-                        text-xs text-slate-500 hover:text-slate-300 transition-all">
-            <Code2 size={11}/> API Docs ↗
-          </a>
         </div>
       </aside>
 

@@ -74,6 +74,21 @@ export default function TeamSettings({ authToken }) {
     </div>
   )
 
+  if (error && !org) return (
+    <div className="max-w-2xl mx-auto space-y-6">
+      <div>
+        <h2 className="text-lg font-bold text-slate-800 mb-1">Team & Access</h2>
+      </div>
+      <div className="flex items-center gap-2 text-sm text-red-600 bg-red-50 border border-red-200 rounded-lg px-4 py-3">
+        <AlertCircle size={14}/> {error}
+      </div>
+      <button onClick={load}
+        className="text-sm text-[#0055A4] hover:underline">
+        Retry
+      </button>
+    </div>
+  )
+
   return (
     <div className="max-w-2xl mx-auto space-y-6">
       <div>

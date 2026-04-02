@@ -206,17 +206,32 @@ function KpiSlideOut({ kpi: initialKpi, status: initialStatus, onClose, onNaviga
     ? { arrow: '\u2193', text: 'Lower is better', color: 'text-blue-600' }
     : null
 
+  // For "higher is better": positive gapPct = above target (good), negative = below (bad)
+  // For "lower is better": gapPct = ((target - actual) / target * 100) — positive means BETTER (actual is below target)
   const gapPct = (currentKpi?.avg != null && currentKpi?.target)
-    ? (currentKpi.direction === 'higher'
-        ? ((currentKpi.avg / currentKpi.target - 1) * 100).toFixed(1)
-        : ((currentKpi.target / currentKpi.avg - 1) * 100).toFixed(1))
+    ? (currentKpi.direction === 'lower'
+        ? ((currentKpi.target - currentKpi.avg) / Math.abs(currentKpi.target) * 100).toFixed(1)
+        : ((currentKpi.avg / currentKpi.target - 1) * 100).toFixed(1))
     : null
+
+  const isLowerBetter = currentKpi?.direction === 'lower'
 
   const narrative = () => {
     if (!currentKpi?.avg || !currentKpi?.target) return `No target has been set for ${label}. Add a target in Settings to track performance.`
+
+    if (isLowerBetter) {
+      // Lower is better logic
+      if (currentKpi.avg <= currentKpi.target) {
+        return `${label} is at ${avg} against a target of ${target} — performing well below target (this is good for this metric). This is a "lower is better" metric, meaning a lower value indicates stronger performance. Currently ${Math.abs(gapPct)}% better than target.`
+      } else {
+        return `${label} is at ${avg}, which is ${Math.abs(gapPct)}% above the target of ${target}. This is a "lower is better" metric, meaning the value needs to come down. This is dragging down your health score and needs attention.`
+      }
+    }
+
+    // Higher is better (default)
     if (currentStatus === 'green') return `${label} is performing at ${avg} against a target of ${target} — ${gapPct > 0 ? `${gapPct}% above target` : 'on track'}. This is a positive signal for your business health.`
-    if (currentStatus === 'red') return `${label} is at ${avg}, which is ${Math.abs(gapPct)}% ${currentKpi.direction === 'higher' ? 'below' : 'above'} the target of ${target}. This is dragging down your health score and needs attention.`
-    return `${label} is at ${avg} against a target of ${target} — within watch range. Monitor closely over the next 1–2 months.`
+    if (currentStatus === 'red') return `${label} is at ${avg}, which is ${Math.abs(gapPct)}% below the target of ${target}. This is dragging down your health score and needs attention.`
+    return `${label} is at ${avg} against a target of ${target} — within watch range. Monitor closely over the next 1-2 months.`
   }
 
   // Fetch enriched detail from API
@@ -533,33 +548,33 @@ function KpiSlideOut({ kpi: initialKpi, status: initialStatus, onClose, onNaviga
                 </div>
               )}
 
-              {/* Industry Benchmarks */}
-              {detail.benchmarks && Object.keys(detail.benchmarks).length > 0 && (
-                <div>
-                  <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400 mb-1.5">Industry Benchmarks</p>
-                  <div className="space-y-2">
-                    {Object.entries(detail.benchmarks).map(([stage, vals]) => (
-                      <div key={stage}>
-                        <p className="text-[10px] font-semibold text-slate-500 mb-1 capitalize">{stage.replace(/_/g, ' ')}</p>
-                        <div className="grid grid-cols-3 gap-2">
-                          {[
-                            { label: 'P25', value: vals?.p25 },
-                            { label: 'Median', value: vals?.p50 },
-                            { label: 'P75', value: vals?.p75 },
-                          ].map(({ label: bl, value: bv }) => (
-                            <div key={bl} className="bg-slate-50 rounded-lg p-2 text-center">
-                              <div className="text-[10px] text-slate-400 font-medium">{bl}</div>
-                              <div className="text-[13px] font-bold text-slate-700">
-                                {bv != null ? `${bv}${vals?.label ? ` ${vals.label}` : (currentKpi.unit || '')}` : '—'}
-                              </div>
-                            </div>
-                          ))}
+              {/* Industry Benchmarks (simplified — single most relevant stage) */}
+              {detail.benchmarks && Object.keys(detail.benchmarks).length > 0 && (() => {
+                const stages = detail.benchmarks
+                // Pick series_a as default, or fall back to the first available stage
+                const bestStage = stages.series_a || stages[Object.keys(stages)[0]]
+                if (!bestStage) return null
+                return (
+                  <div>
+                    <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400 mb-1.5">Industry Benchmarks</p>
+                    <div className="grid grid-cols-3 gap-2">
+                      {[
+                        { label: 'P25', value: bestStage?.p25 },
+                        { label: 'Median', value: bestStage?.p50 },
+                        { label: 'P75', value: bestStage?.p75 },
+                      ].map(({ label: bl, value: bv }) => (
+                        <div key={bl} className="bg-slate-50 rounded-lg p-2 text-center">
+                          <div className="text-[10px] text-slate-400 font-medium">{bl}</div>
+                          <div className="text-[13px] font-bold text-slate-700">
+                            {bv != null ? `${bv}${bestStage?.label ? ` ${bestStage.label}` : (currentKpi?.unit || '')}` : '—'}
+                          </div>
                         </div>
-                      </div>
-                    ))}
+                      ))}
+                    </div>
+                    <p className="text-[9px] text-slate-400 mt-1.5">Based on SaaS industry data</p>
                   </div>
-                </div>
-              )}
+                )
+              })()}
             </div>
           )}
         </div>
@@ -904,10 +919,11 @@ function KpiCard({ kpi, status, onOpen }) {
   const label = formatKpiLabel(kpi.key)
   const avg    = kpi.avg  != null ? `${kpi.avg}${kpi.unit || ''}` : '—'
   const target = kpi.target != null ? `${kpi.target}${kpi.unit || ''}` : '—'
+  // For "lower is better": positive = better than target (actual below target)
   const gapPct = (kpi.avg != null && kpi.target)
-    ? (kpi.direction === 'higher'
-        ? ((kpi.avg / kpi.target - 1) * 100).toFixed(1)
-        : ((kpi.target / kpi.avg - 1) * 100).toFixed(1))
+    ? (kpi.direction === 'lower'
+        ? ((kpi.target - kpi.avg) / Math.abs(kpi.target) * 100).toFixed(1)
+        : ((kpi.avg / kpi.target - 1) * 100).toFixed(1))
     : null
   const sparkColor = status === 'green' ? '#059669' : status === 'red' ? '#DC2626' : '#D97706'
 
@@ -1089,14 +1105,26 @@ const QUICK_PRESETS = [
 ]
 
 // ── Period Selector (From-To date picker with quick presets) ───────────────
-function PeriodSelector({ selected, onSelect }) {
+function PeriodSelector({ selected, periodDates, onSelect }) {
   const now = new Date()
-  const [fromMonth, setFromMonth] = useState(1)
-  const [fromYear, setFromYear]   = useState(now.getFullYear() - 1)
-  const [toMonth, setToMonth]     = useState(now.getMonth() + 1)
-  const [toYear, setToYear]       = useState(now.getFullYear())
+  const [fromMonth, setFromMonth] = useState(periodDates?.fromMonth ?? 1)
+  const [fromYear, setFromYear]   = useState(periodDates?.fromYear ?? now.getFullYear() - 1)
+  const [toMonth, setToMonth]     = useState(periodDates?.toMonth ?? (now.getMonth() + 1))
+  const [toYear, setToYear]       = useState(periodDates?.toYear ?? now.getFullYear())
   const [open, setOpen]           = useState(false)
   const [activePreset, setActivePreset] = useState(selected || 'All')
+
+  // Sync from parent props when they change
+  useEffect(() => {
+    if (periodDates) {
+      setFromMonth(periodDates.fromMonth); setFromYear(periodDates.fromYear)
+      setToMonth(periodDates.toMonth); setToYear(periodDates.toYear)
+    }
+  }, [periodDates?.fromMonth, periodDates?.fromYear, periodDates?.toMonth, periodDates?.toYear])
+
+  useEffect(() => {
+    if (selected) setActivePreset(selected)
+  }, [selected])
   const ref = useRef(null)
   const yearOptions = buildYearOptions()
 
@@ -1135,6 +1163,23 @@ function PeriodSelector({ selected, onSelect }) {
   }
 
   const handleManualChange = (fm, fy, tm, ty) => {
+    // Validate: From cannot be after To. Auto-adjust the other end.
+    const fromVal = fy * 12 + fm
+    const toVal = ty * 12 + tm
+    if (fromVal > toVal) {
+      // If from was changed to be after to, adjust to to match from
+      // If to was changed to be before from, adjust from to match to
+      // We detect which changed by comparing with current state
+      const curFromVal = fromYear * 12 + fromMonth
+      const curToVal = toYear * 12 + toMonth
+      if (fm !== fromMonth || fy !== fromYear) {
+        // From was changed — adjust To to match From
+        tm = fm; ty = fy
+      } else {
+        // To was changed — adjust From to match To
+        fm = tm; fy = ty
+      }
+    }
     applyFromTo(fm, fy, tm, ty, null)
   }
 
@@ -1228,6 +1273,7 @@ export default function HomeScreen({ onNavigate, onAskAnika }) {
   const [showOtherCritical, setShowOtherCritical] = useState(false)
   const [showAllDoingWell, setShowAllDoingWell] = useState(false)
   const [selectedPeriod, setSelectedPeriod] = useState('All Data')
+  const [periodDates, setPeriodDates] = useState({ fromMonth: 1, fromYear: new Date().getFullYear() - 1, toMonth: new Date().getMonth() + 1, toYear: new Date().getFullYear() })
   const [activeWeights, setActiveWeights] = useState(null)
 
   const load = useCallback((periodParams = {}, weightOverrides = null) => {
@@ -1267,6 +1313,9 @@ export default function HomeScreen({ onNavigate, onAskAnika }) {
     setSelectedPeriod(preset.label)
     // Support direct _params from the from-to picker
     const params = preset._params ? preset._params : computePeriodParams(preset)
+    if (params.from_year) {
+      setPeriodDates({ fromMonth: params.from_month, fromYear: params.from_year, toMonth: params.to_month, toYear: params.to_year })
+    }
     load(params)
   }
 
@@ -1335,7 +1384,7 @@ export default function HomeScreen({ onNavigate, onAskAnika }) {
           )}
         </div>
         <div className="flex items-center gap-2">
-          <PeriodSelector selected={selectedPeriod} onSelect={handlePeriodChange} />
+          <PeriodSelector selected={selectedPeriod} periodDates={periodDates} onSelect={handlePeriodChange} />
           <button
             onClick={loadDemoData}
             disabled={seeding}
@@ -1460,9 +1509,9 @@ export default function HomeScreen({ onNavigate, onAskAnika }) {
               const kAvg = kpi.avg != null ? `${kpi.avg}${kpi.unit || ''}` : '--'
               const kTarget = kpi.target != null ? `${kpi.target}${kpi.unit || ''}` : '--'
               const kGap = (kpi.avg != null && kpi.target)
-                ? (kpi.direction === 'higher'
-                    ? ((kpi.avg / kpi.target - 1) * 100).toFixed(1)
-                    : ((kpi.target / kpi.avg - 1) * 100).toFixed(1))
+                ? (kpi.direction === 'lower'
+                    ? ((kpi.target - kpi.avg) / Math.abs(kpi.target) * 100).toFixed(1)
+                    : ((kpi.avg / kpi.target - 1) * 100).toFixed(1))
                 : null
               const kInfo = KPI_INFO[kpi.key]
               return (
@@ -1483,9 +1532,22 @@ export default function HomeScreen({ onNavigate, onAskAnika }) {
                         <span className="text-slate-900 text-lg font-extrabold">{kAvg}</span>
                         <span className="text-slate-400 text-[11px]">target: {kTarget}</span>
                       </div>
-                      {kInfo?.why && (
-                        <p className="text-slate-500 text-[11px] leading-relaxed line-clamp-2">{kInfo.why}</p>
-                      )}
+                      {/* Contextual narrative */}
+                      <div className="space-y-1 mt-1">
+                        {kInfo?.why && (
+                          <p className="text-slate-500 text-[11px] leading-relaxed line-clamp-2">{kInfo.why}</p>
+                        )}
+                        <div className="flex items-center gap-2 flex-wrap">
+                          {kpi.direction && (
+                            <span className={`text-[10px] font-semibold ${kpi.direction === 'higher' ? 'text-emerald-600' : 'text-blue-600'}`}>
+                              {kpi.direction === 'higher' ? '\u2191 Higher is better' : '\u2193 Lower is better'}
+                            </span>
+                          )}
+                          {kInfo?.how && (
+                            <span className="text-[10px] text-slate-400 italic truncate">Action: Review {kInfo.how.split('.')[0].toLowerCase()}</span>
+                          )}
+                        </div>
+                      </div>
                     </div>
                     <div className="flex flex-col items-end gap-1 flex-shrink-0">
                       <Sparkline data={kpi.sparkline} color="#DC2626" width={72} height={28} />
@@ -1546,9 +1608,37 @@ export default function HomeScreen({ onNavigate, onAskAnika }) {
           <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5">
             {watchKpis.map(kpi => {
               const wKey = kpi.key || kpi
+              const hasFullData = kpi.avg != null || kpi.target != null
+              if (hasFullData) {
+                return (
+                  <KpiCard key={wKey} kpi={{ key: wKey, avg: kpi.avg, target: kpi.target, unit: kpi.unit, sparkline: kpi.sparkline, direction: kpi.direction }} status="amber"
+                    onOpen={(k, s) => setSlideOut({ kpi: k, status: s })} />
+                )
+              }
+              // Render a compact watch card from limited yellow_kpis_detail data (key + pct)
+              const wLabel = formatKpiLabel(wKey)
+              const wInfo = KPI_INFO[wKey]
+              const wPct = kpi.pct != null ? `${kpi.pct}%` : null
               return (
-                <KpiCard key={wKey} kpi={{ key: wKey, avg: kpi.avg, target: kpi.target, unit: kpi.unit, sparkline: kpi.sparkline, direction: kpi.direction }} status="amber"
-                  onOpen={(k, s) => setSlideOut({ kpi: k, status: s })} />
+                <button
+                  key={wKey}
+                  onClick={() => setSlideOut({ kpi: { key: wKey }, status: 'amber' })}
+                  className="w-full text-left card p-3.5 bg-amber-50 border-amber-200 hover:border-amber-300 hover:shadow-md transition-all group cursor-pointer"
+                >
+                  <div className="flex items-start justify-between gap-2 mb-1.5">
+                    <p className="text-slate-800 text-[12px] font-semibold leading-tight flex-1">{wLabel}</p>
+                    <ChevronRight size={12} className="text-slate-300 group-hover:text-slate-500 transition-colors flex-shrink-0" />
+                  </div>
+                  <div className="flex items-center gap-1.5 flex-wrap mb-1">
+                    {wPct && (
+                      <span className="text-amber-700 text-sm font-extrabold">{wPct}</span>
+                    )}
+                    <span className="text-amber-600 text-[10px] font-semibold">Watch Zone</span>
+                  </div>
+                  {wInfo?.why && (
+                    <p className="text-slate-400 text-[10px] leading-snug line-clamp-2">{wInfo.why}</p>
+                  )}
+                </button>
               )
             })}
           </div>
@@ -1599,17 +1689,19 @@ export default function HomeScreen({ onNavigate, onAskAnika }) {
             <span className="bg-slate-100 text-slate-600 text-[10px] font-bold px-1.5 py-0.5 rounded-full">{greyKpis.length}</span>
           </div>
           <div className="bg-slate-50 rounded-xl p-3 space-y-1.5">
+            <p className="text-[10px] text-slate-400 leading-snug px-2 pb-1">These KPIs cannot be scored without a target. Set targets in Settings to include them in your health score.</p>
             {greyKpis.map(kpi => {
               const gKey = kpi.key || kpi
               const gLabel = formatKpiLabel(gKey)
               const gInfo = KPI_INFO[gKey]
               const requirement = gInfo?.how || 'Target configuration required'
               return (
-                <div key={gKey} className="flex items-start gap-2.5 px-2 py-1.5">
+                <div key={gKey} className="flex items-start gap-2.5 px-2 py-1.5 bg-white/60 rounded-lg">
                   <div className="w-1.5 h-1.5 rounded-full bg-slate-300 flex-shrink-0 mt-1.5" />
                   <div className="flex-1 min-w-0">
                     <span className="text-[11px] font-semibold text-slate-600">{gLabel}</span>
                     <p className="text-[10px] text-slate-400 leading-snug">Requires: {requirement}</p>
+                    <p className="text-[9px] text-slate-300 leading-snug mt-0.5">This KPI cannot be computed without the specific data inputs described above.</p>
                   </div>
                 </div>
               )

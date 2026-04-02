@@ -23,31 +23,38 @@ def get_org(request: Request):
     user_email   = _get_user_email(request)
     if not workspace_id:
         raise HTTPException(status_code=401, detail="Not authenticated")
-    conn  = get_db()
-    org   = conn.execute("SELECT * FROM organisations WHERE id=?", [workspace_id]).fetchone()
-    members = conn.execute(
-        "SELECT email, role, display_name, status, last_login, created_at FROM users "
-        "WHERE org_id=? AND status != 'removed' ORDER BY created_at ASC",
-        [workspace_id],
-    ).fetchall()
-    invites = conn.execute(
-        "SELECT email, invited_by, created_at, expires_at FROM org_invites "
-        "WHERE org_id=? AND accepted=0 AND expires_at > datetime('now') ORDER BY created_at DESC",
-        [workspace_id],
-    ).fetchall()
-    conn.close()
+    try:
+        conn  = get_db()
+        org   = conn.execute("SELECT * FROM organisations WHERE id=?", [workspace_id]).fetchone()
+        members = conn.execute(
+            "SELECT email, role, display_name, status, last_login, created_at FROM users "
+            "WHERE org_id=? AND status != 'removed' ORDER BY created_at ASC",
+            [workspace_id],
+        ).fetchall()
+        try:
+            invites = conn.execute(
+                "SELECT email, invited_by, created_at, expires_at FROM org_invites "
+                "WHERE org_id=? AND accepted=0 AND expires_at > datetime('now') ORDER BY created_at DESC",
+                [workspace_id],
+            ).fetchall()
+        except Exception:
+            # org_invites table may not exist yet
+            invites = []
+        conn.close()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to load team data: {e}")
     return {
         "org": {
             "id":          workspace_id,
             "name":        org["name"] if org else workspace_id,
             "plan":        org["plan"] if org else "free",
-            "invite_only": bool(org["invite_only"]) if org else False,
+            "invite_only": bool(org["invite_only"]) if org and "invite_only" in org.keys() else False,
         },
         "members": [
             {
                 "email":        r["email"],
                 "role":         r["role"] or "member",
-                "display_name": r["display_name"] or "",
+                "display_name": (r["display_name"] or "") if "display_name" in r.keys() else "",
                 "status":       r["status"] or "active",
                 "last_login":   r["last_login"] or "",
                 "is_you":       r["email"] == user_email,
