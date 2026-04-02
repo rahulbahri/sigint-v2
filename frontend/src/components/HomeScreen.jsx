@@ -304,7 +304,7 @@ function KpiSlideOut({ kpi, status, onClose, onNavigate }) {
               )}
 
               {/* Your Data — last 6 months */}
-              {detail.recent_data && detail.recent_data.length > 0 && (
+              {detail.time_series && detail.time_series.length > 0 && (
                 <div>
                   <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400 mb-1.5">Your Data</p>
                   <div className="bg-slate-50 rounded-lg overflow-hidden">
@@ -316,7 +316,7 @@ function KpiSlideOut({ kpi, status, onClose, onNavigate }) {
                         </tr>
                       </thead>
                       <tbody>
-                        {detail.recent_data.slice(0, 6).map((row, i) => (
+                        {detail.time_series.slice(-6).map((row, i) => (
                           <tr key={i} className={i % 2 === 0 ? '' : 'bg-white'}>
                             <td className="px-3 py-1.5 text-slate-600">{row.period || row.date || '—'}</td>
                             <td className="px-3 py-1.5 text-slate-800 font-semibold text-right">
@@ -346,18 +346,20 @@ function KpiSlideOut({ kpi, status, onClose, onNavigate }) {
               )}
 
               {/* Downstream Impact */}
-              {detail.downstream_kpis && detail.downstream_kpis.length > 0 && (
+              {detail.downstream_impact && detail.downstream_impact.length > 0 && (
                 <div>
                   <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400 mb-1.5">Downstream Impact</p>
                   <div className="flex flex-wrap gap-1.5">
-                    {detail.downstream_kpis.map((dk, i) => {
-                      const dkColor = dk.status === 'green' ? 'bg-emerald-100 text-emerald-700'
-                        : dk.status === 'red' ? 'bg-red-100 text-red-700'
-                        : dk.status === 'amber' ? 'bg-amber-100 text-amber-700'
+                    {detail.downstream_impact.map((dk, i) => {
+                      const dkKey = typeof dk === 'string' ? dk : dk.key || dk
+                      const dkStatus = typeof dk === 'object' ? dk.status : null
+                      const dkColor = dkStatus === 'green' ? 'bg-emerald-100 text-emerald-700'
+                        : dkStatus === 'red' ? 'bg-red-100 text-red-700'
+                        : dkStatus === 'amber' ? 'bg-amber-100 text-amber-700'
                         : 'bg-slate-100 text-slate-600'
                       return (
                         <span key={i} className={`text-[10px] font-semibold px-2 py-0.5 rounded-full ${dkColor}`}>
-                          {formatKpiLabel(dk.key || dk)}
+                          {formatKpiLabel(dkKey)}
                         </span>
                       )
                     })}
@@ -366,11 +368,11 @@ function KpiSlideOut({ kpi, status, onClose, onNavigate }) {
               )}
 
               {/* Recommended Actions */}
-              {detail.recommended_actions && detail.recommended_actions.length > 0 && (
+              {detail.corrective_actions && detail.corrective_actions.length > 0 && (
                 <div>
                   <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400 mb-1">Recommended Actions</p>
                   <ul className="space-y-1">
-                    {detail.recommended_actions.map((action, i) => (
+                    {detail.corrective_actions.map((action, i) => (
                       <li key={i} className="flex items-start gap-2 text-[12px] text-slate-600 leading-relaxed">
                         <CheckCircle2 size={11} className="text-emerald-500 mt-0.5 flex-shrink-0" />
                         {action}
@@ -381,19 +383,26 @@ function KpiSlideOut({ kpi, status, onClose, onNavigate }) {
               )}
 
               {/* Industry Benchmarks */}
-              {detail.benchmarks && (
+              {detail.benchmarks && Object.keys(detail.benchmarks).length > 0 && (
                 <div>
                   <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400 mb-1.5">Industry Benchmarks</p>
-                  <div className="grid grid-cols-3 gap-2">
-                    {[
-                      { label: 'P25', value: detail.benchmarks.p25 },
-                      { label: 'Median', value: detail.benchmarks.p50 },
-                      { label: 'P75', value: detail.benchmarks.p75 },
-                    ].map(({ label: bl, value: bv }) => (
-                      <div key={bl} className="bg-slate-50 rounded-lg p-2 text-center">
-                        <div className="text-[10px] text-slate-400 font-medium">{bl}</div>
-                        <div className="text-[13px] font-bold text-slate-700">
-                          {bv != null ? `${bv}${kpi.unit || ''}` : '—'}
+                  <div className="space-y-2">
+                    {Object.entries(detail.benchmarks).map(([stage, vals]) => (
+                      <div key={stage}>
+                        <p className="text-[10px] font-semibold text-slate-500 mb-1 capitalize">{stage.replace(/_/g, ' ')}</p>
+                        <div className="grid grid-cols-3 gap-2">
+                          {[
+                            { label: 'P25', value: vals?.p25 },
+                            { label: 'Median', value: vals?.p50 },
+                            { label: 'P75', value: vals?.p75 },
+                          ].map(({ label: bl, value: bv }) => (
+                            <div key={bl} className="bg-slate-50 rounded-lg p-2 text-center">
+                              <div className="text-[10px] text-slate-400 font-medium">{bl}</div>
+                              <div className="text-[13px] font-bold text-slate-700">
+                                {bv != null ? `${bv}${vals?.label ? ` ${vals.label}` : (kpi.unit || '')}` : '—'}
+                              </div>
+                            </div>
+                          ))}
                         </div>
                       </div>
                     ))}
@@ -803,9 +812,16 @@ function ScoreBar({ label, value, weight, Icon, onClick }) {
 function healthNarrative(health) {
   if (!health) return ''
 
-  // If the API provides a detailed narrative, use it as a base
-  if (health.narrative_detail) {
-    return health.narrative_detail
+  // If the API provides a detailed narrative, build a string from it
+  if (health.narrative_detail && typeof health.narrative_detail === 'object') {
+    const nd = health.narrative_detail
+    const parts = []
+    if (nd.score_meaning) parts.push(nd.score_meaning)
+    if (nd.top_drags && nd.top_drags.length > 0) {
+      parts.push(`The KPIs requiring most urgency are ${nd.top_drags.map(d => formatKpiLabel(d.key || d)).join(', ')}.`)
+    }
+    if (nd.primary_action) parts.push(nd.primary_action)
+    if (parts.length > 0) return parts.join(' ')
   }
 
   const {
