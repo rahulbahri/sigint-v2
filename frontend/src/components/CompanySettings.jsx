@@ -2,9 +2,17 @@ import { useState, useEffect, useRef } from 'react'
 import axios from 'axios'
 import { Upload, Building2, Check, AlertCircle } from 'lucide-react'
 
+const STAGES = [
+  { id: 'seed',     label: 'Seed',     desc: 'Pre-revenue or early traction' },
+  { id: 'series_a', label: 'Series A', desc: 'Product-market fit, scaling' },
+  { id: 'series_b', label: 'Series B', desc: 'Scaling GTM and operations' },
+  { id: 'series_c', label: 'Series C+', desc: 'Growth, efficiency, path to profitability' },
+]
+
 export default function CompanySettings({ onSave }) {
   const [companyName, setCompanyName]   = useState('')
   const [industry, setIndustry]         = useState('')
+  const [stage, setStage]               = useState(() => localStorage.getItem('axiom_stage') || 'series_b')
   const [logo, setLogo]                 = useState(null)       // preview URL
   const [saving, setSaving]             = useState(false)
   const [status, setStatus]             = useState(null)       // 'ok' | 'error'
@@ -19,6 +27,10 @@ export default function CompanySettings({ onSave }) {
         setCompanyName(r.data.company_name || '')
         setIndustry(r.data.industry || '')
         if (r.data.logo) setLogo(r.data.logo)
+        if (r.data.company_stage) {
+          setStage(r.data.company_stage)
+          localStorage.setItem('axiom_stage', r.data.company_stage)
+        }
       })
       .catch(() => {})
   }, [])
@@ -30,9 +42,11 @@ export default function CompanySettings({ onSave }) {
       await axios.put('/api/company-settings', {
         company_name: companyName,
         industry,
+        company_stage: stage,
       })
+      localStorage.setItem('axiom_stage', stage)
       setStatus('ok')
-      if (onSave) onSave({ company_name: companyName, industry })
+      if (onSave) onSave({ company_name: companyName, industry, company_stage: stage })
     } catch {
       setStatus('error')
     } finally {
@@ -148,6 +162,32 @@ export default function CompanySettings({ onSave }) {
                        focus:outline-none focus:ring-2 focus:ring-[#0055A4]/30 focus:border-[#0055A4]
                        transition-all"
           />
+        </div>
+      </div>
+
+      {/* Funding Stage */}
+      <div className="bg-white rounded-xl border border-slate-200 p-5 space-y-4">
+        <div>
+          <h3 className="text-sm font-semibold text-slate-700 mb-1">Funding Stage</h3>
+          <p className="text-xs text-slate-500">Used to calibrate KPI benchmarks to your stage. Affects variance analysis and board pack targets.</p>
+        </div>
+        <div className="grid grid-cols-2 gap-2">
+          {STAGES.map(({ id, label, desc }) => (
+            <button
+              key={id}
+              onClick={() => setStage(id)}
+              className={`text-left p-3 rounded-xl border-2 transition-all ${
+                stage === id
+                  ? 'border-[#0055A4] bg-[#0055A4]/5'
+                  : 'border-slate-200 hover:border-slate-300 bg-white'
+              }`}
+            >
+              <p className={`text-sm font-bold leading-tight ${stage === id ? 'text-[#0055A4]' : 'text-slate-700'}`}>
+                {label}
+              </p>
+              <p className="text-[11px] text-slate-400 mt-0.5 leading-snug">{desc}</p>
+            </button>
+          ))}
         </div>
       </div>
 

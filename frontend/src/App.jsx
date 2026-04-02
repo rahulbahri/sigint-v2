@@ -182,6 +182,7 @@ export default function App() {
   const [selectedMonths, setSelectedMonths]       = useState([])   // empty = all months
   const [availableYears, setAvailableYears]       = useState([])
   const [companyStage, setCompanyStage]           = useState(() => localStorage.getItem('axiom_stage') || 'series_b')
+  const [sidebarHealth, setSidebarHealth]         = useState(null)  // lightweight health score for sidebar
   const [benchmarks, setBenchmarks]               = useState({})
   const [showOnboarding, setShowOnboarding]       = useState(() => !localStorage.getItem('axiom_onboarded'))
   const [labsOpen, setLabsOpen]                   = useState(false)
@@ -392,6 +393,8 @@ export default function App() {
       setSummary(s.data); setKpiDefs(k.data)
       setMonthly(m.data); setFingerprint(f.data)
       setBridgeData(b.data); setProjectionMonthly(pm.data)
+      // Fetch lightweight health score for sidebar widget (non-blocking)
+      axios.get('/api/home').then(r => setSidebarHealth(r.data?.health)).catch(() => {})
       if (Array.isArray(ay.data) && ay.data.length) setAvailableYears(ay.data)
       // Auto-run ontology discovery if no nodes exist yet
       try {
@@ -523,82 +526,51 @@ export default function App() {
           </div>
         </div>
 
-        {/* Status Distribution */}
-        {!loading && filteredSummary && (
-          <div className="px-4 py-3 border-b border-white/10">
-            <p className="text-slate-400 text-[10px] uppercase tracking-wider mb-2 font-medium">
-              Status Distribution
+        {/* Health Score Widget — matches HomeScreen exactly */}
+        {sidebarHealth && (
+          <button
+            onClick={() => setTab('home')}
+            className="w-full px-4 py-3 border-b border-white/10 text-left hover:bg-white/5 transition-colors group"
+          >
+            <p className="text-slate-500 text-[9px] uppercase tracking-widest font-semibold mb-2">
+              Business Health
             </p>
-            <div className="flex items-center gap-2 flex-wrap text-[11px] font-semibold">
-              <span className="flex items-center gap-1">
-                <span className="inline-block w-2 h-2 rounded-full bg-red-500" />
-                <span className="text-red-400">{critical} critical</span>
-              </span>
-              <span className="text-slate-600">·</span>
-              <span className="flex items-center gap-1">
-                <span className="inline-block w-2 h-2 rounded-full bg-amber-500" />
-                <span className="text-amber-400">{attention} watch</span>
-              </span>
-              <span className="text-slate-600">·</span>
-              <span className="flex items-center gap-1">
-                <span className="inline-block w-2 h-2 rounded-full bg-emerald-500" />
-                <span className="text-emerald-400">{onTarget} on target</span>
-              </span>
+            <div className="flex items-center gap-3">
+              {/* Score circle */}
+              <div className="relative flex-shrink-0">
+                <svg width="40" height="40" className="transform -rotate-90">
+                  <circle cx="20" cy="20" r="15" fill="none" stroke="rgba(255,255,255,0.08)" strokeWidth="5"/>
+                  <circle cx="20" cy="20" r="15" fill="none"
+                    stroke={sidebarHealth.color === 'green' ? '#059669' : sidebarHealth.color === 'amber' ? '#D97706' : sidebarHealth.color === 'red' ? '#DC2626' : '#475569'}
+                    strokeWidth="5" strokeLinecap="round"
+                    strokeDasharray={`${(sidebarHealth.score / 100) * 94.2} 94.2`}
+                    style={{ transition: 'stroke-dasharray 1s ease' }}
+                  />
+                </svg>
+                <div className="absolute inset-0 flex items-center justify-center">
+                  <span className="text-[11px] font-black text-white">{sidebarHealth.score}</span>
+                </div>
+              </div>
+              {/* Label + distribution */}
+              <div className="flex-1 min-w-0">
+                <p className="text-[12px] font-bold leading-tight"
+                   style={{ color: sidebarHealth.color === 'green' ? '#34d399' : sidebarHealth.color === 'amber' ? '#fbbf24' : sidebarHealth.color === 'red' ? '#f87171' : '#94a3b8' }}>
+                  {sidebarHealth.label}
+                </p>
+                <div className="flex items-center gap-1.5 mt-1 text-[10px] font-semibold">
+                  <span className="text-red-400">{sidebarHealth.kpis_red ?? 0} crit</span>
+                  <span className="text-slate-600">·</span>
+                  <span className="text-amber-400">{sidebarHealth.kpis_yellow ?? 0} watch</span>
+                  <span className="text-slate-600">·</span>
+                  <span className="text-emerald-400">{sidebarHealth.kpis_green ?? 0} ok</span>
+                </div>
+              </div>
             </div>
-          </div>
+          </button>
         )}
-
-        {/* ── Company Stage Selector ─────────────────────── */}
-        <div className="px-3 py-2 border-b border-white/10">
-          <p className="text-slate-500 text-[9px] uppercase tracking-widest font-semibold mb-1.5 px-1">
-            Stage
-          </p>
-          <div className="flex gap-1 flex-wrap">
-            {[
-              { id: 'seed',     label: 'Seed'  },
-              { id: 'series_a', label: 'Ser A' },
-              { id: 'series_b', label: 'Ser B' },
-              { id: 'series_c', label: 'Ser C+' },
-            ].map(({ id, label }) => (
-              <button
-                key={id}
-                onClick={() => {
-                  setCompanyStage(id)
-                  localStorage.setItem('axiom_stage', id)
-                }}
-                className={`flex-1 text-center text-[10px] font-bold py-1 rounded-lg border transition-all ${
-                  companyStage === id
-                    ? 'bg-[#0055A4] border-[#00AEEF]/50 text-white'
-                    : 'bg-white/5 border-white/10 text-slate-400 hover:text-white hover:border-white/25'
-                }`}>
-                {label}
-              </button>
-            ))}
-          </div>
-        </div>
 
         {/* Navigation + AI Panel */}
         <div className="flex-1 flex flex-col min-h-0">
-
-          {/* ── Anika co-pilot CTA — prominent, always visible ── */}
-          <div className="px-3 pt-3 pb-1">
-            <button
-              onClick={() => {
-                // Expand AI panel — find and click its toggle
-                document.querySelector('[data-anika-toggle]')?.click()
-              }}
-              className="w-full flex items-center gap-2 px-3 py-2 rounded-xl
-                         bg-gradient-to-r from-teal-500/20 to-blue-500/20
-                         border border-teal-400/30 hover:border-teal-400/60
-                         text-teal-300 hover:text-teal-200 transition-all group"
-            >
-              <span className="text-base">✦</span>
-              <span className="flex-1 text-left text-[11px] font-semibold tracking-wide">Ask Anika</span>
-              <span className="text-[9px] text-teal-400/70 font-medium bg-teal-500/10 px-1.5 py-0.5 rounded-full">
-                AI CFO Analyst
-              </span>
-            </button>
-          </div>
 
           <nav className="flex-1 min-h-0 py-2 overflow-y-auto">
             {NAV_GROUPS.map(group => (
