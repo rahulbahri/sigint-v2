@@ -2,7 +2,7 @@ services:
   - type: web
     name: axiom-intelligence-v2
     runtime: python
-    buildCommand: pip install -r backend/requirements.txt
+    buildCommand: cd frontend && npm install --legacy-peer-deps && npm run build && cd .. && pip install -r backend/requirements.txt
     startCommand: cd backend && python3 -m uvicorn main:app --host 0.0.0.0 --port $PORT
     envVars:
       - key: PYTHON_VERSION
