@@ -40,6 +40,7 @@ import DocsPage from './components/DocsPage.jsx'
 import HomeScreen from './components/HomeScreen.jsx'
 import DataHealthPage from './components/DataHealthPage.jsx'
 import BoardPackGenerator from './components/BoardPackGenerator.jsx'
+import TutorialPage from './components/TutorialPage.jsx'
 
 // ── Navigation — 4 groups + Labs ─────────────────────────────────────────────
 const NAV_GROUPS = [
@@ -86,6 +87,7 @@ const NAV_GROUPS = [
 const LABS_TABS_BASE = [
   { id: 'dashboard', label: 'Command Center (Full KPI Grid)', Icon: LayoutDashboard },
   { id: 'ontology',  label: 'KPI Causal Map',                 Icon: Network         },
+  { id: 'tutorial',  label: 'Platform Manual',                 Icon: BookOpen        },
   { id: 'docs',      label: 'Documentation',                  Icon: BookOpen        },
   { id: 'api',       label: 'API Reference',                  Icon: Code2           },
   { id: 'devdocs',   label: 'Dev Docs',                       Icon: BookOpen        },
@@ -121,6 +123,7 @@ const PAGE_TITLES = {
   company:     'Company Settings',
   audit:       'Audit Trail',
   admin:       'Admin Panel',
+  tutorial:    'Platform Manual',
 }
 
 const FILTER_TABS = new Set(['variance', 'dashboard', 'fingerprint', 'trends', 'projection'])
@@ -858,6 +861,7 @@ export default function App() {
               {tab === 'api'         && <APIReference kpiDefs={kpiDefs}/>}
               {tab === 'devdocs'     && <DevDocs />}
               {tab === 'docs'        && <DocsPage />}
+              {tab === 'tutorial'    && <TutorialPage onNavigate={setTab} />}
               {tab === 'admin'       && isAdmin && <AdminPanel />}
               {tab === 'decisions'   && <DecisionLog authToken={authToken} fingerprint={fingerprint} prefillDecision={prefillDecision} onPrefillConsumed={() => setPrefillDecision(null)} />}
               {tab === 'scenario'    && <ScenarioPlanner fingerprint={filteredFingerprint} authToken={authToken} onNavigateToDecisions={(data) => { setPrefillDecision(data); setTab('decisions') }} />}
