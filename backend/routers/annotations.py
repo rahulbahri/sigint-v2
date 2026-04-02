@@ -31,7 +31,7 @@ def _compute_fingerprint_data(targets_override=None, workspace_id: str = ""):
 def _audit(conn, event_type: str, description: str,
            entity_type: str = None, entity_id: str = None, user: str = "system"):
     conn.execute(
-        "INSERT INTO audit_log (event_type, entity_type, entity_id, description, user) VALUES (?,?,?,?,?)",
+        'INSERT INTO audit_log (event_type, entity_type, entity_id, description, "user") VALUES (?,?,?,?,?)',
         (event_type, entity_type, entity_id, description, user)
     )
 

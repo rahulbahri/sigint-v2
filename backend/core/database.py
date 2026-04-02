@@ -233,40 +233,46 @@ def _migrate_workspace_data(conn, old_workspace_id: str, new_workspace_id: str):
 def _audit(conn_or_event_type, event_type_or_entity_type=None, description_or_entity_id=None,
            entity_type_or_description=None, entity_id=None, user: str = "system"):
     """
-    Write a row to audit_log. Supports two calling conventions:
+    Write a row to audit_log. Always opens its own isolated DB connection so
+    that audit failures can NEVER roll back the caller's data transaction.
 
-    Old-style (uses existing connection):
+    Calling conventions (both still accepted for backward compatibility):
+
+    Old-style (conn is ignored — a fresh connection is always opened):
         _audit(conn, event_type, description, entity_type=None, entity_id=None)
 
-    New-style (opens its own connection — used in connectors/billing/quickbooks):
+    New-style:
         _audit(event_type, entity_type, entity_id, description)
+
+    Note: 'user' is a reserved keyword in PostgreSQL — the column is always
+    referenced as "user" (double-quoted) so it works on both SQLite and PG.
     """
     try:
-        # Detect which convention is being used
+        # Detect which calling convention is being used
         if hasattr(conn_or_event_type, 'execute'):
-            # Old-style: first arg is a db connection
-            conn = conn_or_event_type
+            # Old-style: first arg looks like a connection — ignore it, use own conn
             event_type  = event_type_or_entity_type
             description = description_or_entity_id
             entity_type = entity_type_or_description
             _entity_id  = entity_id
-            own_conn    = False
         else:
             # New-style: first arg is event_type string
             event_type  = conn_or_event_type
             entity_type = event_type_or_entity_type
             _entity_id  = description_or_entity_id
             description = entity_type_or_description
-            conn        = get_db()
-            own_conn    = True
 
-        conn.execute(
-            "INSERT INTO audit_log (event_type, entity_type, entity_id, description, user) VALUES (?,?,?,?,?)",
-            (event_type, entity_type, _entity_id, description, user)
-        )
-        if own_conn:
-            conn.commit()
-            conn.close()
+        # Always use an isolated connection — never pollute the caller's transaction
+        _conn = get_db()
+        try:
+            # "user" is double-quoted to avoid PostgreSQL reserved-word error
+            _conn.execute(
+                'INSERT INTO audit_log (event_type, entity_type, entity_id, description, "user") VALUES (?,?,?,?,?)',
+                (event_type, entity_type, _entity_id, description, user)
+            )
+            _conn.commit()
+        finally:
+            _conn.close()
     except Exception as _e:
         print(f"[AUDIT][WARN] Failed to write audit event '{conn_or_event_type}': {_e}")
 
@@ -353,7 +359,7 @@ def init_db():
             entity_type TEXT,
             entity_id   TEXT,
             description TEXT NOT NULL,
-            user        TEXT DEFAULT 'system',
+            "user"      TEXT DEFAULT 'system',
             ip_address  TEXT,
             created_at  TEXT DEFAULT (datetime('now')),
             workspace_id TEXT DEFAULT ''

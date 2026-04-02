@@ -99,7 +99,7 @@ def _audit(event_type: str, entity_type: str, entity_id: str, description: str, 
     try:
         conn = get_db()
         conn.execute(
-            "INSERT INTO audit_log (event_type, entity_type, entity_id, description, user) VALUES (?,?,?,?,?)",
+            'INSERT INTO audit_log (event_type, entity_type, entity_id, description, "user") VALUES (?,?,?,?,?)',
             (event_type, entity_type, entity_id, description, user)
         )
         conn.commit()
