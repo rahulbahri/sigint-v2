@@ -1558,18 +1558,23 @@ export default function HomeScreen({ onNavigate, onAskAnika }) {
       {/* ── Top 3 Most Critical ──────────────────────────────────────── */}
       {topCritical.length > 0 && (
         <div>
-          <div className="flex items-center justify-between mb-2.5">
+          <div className="flex items-center justify-between mb-1.5">
             <div className="flex items-center gap-2">
               <AlertTriangle size={13} className="text-red-500" />
               <h2 className="text-slate-700 text-[11px] font-bold uppercase tracking-wider">Most Critical</h2>
               <span className="bg-red-100 text-red-700 text-[10px] font-bold px-1.5 py-0.5 rounded-full">{needs_attention?.length || 0}</span>
-              <span className="text-[9px] text-slate-300 italic">-- click any card to explore</span>
             </div>
             <button onClick={() => onNavigate?.('variance')}
               className="text-[11px] text-slate-400 hover:text-[#0055A4] flex items-center gap-1 transition-colors font-medium">
               Full Analysis <ArrowRight size={10}/>
             </button>
           </div>
+          <p className="text-[10px] text-slate-400 mb-2.5 leading-snug">
+            Ranked by distance from target — the KPIs furthest below their target for the selected period appear first.
+            {topCritical[0]?.gap_pct != null && (
+              <span className="text-slate-500 font-medium"> #{1} is {topCritical[0].gap_pct}% below target.</span>
+            )}
+          </p>
           <div className="space-y-2">
             {topCritical.map(kpi => {
               const kLabel = formatKpiLabel(kpi.key)
@@ -1584,6 +1589,8 @@ export default function HomeScreen({ onNavigate, onAskAnika }) {
               // For critical cards: always underperforming, so show how far behind
               const kIsWell = kIsLower ? kpi.avg <= kpi.target : kpi.avg >= kpi.target
               const kInfo = KPI_INFO[kpi.key]
+              const kRank = kpi.rank
+              const kGapFromApi = kpi.gap_pct
               return (
                 <button
                   key={kpi.key}
@@ -1593,12 +1600,19 @@ export default function HomeScreen({ onNavigate, onAskAnika }) {
                   <div className="flex items-start justify-between gap-3">
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2 mb-1">
+                        {kRank && (
+                          <span className="bg-red-600 text-white text-[9px] font-bold w-4 h-4 rounded-full flex items-center justify-center flex-shrink-0">
+                            {kRank}
+                          </span>
+                        )}
                         <span className="text-slate-800 text-[13px] font-bold">{kLabel}</span>
-                        {kGap !== null && (
+                        {kGapFromApi != null ? (
+                          <span className="text-red-600 text-[12px] font-bold">{kGapFromApi}% below target</span>
+                        ) : kGap !== null ? (
                           <span className="text-red-600 text-[12px] font-bold">
                             {kIsWell ? `+${Math.abs(kGap)}% ${kIsLower ? 'below' : 'above'} target` : `${Math.abs(kGap)}% ${kIsLower ? 'above' : 'below'} target`}
                           </span>
-                        )}
+                        ) : null}
                       </div>
                       <div className="flex items-center gap-3 mb-1.5">
                         <span className="text-slate-900 text-lg font-extrabold">{kAvg}</span>

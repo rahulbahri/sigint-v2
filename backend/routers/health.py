@@ -165,10 +165,21 @@ def get_home(
 
     conn.close()
 
+    # Enrich needs_attention with ranking data (gap_pct, rank)
+    ranked_map = {r["key"]: r for r in health.get("needs_attention_ranked", [])}
+    needs_enriched = []
+    for k in health["needs_attention"]:
+        spot = _kpi_spotlight(k)
+        r = ranked_map.get(k)
+        if r:
+            spot["gap_pct"] = r["gap_pct"]
+            spot["rank"]    = r["rank"]
+        needs_enriched.append(spot)
+
     return {
         "health":          health,
         "data_period":     data_period,
-        "needs_attention": [_kpi_spotlight(k) for k in health["needs_attention"]],
+        "needs_attention": needs_enriched,
         "doing_well":      [_kpi_spotlight(k) for k in health["doing_well"]],
     }
 

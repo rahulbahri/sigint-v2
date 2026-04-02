@@ -348,6 +348,10 @@ def compute_health_score(
         "kpis_grey":          len(grey_kpis),
         "months_of_data":     len(rows),
         "needs_attention":    [k for k, _ in (red_kpis + yellow_kpis)],
+        "needs_attention_ranked": [
+            {"key": k, "gap_pct": round((1 - p) * 100, 1), "rank": i + 1}
+            for i, (k, p) in enumerate(red_kpis)
+        ],
         "doing_well":         [k for k, _ in green_kpis],
         "momentum_trend":     momentum_trend,
         "green_kpis_detail":  [{"key": k, "pct": round(p * 100, 1)} for k, p in green_kpis],
