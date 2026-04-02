@@ -37,7 +37,7 @@ def _init_forecast_tables():
             updated_at TEXT
         );
         CREATE TABLE IF NOT EXISTS markov_models (
-            id INTEGER PRIMARY KEY,
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
             kpis TEXT,
             thresholds TEXT,
             self_matrices TEXT,
@@ -70,6 +70,26 @@ def _init_forecast_tables():
             conn.commit()
         except Exception:
             pass
+
+    # Fix for PostgreSQL: ensure markov_models.id has a sequence for auto-increment.
+    # The original DDL used INTEGER PRIMARY KEY (no AUTOINCREMENT) which works in SQLite
+    # (rowid alias) but fails in PostgreSQL because INTEGER PRIMARY KEY has no default.
+    _pg_migrations = [
+        "CREATE SEQUENCE IF NOT EXISTS markov_models_id_seq OWNED BY markov_models.id",
+        "ALTER TABLE markov_models ALTER COLUMN id SET DEFAULT nextval('markov_models_id_seq')",
+        "SELECT setval('markov_models_id_seq', COALESCE((SELECT MAX(id) FROM markov_models), 0) + 1, false)",
+    ]
+    for pg_mig in _pg_migrations:
+        try:
+            conn.execute(pg_mig)
+            conn.commit()
+        except Exception:
+            # SQLite doesn't support sequences — expected to fail; also safe if already applied
+            try:
+                conn.commit()
+            except Exception:
+                pass
+
     conn.close()
 
 

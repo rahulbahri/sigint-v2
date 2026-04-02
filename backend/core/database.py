@@ -78,6 +78,12 @@ def _schema_translate(sql: str) -> str:
     """Translate SQLite CREATE TABLE DDL to PostgreSQL DDL."""
     sql = _sql_translate(sql)
     sql = sql.replace("INTEGER PRIMARY KEY AUTOINCREMENT", "SERIAL PRIMARY KEY")
+    # Also handle INTEGER PRIMARY KEY without AUTOINCREMENT (SQLite auto-rowid but PG needs SERIAL)
+    sql = re.sub(
+        r"\bINTEGER\s+PRIMARY\s+KEY\b(?!\s+AUTOINCREMENT)",
+        "SERIAL PRIMARY KEY",
+        sql, flags=re.IGNORECASE,
+    )
     sql = re.sub(r"\bAUTOINCREMENT\b", "", sql)
     sql = re.sub(r"DEFAULT CURRENT_TIMESTAMP", "DEFAULT NOW()", sql, flags=re.IGNORECASE)
     return sql
