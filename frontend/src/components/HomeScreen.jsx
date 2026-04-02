@@ -1,10 +1,13 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useCallback } from 'react'
 import axios from 'axios'
 import {
   TrendingUp, TrendingDown, Minus, AlertTriangle,
   CheckCircle2, Zap, ArrowRight, RefreshCw,
   Activity, Target, Shield, BarChart2,
-  X, ChevronRight, Info, Clock, Eye
+  X, ChevronRight, Info, Clock, Eye,
+  ChevronDown, Sliders, RotateCcw, Save,
+  Loader2, GitBranch, AlertCircle, Bookmark,
+  ExternalLink, Calendar
 } from 'lucide-react'
 
 // ── KPI contextual info dictionary ───────────────────────────────────────────
@@ -131,6 +134,11 @@ const KPI_INFO = {
   },
 }
 
+// ── Helper: format KPI key to label ──────────────────────────────────────────
+function formatKpiLabel(key) {
+  return (key || '').replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())
+}
+
 // ── Circular Health Gauge (compact) ──────────────────────────────────────────
 function HealthGauge({ score, color, size = 110 }) {
   const r = (size / 2) - 11
@@ -172,10 +180,10 @@ function Sparkline({ data, color = '#059669', width = 64, height = 24 }) {
   )
 }
 
-// ── KPI Slide-out drawer ──────────────────────────────────────────────────────
+// ── KPI Slide-out drawer (enriched) ──────────────────────────────────────────
 function KpiSlideOut({ kpi, status, onClose, onNavigate }) {
   const info = KPI_INFO[kpi?.key] || {}
-  const label = (kpi?.key || '').replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())
+  const label = formatKpiLabel(kpi?.key)
   const avg    = kpi?.avg  != null ? `${kpi.avg}${kpi.unit || ''}` : '—'
   const target = kpi?.target != null ? `${kpi.target}${kpi.unit || ''}` : 'Not set'
   const sparkColor = status === 'green' ? '#059669' : status === 'red' ? '#DC2626' : '#D97706'
@@ -199,13 +207,26 @@ function KpiSlideOut({ kpi, status, onClose, onNavigate }) {
     return `${label} is at ${avg} against a target of ${target} — within watch range. Monitor closely over the next 1–2 months.`
   }
 
+  // Fetch enriched detail from API
+  const [detail, setDetail] = useState(null)
+  const [detailLoading, setDetailLoading] = useState(false)
+
+  useEffect(() => {
+    if (!kpi?.key) return
+    setDetailLoading(true)
+    axios.get(`/api/kpi-detail/${kpi.key}`)
+      .then(r => setDetail(r.data))
+      .catch(() => setDetail(null))
+      .finally(() => setDetailLoading(false))
+  }, [kpi?.key])
+
   return (
     <div className="fixed inset-0 z-50 flex justify-end" onClick={onClose}>
       {/* Backdrop */}
       <div className="absolute inset-0 bg-black/20 backdrop-blur-[1px]" />
       {/* Drawer */}
       <div
-        className="relative bg-white w-[400px] h-full shadow-2xl flex flex-col overflow-hidden"
+        className="relative bg-white w-[420px] h-full shadow-2xl flex flex-col overflow-hidden"
         style={{ animation: 'slideInRight 0.22s ease-out' }}
         onClick={e => e.stopPropagation()}
       >
@@ -260,6 +281,127 @@ function KpiSlideOut({ kpi, status, onClose, onNavigate }) {
           {!info.what && (
             <p className="text-slate-400 text-[12px]">No additional context available for this KPI.</p>
           )}
+
+          {/* ── Enriched detail sections (fetched from API) ───────────── */}
+          {detailLoading && (
+            <div className="flex items-center justify-center py-4">
+              <Loader2 size={16} className="animate-spin text-slate-400" />
+              <span className="text-slate-400 text-[11px] ml-2">Loading detail...</span>
+            </div>
+          )}
+
+          {detail && !detailLoading && (
+            <div className="space-y-4 border-t border-slate-100 pt-4">
+
+              {/* Computation / Formula */}
+              {detail.formula && (
+                <div>
+                  <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400 mb-1">Computation</p>
+                  <div className="bg-slate-900 text-emerald-400 text-[11px] font-mono px-3 py-2.5 rounded-lg leading-relaxed whitespace-pre-wrap">
+                    {detail.formula}
+                  </div>
+                </div>
+              )}
+
+              {/* Your Data — last 6 months */}
+              {detail.recent_data && detail.recent_data.length > 0 && (
+                <div>
+                  <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400 mb-1.5">Your Data</p>
+                  <div className="bg-slate-50 rounded-lg overflow-hidden">
+                    <table className="w-full text-[11px]">
+                      <thead>
+                        <tr className="border-b border-slate-200">
+                          <th className="text-left text-slate-500 font-semibold px-3 py-1.5">Period</th>
+                          <th className="text-right text-slate-500 font-semibold px-3 py-1.5">Value</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {detail.recent_data.slice(0, 6).map((row, i) => (
+                          <tr key={i} className={i % 2 === 0 ? '' : 'bg-white'}>
+                            <td className="px-3 py-1.5 text-slate-600">{row.period || row.date || '—'}</td>
+                            <td className="px-3 py-1.5 text-slate-800 font-semibold text-right">
+                              {row.value != null ? `${row.value}${kpi.unit || ''}` : '—'}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+
+              {/* Root Causes */}
+              {detail.root_causes && detail.root_causes.length > 0 && (
+                <div>
+                  <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400 mb-1">Root Causes</p>
+                  <ul className="space-y-1">
+                    {detail.root_causes.map((cause, i) => (
+                      <li key={i} className="flex items-start gap-2 text-[12px] text-slate-600 leading-relaxed">
+                        <AlertCircle size={11} className="text-red-400 mt-0.5 flex-shrink-0" />
+                        {cause}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+
+              {/* Downstream Impact */}
+              {detail.downstream_kpis && detail.downstream_kpis.length > 0 && (
+                <div>
+                  <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400 mb-1.5">Downstream Impact</p>
+                  <div className="flex flex-wrap gap-1.5">
+                    {detail.downstream_kpis.map((dk, i) => {
+                      const dkColor = dk.status === 'green' ? 'bg-emerald-100 text-emerald-700'
+                        : dk.status === 'red' ? 'bg-red-100 text-red-700'
+                        : dk.status === 'amber' ? 'bg-amber-100 text-amber-700'
+                        : 'bg-slate-100 text-slate-600'
+                      return (
+                        <span key={i} className={`text-[10px] font-semibold px-2 py-0.5 rounded-full ${dkColor}`}>
+                          {formatKpiLabel(dk.key || dk)}
+                        </span>
+                      )
+                    })}
+                  </div>
+                </div>
+              )}
+
+              {/* Recommended Actions */}
+              {detail.recommended_actions && detail.recommended_actions.length > 0 && (
+                <div>
+                  <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400 mb-1">Recommended Actions</p>
+                  <ul className="space-y-1">
+                    {detail.recommended_actions.map((action, i) => (
+                      <li key={i} className="flex items-start gap-2 text-[12px] text-slate-600 leading-relaxed">
+                        <CheckCircle2 size={11} className="text-emerald-500 mt-0.5 flex-shrink-0" />
+                        {action}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+
+              {/* Industry Benchmarks */}
+              {detail.benchmarks && (
+                <div>
+                  <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400 mb-1.5">Industry Benchmarks</p>
+                  <div className="grid grid-cols-3 gap-2">
+                    {[
+                      { label: 'P25', value: detail.benchmarks.p25 },
+                      { label: 'Median', value: detail.benchmarks.p50 },
+                      { label: 'P75', value: detail.benchmarks.p75 },
+                    ].map(({ label: bl, value: bv }) => (
+                      <div key={bl} className="bg-slate-50 rounded-lg p-2 text-center">
+                        <div className="text-[10px] text-slate-400 font-medium">{bl}</div>
+                        <div className="text-[13px] font-bold text-slate-700">
+                          {bv != null ? `${bv}${kpi.unit || ''}` : '—'}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
         </div>
 
         {/* Footer */}
@@ -267,7 +409,7 @@ function KpiSlideOut({ kpi, status, onClose, onNavigate }) {
           <div className="px-5 py-4 border-t border-slate-100">
             <button
               onClick={() => { onNavigate?.(info.tab); onClose() }}
-              className="w-full flex items-center justify-center gap-2 bg-[#0055A4] hover:bg-[#0046882] text-white text-[12px] font-semibold py-2.5 rounded-xl transition-colors"
+              className="w-full flex items-center justify-center gap-2 bg-[#0055A4] hover:bg-[#004688] text-white text-[12px] font-semibold py-2.5 rounded-xl transition-colors"
             >
               Open Full Analysis <ArrowRight size={13} />
             </button>
@@ -278,29 +420,97 @@ function KpiSlideOut({ kpi, status, onClose, onNavigate }) {
   )
 }
 
-// ── Score Breakdown Modal ─────────────────────────────────────────────────────
+// ── Score Breakdown Modal (with adjustable weight sliders) ───────────────────
 function ScoreBreakdownModal({ health, onClose }) {
   const score = health?.score ?? 0
   const color = health?.color ?? 'grey'
+  const mom = health?.momentum ?? 0
+  const tgt = health?.target_achievement ?? 0
+  const rsk = health?.risk_flags ?? 0
+
+  // Editable weights
+  const [weights, setWeights] = useState({ momentum: 30, target: 40, risk: 30 })
+  const [saving, setSaving] = useState(false)
+  const [saved, setSaved] = useState(false)
+
+  // Compute preview score
+  const previewScore = (
+    mom * (weights.momentum / 100) +
+    tgt * (weights.target / 100) +
+    rsk * (weights.risk / 100)
+  ).toFixed(1)
+
+  // Redistribute weights when one slider changes
+  const handleWeightChange = (key, newVal) => {
+    const val = Math.max(0, Math.min(100, Number(newVal)))
+    const otherKeys = Object.keys(weights).filter(k => k !== key)
+    const remaining = 100 - val
+    const otherTotal = otherKeys.reduce((s, k) => s + weights[k], 0)
+
+    const newWeights = { ...weights, [key]: val }
+    if (otherTotal === 0) {
+      // Split evenly
+      otherKeys.forEach(k => { newWeights[k] = Math.round(remaining / otherKeys.length) })
+    } else {
+      let allocated = 0
+      otherKeys.forEach((k, i) => {
+        if (i === otherKeys.length - 1) {
+          newWeights[k] = remaining - allocated
+        } else {
+          const proportion = weights[k] / otherTotal
+          const share = Math.round(remaining * proportion)
+          newWeights[k] = share
+          allocated += share
+        }
+      })
+    }
+    // Clamp negatives
+    otherKeys.forEach(k => { if (newWeights[k] < 0) newWeights[k] = 0 })
+    setWeights(newWeights)
+    setSaved(false)
+  }
+
+  const resetDefaults = () => {
+    setWeights({ momentum: 30, target: 40, risk: 30 })
+    setSaved(false)
+  }
+
+  const saveWeights = async () => {
+    setSaving(true)
+    try {
+      await axios.put('/api/company-settings', {
+        weight_momentum: weights.momentum,
+        weight_target: weights.target,
+        weight_risk: weights.risk,
+      })
+      setSaved(true)
+    } catch {}
+    setSaving(false)
+  }
+
   const narrative = () => {
-    const m = health?.momentum ?? 0
-    const t = health?.target_achievement ?? 0
-    const r = health?.risk_flags ?? 0
     const parts = []
-    if (m >= 70) parts.push('strong momentum')
-    else if (m < 50) parts.push('weak momentum')
-    if (t >= 70) parts.push('healthy target achievement')
-    else if (t < 40) parts.push('low target achievement')
-    if (r < 40) parts.push('elevated risk flags')
+    if (mom >= 70) parts.push('strong momentum')
+    else if (mom < 50) parts.push('weak momentum')
+    if (tgt >= 70) parts.push('healthy target achievement')
+    else if (tgt < 40) parts.push('low target achievement')
+    if (rsk < 40) parts.push('elevated risk flags')
     return parts.length
-      ? `Your score of ${score} reflects ${parts.join(' and ')}. ${t < 50 ? 'Set more KPI targets to unlock the Target Achievement score.' : ''}`
+      ? `Your score of ${score} reflects ${parts.join(' and ')}. ${tgt < 50 ? 'Set more KPI targets to unlock the Target Achievement score.' : ''}`
       : `Your overall health score of ${score} reflects the weighted combination of momentum, target achievement, and risk factors below.`
   }
+
+  const components = [
+    { key: 'momentum', label: 'Momentum', value: mom, Icon: Activity, desc: 'Measures how many KPIs are improving vs declining over the last 3 months.' },
+    { key: 'target', label: 'Target Achievement', value: tgt, Icon: Target, desc: 'Percentage of KPIs with targets that are currently on track (green status).' },
+    { key: 'risk', label: 'Risk Score', value: rsk, Icon: Shield, desc: 'Inverse of risk — penalises for KPIs in critical/red status and negative momentum.' },
+  ]
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4" onClick={onClose}>
       <div className="absolute inset-0 bg-black/30 backdrop-blur-[2px]" />
       <div
-        className="relative bg-white rounded-2xl shadow-2xl w-full max-w-md p-6"
+        className="relative bg-white rounded-2xl shadow-2xl w-full max-w-lg p-6"
         onClick={e => e.stopPropagation()}
         style={{ animation: 'fadeInScale 0.18s ease-out' }}
       >
@@ -309,53 +519,141 @@ function ScoreBreakdownModal({ health, onClose }) {
           <button onClick={onClose} className="p-1 rounded-md hover:bg-slate-100 text-slate-400"><X size={14}/></button>
         </div>
         <p className="text-slate-500 text-[12px] leading-relaxed mb-5">{narrative()}</p>
+
         <div className="space-y-4">
-          {[
-            { label: 'Momentum', value: health?.momentum ?? 0, weight: 30, Icon: Activity, desc: 'Measures how many KPIs are improving vs declining over the last 3 months.' },
-            { label: 'Target Achievement', value: health?.target_achievement ?? 0, weight: 40, Icon: Target, desc: 'Percentage of KPIs with targets that are currently on track (green status).' },
-            { label: 'Risk Score', value: health?.risk_flags ?? 0, weight: 30, Icon: Shield, desc: 'Inverse of risk — penalises for KPIs in critical/red status and negative momentum.' },
-          ].map(({ label, value, weight, Icon, desc }) => {
+          {components.map(({ key, label, value, Icon, desc }) => {
             const c = value >= 70 ? '#059669' : value >= 50 ? '#D97706' : '#DC2626'
             return (
-              <div key={label}>
+              <div key={key}>
                 <div className="flex items-center gap-2 mb-1">
                   <Icon size={13} style={{ color: c }} />
                   <span className="text-slate-700 text-[12px] font-semibold flex-1">{label}</span>
-                  <span className="text-slate-400 text-[11px]">{weight}% weight</span>
                   <span className="text-[12px] font-bold" style={{ color: c }}>{value.toFixed(0)}</span>
                 </div>
                 <div className="h-1.5 bg-slate-100 rounded-full overflow-hidden mb-1.5">
                   <div className="h-full rounded-full transition-all duration-700" style={{ width: `${value}%`, backgroundColor: c }} />
                 </div>
-                <p className="text-slate-400 text-[11px] leading-snug">{desc}</p>
+                <p className="text-slate-400 text-[11px] leading-snug mb-2">{desc}</p>
+                {/* Weight slider */}
+                <div className="flex items-center gap-3 bg-slate-50 rounded-lg px-3 py-2">
+                  <Sliders size={11} className="text-slate-400 flex-shrink-0" />
+                  <span className="text-slate-500 text-[10px] font-medium w-12 flex-shrink-0">Weight:</span>
+                  <input
+                    type="range"
+                    min={0}
+                    max={100}
+                    value={weights[key]}
+                    onChange={e => handleWeightChange(key, e.target.value)}
+                    className="flex-1 h-1.5 accent-[#0055A4] cursor-pointer"
+                  />
+                  <span className="text-[12px] font-bold text-[#0055A4] w-10 text-right">{weights[key]}%</span>
+                </div>
               </div>
             )
           })}
         </div>
+
+        {/* Preview score */}
         <div className="mt-5 bg-slate-50 rounded-xl p-3">
-          <p className="text-slate-500 text-[11px]">
-            <span className="font-semibold text-slate-600">Formula: </span>
-            Score = (Momentum × 0.30) + (Target Achievement × 0.40) + (Risk × 0.30)
-          </p>
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-slate-500 text-[11px]">
+                <span className="font-semibold text-slate-600">Formula: </span>
+                Score = (Momentum x {weights.momentum/100}) + (Target x {weights.target/100}) + (Risk x {weights.risk/100})
+              </p>
+              <p className="text-slate-400 text-[10px] mt-0.5">
+                Weights must sum to 100%. Currently: {weights.momentum + weights.target + weights.risk}%
+              </p>
+            </div>
+            <div className="text-right">
+              <div className="text-[10px] text-slate-400 uppercase font-bold">Preview</div>
+              <div className="text-xl font-extrabold text-slate-900">{previewScore}</div>
+            </div>
+          </div>
+        </div>
+
+        {/* Action buttons */}
+        <div className="flex items-center gap-2 mt-4">
+          <button
+            onClick={resetDefaults}
+            className="flex items-center gap-1.5 px-3 py-2 border border-slate-200 hover:border-slate-300 text-slate-600 text-[11px] font-semibold rounded-xl transition-colors"
+          >
+            <RotateCcw size={11} /> Reset to Default
+          </button>
+          <button
+            onClick={saveWeights}
+            disabled={saving}
+            className="flex items-center gap-1.5 px-4 py-2 bg-[#0055A4] hover:bg-[#004688] text-white text-[11px] font-semibold rounded-xl transition-colors disabled:opacity-60 ml-auto"
+          >
+            {saving ? <Loader2 size={11} className="animate-spin" /> : <Save size={11} />}
+            {saved ? 'Saved!' : 'Save Weights'}
+          </button>
         </div>
       </div>
     </div>
   )
 }
 
-// ── Distribution Modal ────────────────────────────────────────────────────────
-function DistributionModal({ health, onClose, onNavigate }) {
-  const items = [
-    { count: health?.kpis_green,  label: 'On Target', color: '#059669', bg: 'bg-emerald-50', text: 'text-emerald-700', desc: 'These KPIs are meeting or exceeding their targets. Keep monitoring for sustained performance.' },
-    { count: health?.kpis_yellow, label: 'Watch',     color: '#D97706', bg: 'bg-amber-50',   text: 'text-amber-700',   desc: 'These KPIs are close to target but trending in the wrong direction. Early intervention recommended.' },
-    { count: health?.kpis_red,    label: 'Critical',  color: '#DC2626', bg: 'bg-red-50',     text: 'text-red-700',     desc: 'These KPIs are significantly below target. Immediate review and action required.' },
-    { count: health?.kpis_grey,   label: 'No Target', color: '#94a3b8', bg: 'bg-slate-50',   text: 'text-slate-600',   desc: 'No target is set. Go to Settings → Targets to configure benchmarks for accurate scoring.' },
+// ── Distribution Modal (with expandable KPI detail) ──────────────────────────
+function DistributionModal({ health, onClose, onNavigate, onOpenKpi }) {
+  const [expanded, setExpanded] = useState(null)
+
+  const categories = [
+    {
+      key: 'green',
+      count: health?.kpis_green,
+      label: 'On Target',
+      color: '#059669',
+      bg: 'bg-emerald-50',
+      text: 'text-emerald-700',
+      border: 'border-emerald-200',
+      desc: 'These KPIs are meeting or exceeding their targets. Keep monitoring for sustained performance.',
+      kpis: health?.green_kpis_detail || [],
+      fallbackList: [],
+    },
+    {
+      key: 'yellow',
+      count: health?.kpis_yellow,
+      label: 'Watch',
+      color: '#D97706',
+      bg: 'bg-amber-50',
+      text: 'text-amber-700',
+      border: 'border-amber-200',
+      desc: 'These KPIs are close to target but trending in the wrong direction. Early intervention recommended.',
+      kpis: health?.yellow_kpis_detail || [],
+      fallbackList: [],
+    },
+    {
+      key: 'red',
+      count: health?.kpis_red,
+      label: 'Critical',
+      color: '#DC2626',
+      bg: 'bg-red-50',
+      text: 'text-red-700',
+      border: 'border-red-200',
+      desc: 'These KPIs are significantly below target. Immediate review and action required.',
+      kpis: health?.red_kpis_detail || [],
+      fallbackList: [],
+    },
+    {
+      key: 'grey',
+      count: health?.kpis_grey,
+      label: 'No Target',
+      color: '#94a3b8',
+      bg: 'bg-slate-50',
+      text: 'text-slate-600',
+      border: 'border-slate-200',
+      desc: 'No target is set. Go to Settings -> Targets to configure benchmarks for accurate scoring.',
+      kpis: (health?.grey_kpis_list || []).map(k => (typeof k === 'string' ? { key: k } : k)),
+      fallbackList: [],
+    },
   ]
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4" onClick={onClose}>
       <div className="absolute inset-0 bg-black/30 backdrop-blur-[2px]" />
       <div
-        className="relative bg-white rounded-2xl shadow-2xl w-full max-w-md p-6"
+        className="relative bg-white rounded-2xl shadow-2xl w-full max-w-lg p-6 max-h-[80vh] overflow-y-auto"
         onClick={e => e.stopPropagation()}
         style={{ animation: 'fadeInScale 0.18s ease-out' }}
       >
@@ -364,13 +662,62 @@ function DistributionModal({ health, onClose, onNavigate }) {
           <button onClick={onClose} className="p-1 rounded-md hover:bg-slate-100 text-slate-400"><X size={14}/></button>
         </div>
         <div className="space-y-3">
-          {items.map(({ count, label, color, bg, text, desc }) => (
-            <div key={label} className={`flex items-start gap-3 ${bg} rounded-xl p-3`}>
-              <div className="text-2xl font-extrabold flex-shrink-0 leading-none mt-0.5" style={{ color }}>{count ?? 0}</div>
-              <div>
-                <p className={`text-[12px] font-semibold ${text} mb-0.5`}>{label}</p>
-                <p className="text-slate-500 text-[11px] leading-snug">{desc}</p>
-              </div>
+          {categories.map(({ key, count, label, color, bg, text, border, desc, kpis }) => (
+            <div key={key}>
+              <button
+                onClick={() => setExpanded(expanded === key ? null : key)}
+                className={`flex items-start gap-3 ${bg} rounded-xl p-3 w-full text-left transition-all border border-transparent hover:${border}`}
+              >
+                <div className="text-2xl font-extrabold flex-shrink-0 leading-none mt-0.5" style={{ color }}>{count ?? 0}</div>
+                <div className="flex-1">
+                  <div className="flex items-center gap-2">
+                    <p className={`text-[12px] font-semibold ${text} mb-0.5`}>{label}</p>
+                    {kpis.length > 0 && (
+                      <ChevronDown
+                        size={12}
+                        className={`transition-transform ${expanded === key ? 'rotate-180' : ''} ${text}`}
+                      />
+                    )}
+                  </div>
+                  <p className="text-slate-500 text-[11px] leading-snug">{desc}</p>
+                </div>
+              </button>
+
+              {/* Expanded KPI list */}
+              {expanded === key && kpis.length > 0 && (
+                <div className="mt-1 ml-9 space-y-1 mb-2">
+                  {kpis.map((kpiItem, i) => {
+                    const kpiKey = kpiItem.key || kpiItem
+                    const kpiLabel = formatKpiLabel(kpiKey)
+                    const perf = kpiItem.performance != null ? `${kpiItem.performance}%` : null
+                    const kpiNarrative = kpiItem.narrative || null
+                    const kpiInfo = KPI_INFO[kpiKey]
+                    return (
+                      <button
+                        key={i}
+                        onClick={() => {
+                          onOpenKpi?.({ key: kpiKey, avg: kpiItem.avg, target: kpiItem.target, unit: kpiItem.unit, sparkline: kpiItem.sparkline, direction: kpiItem.direction }, key === 'grey' ? 'grey' : key === 'yellow' ? 'amber' : key)
+                        }}
+                        className="flex items-center gap-2 w-full text-left px-3 py-2 rounded-lg hover:bg-white/80 transition-colors group"
+                      >
+                        <div className="w-1.5 h-1.5 rounded-full flex-shrink-0" style={{ backgroundColor: color }} />
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2">
+                            <span className="text-[11px] font-semibold text-slate-700 truncate">{kpiLabel}</span>
+                            {perf && (
+                              <span className={`text-[10px] font-bold ${text}`}>{perf}</span>
+                            )}
+                          </div>
+                          {kpiNarrative && (
+                            <p className="text-slate-400 text-[10px] truncate leading-snug">{kpiNarrative}</p>
+                          )}
+                        </div>
+                        <ChevronRight size={11} className="text-slate-300 group-hover:text-slate-500 flex-shrink-0" />
+                      </button>
+                    )
+                  })}
+                </div>
+              )}
             </div>
           ))}
         </div>
@@ -393,7 +740,7 @@ function KpiCard({ kpi, status, onOpen }) {
     green: { bg: 'bg-emerald-50',border: 'border-emerald-200',text: 'text-emerald-700', hover: 'hover:border-emerald-300' },
   }[status] || { bg: 'bg-slate-50', border: 'border-slate-200', text: 'text-slate-500', hover: 'hover:border-slate-300' }
 
-  const label = (kpi.key || '').replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())
+  const label = formatKpiLabel(kpi.key)
   const avg    = kpi.avg  != null ? `${kpi.avg}${kpi.unit || ''}` : '—'
   const target = kpi.target != null ? `${kpi.target}${kpi.unit || ''}` : '—'
   const gapPct = (kpi.avg != null && kpi.target)
@@ -452,47 +799,64 @@ function ScoreBar({ label, value, weight, Icon, onClick }) {
   )
 }
 
-// ── Health narrative ──────────────────────────────────────────────────────────
+// ── Health narrative (enriched) ──────────────────────────────────────────────
 function healthNarrative(health) {
   if (!health) return ''
+
+  // If the API provides a detailed narrative, use it as a base
+  if (health.narrative_detail) {
+    return health.narrative_detail
+  }
+
   const {
     score, color, momentum_trend,
     kpis_green = 0, kpis_yellow = 0, kpis_red = 0, kpis_grey = 0,
-    target_achievement = 0, momentum = 0
+    target_achievement = 0, momentum = 0, risk_flags = 0,
+    red_kpis_detail = [], yellow_kpis_detail = []
   } = health
 
   const total = kpis_green + kpis_yellow + kpis_red + kpis_grey
   const tracked = kpis_green + kpis_yellow + kpis_red
 
-  // Opening — score-based verdict
-  const opener =
-    score >= 80 ? `At ${score}/100 your business is in strong health.` :
-    score >= 65 ? `At ${score}/100 your business is performing well overall.` :
-    score >= 50 ? `At ${score}/100 there are areas of the business that need attention.` :
-    score >= 35 ? `At ${score}/100 several KPIs are significantly off-target.` :
-                  `At ${score}/100 urgent action is needed across multiple KPIs.`
+  // Zone label
+  const zone =
+    score >= 80 ? 'Excellent' :
+    score >= 65 ? 'Good' :
+    score >= 50 ? 'Watch' :
+    score >= 35 ? 'Warning' :
+                  'Critical'
 
-  // Targets context
-  const targetLine = kpis_grey > 3
-    ? `${kpis_grey} of ${total} KPIs have no target — set them in KPI Targets to unlock a more accurate score.`
-    : tracked > 0
-      ? `Of ${tracked} tracked KPIs, ${kpis_green} are on target${kpis_red > 0 ? `, ${kpis_red} are critical` : ''}${kpis_yellow > 0 ? ` and ${kpis_yellow} need watching` : ''}.`
+  // Opening — what the score means
+  const opener = `Your health score of ${score}/100 places your business in the ${zone} zone.`
+
+  // Component analysis — which is the weakest
+  const components = [
+    { name: 'Momentum', value: momentum },
+    { name: 'Target Achievement', value: target_achievement },
+    { name: 'Risk', value: risk_flags },
+  ].sort((a, b) => a.value - b.value)
+  const weakest = components[0]
+  const componentLine = weakest.value < 50
+    ? `${weakest.name} is the biggest drag on your score at ${weakest.value.toFixed(0)}/100, while ${components[2].name} is your strongest component at ${components[2].value.toFixed(0)}/100.`
+    : `All three score components (Momentum, Target Achievement, Risk) are reasonably balanced.`
+
+  // Worst KPIs
+  const worstKpis = red_kpis_detail.slice(0, 3)
+  const worstLine = worstKpis.length > 0
+    ? `The KPIs requiring most urgency are ${worstKpis.map(k => formatKpiLabel(k.key || k)).join(', ')}.`
+    : kpis_yellow > 0
+      ? `${kpis_yellow} KPI${kpis_yellow > 1 ? 's are' : ' is'} in the watch zone — monitor closely.`
       : null
 
-  // Momentum line
-  const momLine =
-    momentum_trend === 'improving' ? 'Momentum is building — more KPIs are improving than declining.' :
-    momentum_trend === 'declining' ? 'Momentum is declining — act quickly to prevent further deterioration.' :
-    'Momentum is stable with no strong directional trend.'
-
-  // Action prompt
+  // Primary action
   const actionLine =
-    kpis_red > 0 ? `Start with the ${kpis_red} critical KPI${kpis_red > 1 ? 's' : ''} below.` :
-    kpis_grey > 3 ? 'Go to Settings → KPI Targets to configure benchmarks.' :
+    kpis_red >= 3 ? `Focus this week on triaging the ${kpis_red} critical KPIs — start with the one with the largest gap to target.` :
+    kpis_red > 0 ? `Start by investigating the ${kpis_red} critical KPI${kpis_red > 1 ? 's' : ''} flagged below.` :
+    kpis_grey > 3 ? 'Set KPI targets in Settings to unlock an accurate health score.' :
     kpis_yellow > 0 ? `Watch the ${kpis_yellow} amber KPI${kpis_yellow > 1 ? 's' : ''} closely this month.` :
     'All tracked KPIs are on target — maintain the discipline.'
 
-  return [opener, targetLine, momLine, actionLine].filter(Boolean).join(' ')
+  return [opener, componentLine, worstLine, actionLine].filter(Boolean).join(' ')
 }
 
 // ── Format data period ────────────────────────────────────────────────────────
@@ -510,6 +874,78 @@ function formatUploadedAt(ts) {
   } catch { return ts }
 }
 
+// ── Data Period Presets ──────────────────────────────────────────────────────
+const PERIOD_PRESETS = [
+  { label: 'Last 3 months', months: 3 },
+  { label: 'Last 6 months', months: 6 },
+  { label: 'Last 12 months', months: 12 },
+  { label: 'YTD', months: -1 },   // special case
+  { label: 'All Data', months: 0 },
+]
+
+function computePeriodParams(preset) {
+  if (preset.months === 0) return {} // All data
+  const now = new Date()
+  const toYear = now.getFullYear()
+  const toMonth = now.getMonth() + 1
+
+  if (preset.months === -1) {
+    // YTD
+    return { from_year: toYear, from_month: 1, to_year: toYear, to_month: toMonth }
+  }
+
+  const fromDate = new Date(now.getFullYear(), now.getMonth() - preset.months, 1)
+  return {
+    from_year: fromDate.getFullYear(),
+    from_month: fromDate.getMonth() + 1,
+    to_year: toYear,
+    to_month: toMonth,
+  }
+}
+
+// ── Period Selector ─────────────────────────────────────────────────────────
+function PeriodSelector({ selected, onSelect }) {
+  const [open, setOpen] = useState(false)
+  const ref = useRef(null)
+
+  useEffect(() => {
+    const handler = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false) }
+    document.addEventListener('mousedown', handler)
+    return () => document.removeEventListener('mousedown', handler)
+  }, [])
+
+  return (
+    <div ref={ref} className="relative">
+      <button
+        onClick={() => setOpen(!open)}
+        className="flex items-center gap-1.5 px-2.5 py-1.5 border border-slate-200 hover:border-slate-300 rounded-lg text-[11px] text-slate-600 font-medium transition-colors bg-white"
+      >
+        <Calendar size={11} className="text-slate-400" />
+        {selected}
+        <ChevronDown size={10} className={`text-slate-400 transition-transform ${open ? 'rotate-180' : ''}`} />
+      </button>
+      {open && (
+        <div className="absolute right-0 top-full mt-1 bg-white border border-slate-200 rounded-xl shadow-lg py-1 z-30 min-w-[140px]"
+             style={{ animation: 'fadeInScale 0.12s ease-out' }}>
+          {PERIOD_PRESETS.map(p => (
+            <button
+              key={p.label}
+              onClick={() => { onSelect(p); setOpen(false) }}
+              className={`w-full text-left px-3 py-1.5 text-[11px] transition-colors ${
+                selected === p.label
+                  ? 'bg-[#0055A4]/10 text-[#0055A4] font-semibold'
+                  : 'text-slate-600 hover:bg-slate-50'
+              }`}
+            >
+              {p.label}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
 // ── Main component ────────────────────────────────────────────────────────────
 export default function HomeScreen({ onNavigate, onAskAnika }) {
   const [data, setData]               = useState(null)
@@ -519,13 +955,22 @@ export default function HomeScreen({ onNavigate, onAskAnika }) {
   const [showScoreModal, setShowScoreModal] = useState(false)
   const [showDistModal, setShowDistModal]   = useState(false)
   const [seeding, setSeeding]         = useState(false)
+  const [showAllAttention, setShowAllAttention] = useState(false)
+  const [showAllDoingWell, setShowAllDoingWell] = useState(false)
+  const [selectedPeriod, setSelectedPeriod] = useState('All Data')
 
-  const load = () => {
+  const load = useCallback((periodParams = {}) => {
     setLoading(true); setError(false)
-    axios.get('/api/home')
+    const params = new URLSearchParams()
+    if (periodParams.from_year) params.set('from_year', periodParams.from_year)
+    if (periodParams.from_month) params.set('from_month', periodParams.from_month)
+    if (periodParams.to_year) params.set('to_year', periodParams.to_year)
+    if (periodParams.to_month) params.set('to_month', periodParams.to_month)
+    const qs = params.toString()
+    axios.get(`/api/home${qs ? `?${qs}` : ''}`)
       .then(r  => { setData(r.data); setLoading(false) })
       .catch(() => { setError(true); setLoading(false) })
-  }
+  }, [])
 
   const loadDemoData = async () => {
     setSeeding(true)
@@ -536,7 +981,13 @@ export default function HomeScreen({ onNavigate, onAskAnika }) {
     load()
   }
 
-  useEffect(() => { load() }, [])
+  const handlePeriodChange = (preset) => {
+    setSelectedPeriod(preset.label)
+    const params = computePeriodParams(preset)
+    load(params)
+  }
+
+  useEffect(() => { load() }, [load])
 
   if (loading) return (
     <div className="flex items-center justify-center h-64">
@@ -547,7 +998,7 @@ export default function HomeScreen({ onNavigate, onAskAnika }) {
   if (error || !data) return (
     <div className="flex flex-col items-center justify-center h-64 gap-3">
       <p className="text-slate-500 text-sm">Unable to load home screen data.</p>
-      <button onClick={load} className="text-[12px] text-slate-400 hover:text-slate-600 flex items-center gap-1.5 transition-colors">
+      <button onClick={() => load()} className="text-[12px] text-slate-400 hover:text-slate-600 flex items-center gap-1.5 transition-colors">
         <RefreshCw size={12}/> Retry
       </button>
     </div>
@@ -570,11 +1021,15 @@ export default function HomeScreen({ onNavigate, onAskAnika }) {
   const uploadAt = formatUploadedAt(data_period?.uploaded_at)
   const narrative = healthNarrative(health)
 
+  // Determine visible KPIs for show all / collapse
+  const attentionVisible = showAllAttention ? needs_attention : needs_attention?.slice(0, 6)
+  const doingWellVisible = showAllDoingWell ? doing_well : doing_well?.slice(0, 6)
+
   return (
     <div className="space-y-5 max-w-5xl">
 
       {/* ── Top meta bar ───────────────────────────────────────────────── */}
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between flex-wrap gap-2">
         <div className="flex items-center gap-2 text-[11px] text-slate-400">
           {period && (
             <>
@@ -594,17 +1049,18 @@ export default function HomeScreen({ onNavigate, onAskAnika }) {
           )}
         </div>
         <div className="flex items-center gap-2">
+          <PeriodSelector selected={selectedPeriod} onSelect={handlePeriodChange} />
           <button
             onClick={loadDemoData}
             disabled={seeding}
             className="flex items-center gap-1.5 px-3 py-1.5 bg-[#0055A4] hover:bg-[#003d80] text-white text-[11px] font-semibold rounded-lg transition-colors disabled:opacity-60"
           >
             {seeding
-              ? <><div className="w-2.5 h-2.5 rounded-full border-2 border-white/40 border-t-white animate-spin"/>Loading…</>
+              ? <><div className="w-2.5 h-2.5 rounded-full border-2 border-white/40 border-t-white animate-spin"/>Loading...</>
               : <><Zap size={11}/> Load Demo Data</>
             }
           </button>
-          <button onClick={load} className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-400 hover:text-slate-600 transition-colors" title="Refresh">
+          <button onClick={() => load()} className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-400 hover:text-slate-600 transition-colors" title="Refresh">
             <RefreshCw size={13} />
           </button>
         </div>
@@ -645,7 +1101,7 @@ export default function HomeScreen({ onNavigate, onAskAnika }) {
                 <button onClick={() => setShowScoreModal(true)} className="text-slate-300 hover:text-slate-500 transition-colors" title="How is this calculated?">
                   <Info size={11} />
                 </button>
-                <span className="text-[9px] text-slate-300 ml-auto cursor-pointer hover:text-slate-400" onClick={() => setShowScoreModal(true)}>click to explain ↗</span>
+                <span className="text-[9px] text-slate-300 ml-auto cursor-pointer hover:text-slate-400" onClick={() => setShowScoreModal(true)}>click to explain / adjust weights</span>
               </div>
               <div className="space-y-2.5">
                 <ScoreBar label="Momentum"           value={health?.momentum ?? 0}           weight="30%" Icon={Activity} onClick={() => setShowScoreModal(true)}/>
@@ -661,7 +1117,7 @@ export default function HomeScreen({ onNavigate, onAskAnika }) {
                 <button onClick={() => setShowDistModal(true)} className="text-slate-300 hover:text-slate-500 transition-colors">
                   <Info size={11} />
                 </button>
-                <span className="text-[9px] text-slate-300 ml-auto cursor-pointer hover:text-slate-400" onClick={() => setShowDistModal(true)}>click to explore ↗</span>
+                <span className="text-[9px] text-slate-300 ml-auto cursor-pointer hover:text-slate-400" onClick={() => setShowDistModal(true)}>click to explore</span>
               </div>
               <button onClick={() => setShowDistModal(true)} className="grid grid-cols-4 gap-2 w-full text-left hover:bg-slate-50 rounded-xl p-1.5 -mx-1.5 transition-colors group">
                 {[
@@ -683,13 +1139,13 @@ export default function HomeScreen({ onNavigate, onAskAnika }) {
           {narrative && (
             <>
               <div className="w-px bg-slate-100 flex-shrink-0 hidden lg:block" />
-              <div className="hidden lg:flex flex-col justify-center max-w-[200px]">
+              <div className="hidden lg:flex flex-col justify-center max-w-[220px]">
                 <p className="text-slate-500 text-[11px] leading-relaxed">{narrative}</p>
                 <button
                   onClick={() => setShowScoreModal(true)}
                   className="mt-3 text-[10px] font-semibold text-[#0055A4] hover:underline self-start"
                 >
-                  How is this score computed? →
+                  How is this score computed?
                 </button>
               </div>
             </>
@@ -713,11 +1169,22 @@ export default function HomeScreen({ onNavigate, onAskAnika }) {
             </button>
           </div>
           <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-2.5">
-            {needs_attention.slice(0, 6).map(kpi => (
+            {attentionVisible.map(kpi => (
               <KpiCard key={kpi.key} kpi={kpi} status="red"
                 onOpen={(k, s) => setSlideOut({ kpi: k, status: s })} />
             ))}
           </div>
+          {needs_attention.length > 6 && (
+            <button
+              onClick={() => setShowAllAttention(!showAllAttention)}
+              className="mt-2 text-[11px] text-slate-400 hover:text-[#0055A4] font-medium transition-colors flex items-center gap-1"
+            >
+              {showAllAttention
+                ? <>Show less</>
+                : <>Show all {needs_attention.length} <ArrowRight size={10}/></>
+              }
+            </button>
+          )}
         </div>
       )}
 
@@ -737,11 +1204,22 @@ export default function HomeScreen({ onNavigate, onAskAnika }) {
             </button>
           </div>
           <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-2.5">
-            {doing_well.slice(0, 6).map(kpi => (
+            {doingWellVisible.map(kpi => (
               <KpiCard key={kpi.key} kpi={kpi} status="green"
                 onOpen={(k, s) => setSlideOut({ kpi: k, status: s })} />
             ))}
           </div>
+          {doing_well.length > 6 && (
+            <button
+              onClick={() => setShowAllDoingWell(!showAllDoingWell)}
+              className="mt-2 text-[11px] text-slate-400 hover:text-[#0055A4] font-medium transition-colors flex items-center gap-1"
+            >
+              {showAllDoingWell
+                ? <>Show less</>
+                : <>Show all {doing_well.length} <ArrowRight size={10}/></>
+              }
+            </button>
+          )}
         </div>
       )}
 
@@ -773,7 +1251,7 @@ export default function HomeScreen({ onNavigate, onAskAnika }) {
                       disabled={seeding}
                       className="inline-flex items-center gap-1.5 px-3 py-1.5 border border-amber-400 text-amber-700 hover:bg-amber-100 text-[11px] font-semibold rounded-lg transition-colors disabled:opacity-60"
                     >
-                      {seeding ? 'Loading…' : 'Or: Load Demo Data with targets'}
+                      {seeding ? 'Loading...' : 'Or: Load Demo Data with targets'}
                     </button>
                   </div>
                 </div>
@@ -794,7 +1272,7 @@ export default function HomeScreen({ onNavigate, onAskAnika }) {
                   className="flex items-center gap-2 px-4 py-2 bg-[#0055A4] hover:bg-[#003d80] text-white text-[12px] font-semibold rounded-lg transition-colors disabled:opacity-60"
                 >
                   {seeding
-                    ? <><div className="w-3 h-3 rounded-full border-2 border-white/40 border-t-white animate-spin"/>Loading…</>
+                    ? <><div className="w-3 h-3 rounded-full border-2 border-white/40 border-t-white animate-spin"/>Loading...</>
                     : <>Load Demo Data (5 years)</>
                   }
                 </button>
@@ -837,7 +1315,12 @@ export default function HomeScreen({ onNavigate, onAskAnika }) {
         <ScoreBreakdownModal health={health} onClose={() => setShowScoreModal(false)} />
       )}
       {showDistModal && (
-        <DistributionModal health={health} onClose={() => setShowDistModal(false)} onNavigate={onNavigate} />
+        <DistributionModal
+          health={health}
+          onClose={() => setShowDistModal(false)}
+          onNavigate={onNavigate}
+          onOpenKpi={(kpi, status) => { setShowDistModal(false); setSlideOut({ kpi, status }) }}
+        />
       )}
 
       {/* ── CSS animations ─────────────────────────────────────────────── */}

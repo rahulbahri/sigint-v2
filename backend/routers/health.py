@@ -2,18 +2,56 @@
 routers/health.py — Health Score endpoint + Home Screen data aggregation.
 GET /api/health-score
 GET /api/home
+GET /api/kpi-detail/{kpi_key}
 """
-from fastapi import APIRouter, Request
+import json
+from typing import Optional
+
+from fastapi import APIRouter, Query, Request
 
 from core.database import get_db
 from core.deps import _get_workspace
 from core.health_score import compute_health_score
+from core.kpi_defs import KPI_DEFS, ALL_CAUSATION_RULES, BENCHMARKS
 
 router = APIRouter()
 
 
+def _parse_weight_and_period_params(
+    w_momentum: Optional[float],
+    w_target: Optional[float],
+    w_risk: Optional[float],
+    from_year: Optional[int],
+    from_month: Optional[int],
+    to_year: Optional[int],
+    to_month: Optional[int],
+):
+    """Return kwargs dict for compute_health_score from optional query params."""
+    kwargs = {}
+    if w_momentum is not None:
+        kwargs["w_momentum"] = w_momentum
+    if w_target is not None:
+        kwargs["w_target"] = w_target
+    if w_risk is not None:
+        kwargs["w_risk"] = w_risk
+    if from_year is not None and from_month is not None:
+        kwargs["from_period"] = (from_year, from_month)
+    if to_year is not None and to_month is not None:
+        kwargs["to_period"] = (to_year, to_month)
+    return kwargs
+
+
 @router.get("/api/health-score", tags=["Intelligence"])
-def get_health_score(request: Request):
+def get_health_score(
+    request: Request,
+    w_momentum: Optional[float] = Query(None),
+    w_target: Optional[float] = Query(None),
+    w_risk: Optional[float] = Query(None),
+    from_year: Optional[int] = Query(None),
+    from_month: Optional[int] = Query(None),
+    to_year: Optional[int] = Query(None),
+    to_month: Optional[int] = Query(None),
+):
     """Return the workspace health score with full breakdown."""
     workspace_id = _get_workspace(request)
     if not workspace_id:
@@ -24,23 +62,39 @@ def get_health_score(request: Request):
             "months_of_data": 0, "needs_attention": [], "doing_well": [],
             "momentum_trend": "stable",
         }
+    kwargs = _parse_weight_and_period_params(
+        w_momentum, w_target, w_risk, from_year, from_month, to_year, to_month
+    )
     conn = get_db()
-    result = compute_health_score(conn, workspace_id)
+    result = compute_health_score(conn, workspace_id, **kwargs)
     conn.close()
     return result
 
 
 @router.get("/api/home", tags=["Intelligence"])
-def get_home(request: Request):
+def get_home(
+    request: Request,
+    w_momentum: Optional[float] = Query(None),
+    w_target: Optional[float] = Query(None),
+    w_risk: Optional[float] = Query(None),
+    from_year: Optional[int] = Query(None),
+    from_month: Optional[int] = Query(None),
+    to_year: Optional[int] = Query(None),
+    to_month: Optional[int] = Query(None),
+):
     """
     Aggregated home-screen payload: health score + recent brief + spotlight KPIs.
     Used by the HomeScreen component to avoid multiple round trips.
     """
-    import json
     workspace_id = _get_workspace(request)
     conn = get_db()
 
-    health = compute_health_score(conn, workspace_id)
+    kwargs = _parse_weight_and_period_params(
+        w_momentum, w_target, w_risk, from_year, from_month, to_year, to_month
+    )
+    health = compute_health_score(conn, workspace_id, **kwargs)
+
+    has_period_filter = from_year is not None or to_year is not None
 
     # Data period (min/max year-month) for "last updated" display
     period_row = conn.execute(
@@ -63,11 +117,23 @@ def get_home(request: Request):
         "uploaded_at": latest_upload["uploaded_at"] if latest_upload else None,
     }
 
-    # Pull last 6 months of data for recent trend sparklines
-    rows = conn.execute(
-        "SELECT year, month, data_json FROM monthly_data WHERE workspace_id=? ORDER BY year DESC, month DESC LIMIT 6",
-        [workspace_id]
-    ).fetchall()
+    # Pull monthly data for recent trend sparklines
+    if has_period_filter:
+        spark_query = "SELECT year, month, data_json FROM monthly_data WHERE workspace_id=?"
+        spark_params: list = [workspace_id]
+        if from_year is not None and from_month is not None:
+            spark_query += " AND (year > ? OR (year = ? AND month >= ?))"
+            spark_params.extend([from_year, from_year, from_month])
+        if to_year is not None and to_month is not None:
+            spark_query += " AND (year < ? OR (year = ? AND month <= ?))"
+            spark_params.extend([to_year, to_year, to_month])
+        spark_query += " ORDER BY year DESC, month DESC"
+        rows = conn.execute(spark_query, spark_params).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT year, month, data_json FROM monthly_data WHERE workspace_id=? ORDER BY year DESC, month DESC LIMIT 6",
+            [workspace_id]
+        ).fetchall()
     targets_rows = conn.execute(
         "SELECT kpi_key, target_value, direction, unit FROM kpi_targets WHERE workspace_id=?",
         [workspace_id]
@@ -104,4 +170,94 @@ def get_home(request: Request):
         "data_period":     data_period,
         "needs_attention": [_kpi_spotlight(k) for k in health["needs_attention"]],
         "doing_well":      [_kpi_spotlight(k) for k in health["doing_well"]],
+    }
+
+
+# ─── KPI Detail ──────────────────────────────────────────────────────────────
+
+# Build lookup dicts once at import time
+_KPI_DEFS_MAP = {d["key"]: d for d in KPI_DEFS}
+
+
+@router.get("/api/kpi-detail/{kpi_key}", tags=["Intelligence"])
+def get_kpi_detail(kpi_key: str, request: Request):
+    """
+    Return rich detail for a single KPI: definition, causation rules,
+    benchmarks, monthly time series, target, and current status.
+    """
+    workspace_id = _get_workspace(request)
+    conn = get_db()
+
+    # KPI definition
+    kpi_def = _KPI_DEFS_MAP.get(kpi_key, {})
+
+    # Causation rules
+    causation = ALL_CAUSATION_RULES.get(kpi_key, {})
+
+    # Benchmarks
+    benchmark = BENCHMARKS.get(kpi_key, {})
+
+    # Full monthly time series
+    rows = conn.execute(
+        "SELECT year, month, data_json FROM monthly_data WHERE workspace_id=? ORDER BY year, month",
+        [workspace_id],
+    ).fetchall()
+
+    time_series = []
+    for row in rows:
+        d = json.loads(row["data_json"])
+        val = d.get(kpi_key)
+        if val is not None:
+            time_series.append({
+                "year": row["year"],
+                "month": row["month"],
+                "period": f"{row['year']}-{row['month']:02d}",
+                "value": val,
+            })
+
+    # Target and direction
+    target_row = conn.execute(
+        "SELECT target_value, direction, unit FROM kpi_targets WHERE workspace_id=? AND kpi_key=?",
+        [workspace_id, kpi_key],
+    ).fetchone()
+
+    target_value = target_row["target_value"] if target_row else None
+    direction = target_row["direction"] if target_row else kpi_def.get("direction", "higher")
+    unit = target_row["unit"] if target_row else kpi_def.get("unit", "")
+
+    conn.close()
+
+    # Compute current status (green / yellow / red / grey)
+    status = "grey"
+    pct_of_target = None
+    if time_series and target_value is not None:
+        recent_vals = [pt["value"] for pt in time_series[-3:]]
+        avg = sum(recent_vals) / len(recent_vals)
+        if direction == "lower":
+            pct = target_value / avg if avg else 0
+        else:
+            pct = avg / target_value if target_value else 0
+        pct_of_target = round(pct * 100, 1)
+        if pct >= 0.98:
+            status = "green"
+        elif pct >= 0.90:
+            status = "yellow"
+        else:
+            status = "red"
+
+    return {
+        "kpi_key":        kpi_key,
+        "name":           kpi_def.get("name", kpi_key),
+        "formula":        kpi_def.get("formula", ""),
+        "unit":           unit,
+        "direction":      direction,
+        "domain":         kpi_def.get("domain", ""),
+        "target":         target_value,
+        "pct_of_target":  pct_of_target,
+        "status":         status,
+        "time_series":    time_series,
+        "root_causes":       causation.get("root_causes", []),
+        "downstream_impact": causation.get("downstream_impact", []),
+        "corrective_actions":causation.get("corrective_actions", []),
+        "benchmarks":        benchmark,
     }

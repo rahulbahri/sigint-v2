@@ -134,34 +134,39 @@ def _compute_risk_flags(
     return round(max(0.0, (1 - red / scored) * 100), 1)
 
 
-def compute_health_score(conn, workspace_id: str) -> dict:
+def compute_health_score(
+    conn,
+    workspace_id: str,
+    w_momentum: float = 0.30,
+    w_target: float = 0.40,
+    w_risk: float = 0.30,
+    from_period: Optional[tuple] = None,
+    to_period: Optional[tuple] = None,
+) -> dict:
     """
     Main entry point. Pulls data from DB and returns full health score breakdown.
 
-    Returns:
-        {
-            "score": 74,
-            "grade": "B",
-            "label": "Moderate",
-            "color": "amber",
-            "momentum": 65.0,
-            "target_achievement": 78.0,
-            "risk_flags": 80.0,
-            "kpis_green": 12,
-            "kpis_yellow": 4,
-            "kpis_red": 3,
-            "kpis_grey": 5,
-            "months_of_data": 24,
-            "needs_attention": [...],  # top 5 red/yellow KPIs
-            "doing_well": [...],       # top 5 green KPIs
-            "momentum_trend": "improving" | "stable" | "declining",
-        }
+    Parameters:
+        w_momentum:  weight for momentum component (default 0.30)
+        w_target:    weight for target achievement component (default 0.40)
+        w_risk:      weight for risk flags component (default 0.30)
+        from_period: optional (year, month) tuple for start of date range
+        to_period:   optional (year, month) tuple for end of date range
+
+    Returns dict with score, grade, component breakdowns, KPI detail lists,
+    narrative_detail, and weights.
     """
     # ── Pull monthly data ──────────────────────────────────────────────────────
-    rows = conn.execute(
-        "SELECT year, month, data_json FROM monthly_data WHERE workspace_id=? ORDER BY year, month",
-        [workspace_id]
-    ).fetchall()
+    query = "SELECT year, month, data_json FROM monthly_data WHERE workspace_id=?"
+    params: list = [workspace_id]
+    if from_period is not None:
+        query += " AND (year > ? OR (year = ? AND month >= ?))"
+        params.extend([from_period[0], from_period[0], from_period[1]])
+    if to_period is not None:
+        query += " AND (year < ? OR (year = ? AND month <= ?))"
+        params.extend([to_period[0], to_period[0], to_period[1]])
+    query += " ORDER BY year, month"
+    rows = conn.execute(query, params).fetchall()
 
     targets_rows = conn.execute(
         "SELECT kpi_key, target_value, direction FROM kpi_targets WHERE workspace_id=?",
@@ -194,7 +199,7 @@ def compute_health_score(conn, workspace_id: str) -> dict:
     risk              = _compute_risk_flags(kpi_avgs, targets, directions)
 
     # Weighted composite
-    raw_score = (momentum * 0.30) + (target_achieve * 0.40) + (risk * 0.30)
+    raw_score = (momentum * w_momentum) + (target_achieve * w_target) + (risk * w_risk)
     score = round(raw_score)
 
     # ── Grade and label ────────────────────────────────────────────────────────
@@ -256,6 +261,53 @@ def compute_health_score(conn, workspace_id: str) -> dict:
     else:
         momentum_trend = "declining"
 
+    # ── Narrative detail ─────────────────────────────────────────────────────
+    # Score meaning
+    if score >= 85:
+        score_meaning = (
+            f"A score of {score}/100 means the vast majority of your tracked KPIs are on or above target. "
+            "Your business health is excellent — maintain current strategies and look for expansion opportunities."
+        )
+    elif score >= 70:
+        score_meaning = (
+            f"A score of {score}/100 means most of your tracked KPIs are performing well with a few areas to monitor. "
+            "Your business health is good — focus on the yellow/red KPIs to push into excellent territory."
+        )
+    elif score >= 55:
+        score_meaning = (
+            f"A score of {score}/100 means a meaningful portion of your KPIs are below target. "
+            "Your business health is moderate — prioritise the underperforming metrics to prevent further decline."
+        )
+    elif score >= 40:
+        score_meaning = (
+            f"A score of {score}/100 means many of your tracked KPIs are significantly off-target. "
+            "Your business health needs work — focused corrective action is required on revenue, retention, and efficiency metrics."
+        )
+    else:
+        score_meaning = (
+            f"A score of {score}/100 means the majority of your tracked KPIs are significantly off-target. "
+            "Your business health is in the critical zone — immediate corrective action is needed across revenue, retention, and efficiency metrics."
+        )
+
+    top_drags = [{"key": k, "gap_pct": round((1 - p) * 100, 1)} for k, p in red_kpis[:3]]
+    top_wins  = [{"key": k, "gap_pct": round((p - 1) * 100, 1)} for k, p in green_kpis[:3]]
+
+    primary_action = ""
+    if red_kpis:
+        worst_key = red_kpis[0][0]
+        worst_gap = round((1 - red_kpis[0][1]) * 100, 1)
+        primary_action = (
+            f"Your most critical metric is '{worst_key}' which is {worst_gap}% below target. "
+            f"Investigate root causes for {worst_key} and develop a 30-day recovery plan."
+        )
+
+    narrative_detail = {
+        "score_meaning":  score_meaning,
+        "top_drags":      top_drags,
+        "top_wins":       top_wins,
+        "primary_action": primary_action,
+    }
+
     return {
         "score":              score,
         "grade":              grade,
@@ -269,7 +321,13 @@ def compute_health_score(conn, workspace_id: str) -> dict:
         "kpis_red":           len(red_kpis),
         "kpis_grey":          len(grey_kpis),
         "months_of_data":     len(rows),
-        "needs_attention":    [k for k, _ in (red_kpis + yellow_kpis)[:6]],
-        "doing_well":         [k for k, _ in green_kpis[:6]],
+        "needs_attention":    [k for k, _ in (red_kpis + yellow_kpis)],
+        "doing_well":         [k for k, _ in green_kpis],
         "momentum_trend":     momentum_trend,
+        "green_kpis_detail":  [{"key": k, "pct": round(p * 100, 1)} for k, p in green_kpis],
+        "yellow_kpis_detail": [{"key": k, "pct": round(p * 100, 1)} for k, p in yellow_kpis],
+        "red_kpis_detail":    [{"key": k, "pct": round(p * 100, 1)} for k, p in red_kpis],
+        "grey_kpis_list":     grey_kpis,
+        "weights":            {"momentum": w_momentum, "target": w_target, "risk": w_risk},
+        "narrative_detail":   narrative_detail,
     }
