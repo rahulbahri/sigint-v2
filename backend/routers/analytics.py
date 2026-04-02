@@ -876,18 +876,16 @@ async def update_target(request: Request, kpi_key: str):
         (k["direction"] for k in KPI_DEFS if k["key"] == kpi_key), "higher"
     )
 
-    now = datetime.utcnow().isoformat()
     conn = get_db()
     try:
         conn.execute(
-            """INSERT INTO kpi_targets (kpi_key, target_value, unit, direction, workspace_id, last_updated)
-               VALUES (?,?,?,?,?,?)
+            """INSERT INTO kpi_targets (kpi_key, target_value, unit, direction, workspace_id)
+               VALUES (?,?,?,?,?)
                ON CONFLICT(kpi_key, workspace_id) DO UPDATE
                SET target_value=excluded.target_value,
                    unit=excluded.unit,
-                   direction=excluded.direction,
-                   last_updated=excluded.last_updated""",
-            (kpi_key, target_value, unit, direction, workspace_id, now)
+                   direction=excluded.direction""",
+            (kpi_key, target_value, unit, direction, workspace_id)
         )
         conn.commit()
     finally:

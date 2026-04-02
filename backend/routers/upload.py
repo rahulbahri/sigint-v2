@@ -257,17 +257,15 @@ def seed_demo_actuals(request: Request):
                 "SELECT kpi_key FROM kpi_targets WHERE workspace_id=?", (workspace_id,)
             ).fetchall()
         }
-        now_iso = datetime.utcnow().isoformat()
         for kpi_key, target_value, direction in _DEFAULT_TARGETS:
             if kpi_key not in existing_targets:
                 conn.execute(
-                    """INSERT INTO kpi_targets (kpi_key, target_value, direction, workspace_id, last_updated)
-                       VALUES (?,?,?,?,?)
+                    """INSERT INTO kpi_targets (kpi_key, target_value, direction, workspace_id)
+                       VALUES (?,?,?,?)
                        ON CONFLICT(kpi_key, workspace_id) DO UPDATE
                        SET target_value=excluded.target_value,
-                           direction=excluded.direction,
-                           last_updated=excluded.last_updated""",
-                    (kpi_key, target_value, direction, workspace_id, now_iso)
+                           direction=excluded.direction""",
+                    (kpi_key, target_value, direction, workspace_id)
                 )
         conn.commit()
         _audit("data_seed", "upload", str(upload_id), "Demo actuals seeded")
