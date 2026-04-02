@@ -206,32 +206,49 @@ function KpiSlideOut({ kpi: initialKpi, status: initialStatus, onClose, onNaviga
     ? { arrow: '\u2193', text: 'Lower is better', color: 'text-blue-600' }
     : null
 
-  // For "higher is better": positive gapPct = above target (good), negative = below (bad)
-  // For "lower is better": gapPct = ((target - actual) / target * 100) — positive means BETTER (actual is below target)
-  const gapPct = (currentKpi?.avg != null && currentKpi?.target)
-    ? (currentKpi.direction === 'lower'
-        ? ((currentKpi.target - currentKpi.avg) / Math.abs(currentKpi.target) * 100).toFixed(1)
-        : ((currentKpi.avg / currentKpi.target - 1) * 100).toFixed(1))
-    : null
-
   const isLowerBetter = currentKpi?.direction === 'lower'
 
-  const narrative = () => {
-    if (!currentKpi?.avg || !currentKpi?.target) return `No target has been set for ${label}. Add a target in Settings to track performance.`
-
+  // Gap calculation: always shows how far from target in absolute terms
+  // Positive = better than target, Negative = worse than target (regardless of direction)
+  const gapPct = (() => {
+    if (currentKpi?.avg == null || !currentKpi?.target) return null
+    const a = currentKpi.avg, t = currentKpi.target
+    if (t === 0) return null
     if (isLowerBetter) {
-      // Lower is better logic
-      if (currentKpi.avg <= currentKpi.target) {
-        return `${label} is at ${avg} against a target of ${target} — performing well below target (this is good for this metric). This is a "lower is better" metric, meaning a lower value indicates stronger performance. Currently ${Math.abs(gapPct)}% better than target.`
+      // Lower is better: being below target is GOOD
+      // Gap = how much better/worse: (target - actual) / |target| * 100
+      return ((t - a) / Math.abs(t) * 100).toFixed(1)
+    } else {
+      // Higher is better: being above target is GOOD
+      return ((a / t - 1) * 100).toFixed(1)
+    }
+  })()
+
+  // Determine if the KPI is actually performing well or poorly based on direction
+  const isPerformingWell = (() => {
+    if (currentKpi?.avg == null || !currentKpi?.target) return null
+    if (isLowerBetter) return currentKpi.avg <= currentKpi.target
+    return currentKpi.avg >= currentKpi.target
+  })()
+
+  const narrative = () => {
+    if (currentKpi?.avg == null || !currentKpi?.target) return `No target has been set for ${label}. Add a target in Settings to track performance.`
+    const a = currentKpi.avg, t = currentKpi.target
+    const directionNote = isLowerBetter
+      ? 'This is a "lower is better" metric — a lower value means stronger performance.'
+      : 'This is a "higher is better" metric — a higher value means stronger performance.'
+
+    if (isPerformingWell) {
+      const absDiff = Math.abs(gapPct)
+      return `${label} is at ${avg} against a target of ${target}. The current value is ${absDiff}% better than the target — this KPI is on track. ${directionNote}`
+    } else {
+      const absDiff = Math.abs(gapPct)
+      if (isLowerBetter) {
+        return `${label} is at ${avg}, which is ${absDiff}% above the target of ${target}. Since lower values are better for this metric, this KPI needs to come down. ${directionNote}`
       } else {
-        return `${label} is at ${avg}, which is ${Math.abs(gapPct)}% above the target of ${target}. This is a "lower is better" metric, meaning the value needs to come down. This is dragging down your health score and needs attention.`
+        return `${label} is at ${avg}, which is ${absDiff}% below the target of ${target}. This KPI needs attention to improve. ${directionNote}`
       }
     }
-
-    // Higher is better (default)
-    if (currentStatus === 'green') return `${label} is performing at ${avg} against a target of ${target} — ${gapPct > 0 ? `${gapPct}% above target` : 'on track'}. This is a positive signal for your business health.`
-    if (currentStatus === 'red') return `${label} is at ${avg}, which is ${Math.abs(gapPct)}% below the target of ${target}. This is dragging down your health score and needs attention.`
-    return `${label} is at ${avg} against a target of ${target} — within watch range. Monitor closely over the next 1-2 months.`
   }
 
   // Fetch enriched detail from API
@@ -337,8 +354,8 @@ function KpiSlideOut({ kpi: initialKpi, status: initialStatus, onClose, onNaviga
               <div className="text-3xl font-extrabold text-slate-900">{avg}</div>
               <div className="text-slate-400 text-[11px] mt-0.5">6-month avg vs target: <span className="font-semibold text-slate-600">{target}</span></div>
               {gapPct !== null && (
-                <div className={`text-xs font-bold mt-1 ${currentStatus === 'green' ? 'text-emerald-600' : currentStatus === 'red' ? 'text-red-600' : 'text-amber-600'}`}>
-                  {gapPct > 0 ? '+' : ''}{gapPct}% vs target
+                <div className={`text-xs font-bold mt-1 ${isPerformingWell ? 'text-emerald-600' : 'text-red-600'}`}>
+                  {isPerformingWell ? `+${Math.abs(gapPct)}% vs target (${isLowerBetter ? 'below' : 'above'} — good)` : `-${Math.abs(gapPct)}% vs target (${isLowerBetter ? 'above' : 'below'} — needs work)`}
                 </div>
               )}
             </div>
@@ -395,7 +412,8 @@ function KpiSlideOut({ kpi: initialKpi, status: initialStatus, onClose, onNaviga
               {/* Your Data — last 6 months */}
               {detail.time_series && detail.time_series.length > 0 && (
                 <div>
-                  <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400 mb-1.5">Your Data</p>
+                  <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400 mb-0.5">Your Data</p>
+                  <p className="text-[9px] text-slate-400 mb-1.5">Monthly actuals from your uploaded data (last 6 months shown)</p>
                   <div className="bg-slate-50 rounded-lg overflow-hidden">
                     <table className="w-full text-[11px]">
                       <thead>
@@ -435,7 +453,7 @@ function KpiSlideOut({ kpi: initialKpi, status: initialStatus, onClose, onNaviga
               )}
 
               {/* Cause & Effect Chain */}
-              {detail.causal_chain && detail.causal_chain.length > 0 && (
+              {detail.causal_chain && (detail.causal_chain.children?.length > 0 || detail.downstream_impact?.length > 0) && (
                 <div>
                   <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400 mb-2">Cause & Effect Chain</p>
                   <div className="bg-slate-50 rounded-xl p-3">
@@ -450,8 +468,8 @@ function KpiSlideOut({ kpi: initialKpi, status: initialStatus, onClose, onNaviga
                     </div>
                     {/* Downstream tree */}
                     <div className="ml-2 border-l-2 border-slate-300 pl-3 space-y-1.5 mt-1">
-                      {detail.causal_chain.map((node, i) => {
-                        const nodeKey = typeof node === 'string' ? node : node.key || node
+                      {(detail.causal_chain.children || detail.downstream_impact || []).map((node, i) => {
+                        const nodeKey = typeof node === 'string' ? node : (node.node || node.key || node)
                         const nodeLabel = formatKpiLabel(nodeKey)
                         const nodeStatus = typeof node === 'object' ? node.status : null
                         const nodeColor = nodeStatus === 'green' ? 'bg-emerald-100 text-emerald-700'
@@ -478,7 +496,7 @@ function KpiSlideOut({ kpi: initialKpi, status: initialStatus, onClose, onNaviga
                             {nodeChildren.length > 0 && (
                               <div className="ml-4 border-l border-slate-200 pl-2.5 mt-1 space-y-1">
                                 {nodeChildren.map((child, ci) => {
-                                  const childKey = typeof child === 'string' ? child : child.key || child
+                                  const childKey = typeof child === 'string' ? child : (child.node || child.key || child)
                                   const childLabel = formatKpiLabel(childKey)
                                   const childStatus = typeof child === 'object' ? child.status : null
                                   const childColor = childStatus === 'green' ? 'bg-emerald-100 text-emerald-700'
@@ -919,12 +937,14 @@ function KpiCard({ kpi, status, onOpen }) {
   const label = formatKpiLabel(kpi.key)
   const avg    = kpi.avg  != null ? `${kpi.avg}${kpi.unit || ''}` : '—'
   const target = kpi.target != null ? `${kpi.target}${kpi.unit || ''}` : '—'
-  // For "lower is better": positive = better than target (actual below target)
+  // Direction-aware gap: positive = performing well, negative = underperforming
+  const isLower = kpi.direction === 'lower'
   const gapPct = (kpi.avg != null && kpi.target)
-    ? (kpi.direction === 'lower'
+    ? (isLower
         ? ((kpi.target - kpi.avg) / Math.abs(kpi.target) * 100).toFixed(1)
         : ((kpi.avg / kpi.target - 1) * 100).toFixed(1))
     : null
+  const isWell = isLower ? kpi.avg <= kpi.target : kpi.avg >= kpi.target
   const sparkColor = status === 'green' ? '#059669' : status === 'red' ? '#DC2626' : '#D97706'
 
   return (
@@ -943,8 +963,8 @@ function KpiCard({ kpi, status, onOpen }) {
         <span className="text-slate-900 text-base font-extrabold leading-none">{avg}</span>
         <span className="text-slate-400 text-[10px]">vs {target}</span>
         {gapPct !== null && (
-          <span className={`text-[11px] font-bold ${s.text}`}>
-            {gapPct > 0 ? '+' : ''}{gapPct}%
+          <span className={`text-[11px] font-bold ${isWell ? 'text-emerald-600' : s.text}`}>
+            {isWell ? `+${Math.abs(gapPct)}% ${isLower ? 'below' : 'above'}` : `-${Math.abs(gapPct)}% ${isLower ? 'above' : 'below'}`}
           </span>
         )}
       </div>
@@ -1113,6 +1133,7 @@ function PeriodSelector({ selected, periodDates, onSelect }) {
   const [toYear, setToYear]       = useState(periodDates?.toYear ?? now.getFullYear())
   const [open, setOpen]           = useState(false)
   const [activePreset, setActivePreset] = useState(selected || 'All')
+  const [validationMsg, setValidationMsg] = useState(null)
 
   // Sync from parent props when they change
   useEffect(() => {
@@ -1163,22 +1184,19 @@ function PeriodSelector({ selected, periodDates, onSelect }) {
   }
 
   const handleManualChange = (fm, fy, tm, ty) => {
-    // Validate: From cannot be after To. Auto-adjust the other end.
     const fromVal = fy * 12 + fm
     const toVal = ty * 12 + tm
     if (fromVal > toVal) {
-      // If from was changed to be after to, adjust to to match from
-      // If to was changed to be before from, adjust from to match to
-      // We detect which changed by comparing with current state
+      setValidationMsg('"To" date cannot be before "From" date. Selection was adjusted.')
+      setTimeout(() => setValidationMsg(null), 4000)
       const curFromVal = fromYear * 12 + fromMonth
-      const curToVal = toYear * 12 + toMonth
       if (fm !== fromMonth || fy !== fromYear) {
-        // From was changed — adjust To to match From
         tm = fm; ty = fy
       } else {
-        // To was changed — adjust From to match To
         fm = tm; fy = ty
       }
+    } else {
+      setValidationMsg(null)
     }
     applyFromTo(fm, fy, tm, ty, null)
   }
@@ -1214,6 +1232,13 @@ function PeriodSelector({ selected, periodDates, onSelect }) {
               </button>
             ))}
           </div>
+          {/* Validation message */}
+          {validationMsg && (
+            <div className="bg-amber-50 border border-amber-200 rounded-lg px-2.5 py-1.5 mb-2 flex items-center gap-1.5">
+              <AlertTriangle size={10} className="text-amber-500 flex-shrink-0" />
+              <span className="text-[10px] text-amber-700 font-medium">{validationMsg}</span>
+            </div>
+          )}
           {/* From selects */}
           <div className="space-y-2">
             <div>
@@ -1275,6 +1300,28 @@ export default function HomeScreen({ onNavigate, onAskAnika }) {
   const [selectedPeriod, setSelectedPeriod] = useState('All Data')
   const [periodDates, setPeriodDates] = useState({ fromMonth: 1, fromYear: new Date().getFullYear() - 1, toMonth: new Date().getMonth() + 1, toYear: new Date().getFullYear() })
   const [activeWeights, setActiveWeights] = useState(null)
+  const [settingsLoaded, setSettingsLoaded] = useState(false)
+
+  // Load persisted period selection from company_settings on mount
+  useEffect(() => {
+    axios.get('/api/company-settings')
+      .then(r => {
+        const s = r.data || {}
+        if (s.home_period_preset) {
+          setSelectedPeriod(s.home_period_preset)
+        }
+        if (s.home_period_dates) {
+          try {
+            const d = JSON.parse(s.home_period_dates)
+            if (d.fromMonth && d.fromYear && d.toMonth && d.toYear) {
+              setPeriodDates(d)
+            }
+          } catch {}
+        }
+        setSettingsLoaded(true)
+      })
+      .catch(() => setSettingsLoaded(true))
+  }, [])
 
   const load = useCallback((periodParams = {}, weightOverrides = null) => {
     setLoading(true); setError(false)
@@ -1285,9 +1332,9 @@ export default function HomeScreen({ onNavigate, onAskAnika }) {
     if (periodParams.to_month) params.set('to_month', periodParams.to_month)
     const w = weightOverrides || null
     if (w) {
-      params.set('weight_momentum', w.momentum)
-      params.set('weight_target', w.target)
-      params.set('weight_risk', w.risk)
+      params.set('w_momentum', w.momentum)
+      params.set('w_target', w.target)
+      params.set('w_risk', w.risk)
     }
     const qs = params.toString()
     axios.get(`/api/home${qs ? `?${qs}` : ''}`)
@@ -1311,15 +1358,35 @@ export default function HomeScreen({ onNavigate, onAskAnika }) {
 
   const handlePeriodChange = (preset) => {
     setSelectedPeriod(preset.label)
-    // Support direct _params from the from-to picker
     const params = preset._params ? preset._params : computePeriodParams(preset)
-    if (params.from_year) {
-      setPeriodDates({ fromMonth: params.from_month, fromYear: params.from_year, toMonth: params.to_month, toYear: params.to_year })
-    }
+    const newDates = params.from_year
+      ? { fromMonth: params.from_month, fromYear: params.from_year, toMonth: params.to_month, toYear: params.to_year }
+      : periodDates
+    if (params.from_year) setPeriodDates(newDates)
     load(params)
+    // Persist selection to DB for all team members
+    axios.put('/api/company-settings', {
+      home_period_preset: preset.label,
+      home_period_dates: JSON.stringify(newDates),
+    }).catch(() => {})
   }
 
-  useEffect(() => { load() }, [load])
+  // Initial load: wait for settings, then load with persisted period
+  useEffect(() => {
+    if (!settingsLoaded) return
+    if (selectedPeriod === 'All Data') {
+      load()
+    } else {
+      // Rebuild params from persisted dates
+      const params = {
+        from_year: periodDates.fromYear,
+        from_month: periodDates.fromMonth,
+        to_year: periodDates.toYear,
+        to_month: periodDates.toMonth,
+      }
+      load(params)
+    }
+  }, [settingsLoaded]) // eslint-disable-line react-hooks/exhaustive-deps
 
   if (loading) return (
     <div className="flex items-center justify-center h-64">
@@ -1508,11 +1575,14 @@ export default function HomeScreen({ onNavigate, onAskAnika }) {
               const kLabel = formatKpiLabel(kpi.key)
               const kAvg = kpi.avg != null ? `${kpi.avg}${kpi.unit || ''}` : '--'
               const kTarget = kpi.target != null ? `${kpi.target}${kpi.unit || ''}` : '--'
+              const kIsLower = kpi.direction === 'lower'
               const kGap = (kpi.avg != null && kpi.target)
-                ? (kpi.direction === 'lower'
+                ? (kIsLower
                     ? ((kpi.target - kpi.avg) / Math.abs(kpi.target) * 100).toFixed(1)
                     : ((kpi.avg / kpi.target - 1) * 100).toFixed(1))
                 : null
+              // For critical cards: always underperforming, so show how far behind
+              const kIsWell = kIsLower ? kpi.avg <= kpi.target : kpi.avg >= kpi.target
               const kInfo = KPI_INFO[kpi.key]
               return (
                 <button
@@ -1525,7 +1595,9 @@ export default function HomeScreen({ onNavigate, onAskAnika }) {
                       <div className="flex items-center gap-2 mb-1">
                         <span className="text-slate-800 text-[13px] font-bold">{kLabel}</span>
                         {kGap !== null && (
-                          <span className="text-red-600 text-[12px] font-bold">{kGap > 0 ? '+' : ''}{kGap}% vs target</span>
+                          <span className="text-red-600 text-[12px] font-bold">
+                            {kIsWell ? `+${Math.abs(kGap)}% ${kIsLower ? 'below' : 'above'} target` : `${Math.abs(kGap)}% ${kIsLower ? 'above' : 'below'} target`}
+                          </span>
                         )}
                       </div>
                       <div className="flex items-center gap-3 mb-1.5">

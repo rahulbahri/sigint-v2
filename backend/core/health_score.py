@@ -70,6 +70,53 @@ def _compute_target_achievement(
     return round((green / scored) * 100, 1)
 
 
+def _is_on_target(avg: float, tval: float, direction: str) -> bool:
+    """Check if a KPI is on target (within 2% tolerance)."""
+    if direction == "higher":
+        return avg >= tval * 0.98 if tval >= 0 else avg >= tval * 1.02
+    else:  # lower is better
+        return avg <= tval * 1.02 if tval >= 0 else avg <= tval * 0.98
+
+
+def _is_critical(avg: float, tval: float, direction: str) -> bool:
+    """Check if a KPI is critically off target (>10% miss)."""
+    if direction == "higher":
+        return avg < tval * 0.90 if tval >= 0 else avg < tval * 1.10
+    else:  # lower is better
+        return avg > tval * 1.10 if tval >= 0 else avg > tval * 0.90
+
+
+def _gap_pct(avg: float, tval: float, direction: str) -> float:
+    """
+    Compute how well a KPI is performing vs target as a 0-2+ ratio.
+    >= 1.0 means on or above target.  < 1.0 means below target.
+    Works correctly with negative values and both directions.
+    """
+    if direction == "higher":
+        if tval == 0:
+            return 1.0 if avg >= 0 else 0.0
+        # For higher-is-better: how close is avg to target?
+        if tval > 0:
+            return avg / tval
+        else:
+            # Negative target (unusual): closer to 0 is better
+            return tval / avg if avg != 0 else 0.0
+    else:  # lower is better
+        # For lower-is-better: being BELOW target is GOOD
+        if avg == tval:
+            return 1.0
+        if tval == 0:
+            return 1.0 if avg <= 0 else 0.0
+        # How much better/worse than target?
+        # If avg < target (good): gap > 1.0
+        # If avg > target (bad): gap < 1.0
+        if tval > 0:
+            return tval / avg if avg > 0 else 2.0  # avg <= 0 when target > 0 means excellent
+        else:
+            # Both negative: e.g. avg=-5, target=-3 (lower better means -5 < -3, good)
+            return avg / tval if tval != 0 else 1.0
+
+
 def _compute_target_achievement_with_directions(
     kpi_avgs: dict,
     targets: dict,
@@ -88,14 +135,8 @@ def _compute_target_achievement_with_directions(
             continue
         scored += 1
         direction = directions.get(key, "higher")
-        if direction == "higher":
-            pct = avg / tval if tval else 0
-            if pct >= 0.98:
-                green += 1
-        else:
-            pct = tval / avg if avg else 0
-            if pct >= 0.98:
-                green += 1
+        if _is_on_target(avg, tval, direction):
+            green += 1
     if scored == 0:
         return 50.0
     return round((green / scored) * 100, 1)
@@ -121,14 +162,8 @@ def _compute_risk_flags(
             continue
         scored += 1
         direction = directions.get(key, "higher")
-        if direction == "higher":
-            pct = avg / tval if tval else 0
-            if pct < 0.90:
-                red += 1
-        else:
-            pct = tval / avg if avg else 0
-            if pct < 0.90:
-                red += 1
+        if _is_critical(avg, tval, direction):
+            red += 1
     if scored == 0:
         return 70.0  # no targets = moderate score
     return round(max(0.0, (1 - red / scored) * 100), 1)
@@ -231,22 +266,13 @@ def compute_health_score(
         if tval is None:
             grey_kpis.append(key)
             continue
-        if dirn == "higher":
-            pct = avg / tval if tval else 0
-            if pct >= 0.98:
-                green_kpis.append((key, pct))
-            elif pct >= 0.90:
-                yellow_kpis.append((key, pct))
-            else:
-                red_kpis.append((key, pct))
+        pct = _gap_pct(avg, tval, dirn)
+        if _is_on_target(avg, tval, dirn):
+            green_kpis.append((key, pct))
+        elif _is_critical(avg, tval, dirn):
+            red_kpis.append((key, pct))
         else:
-            pct = tval / avg if avg else 0
-            if pct >= 0.98:
-                green_kpis.append((key, pct))
-            elif pct >= 0.90:
-                yellow_kpis.append((key, pct))
-            else:
-                red_kpis.append((key, pct))
+            yellow_kpis.append((key, pct))
 
     # Sort for display (worst first for red, best first for green)
     red_kpis.sort(key=lambda x: x[1])

@@ -11,7 +11,7 @@ from fastapi import APIRouter, Query, Request
 
 from core.database import get_db
 from core.deps import _get_workspace
-from core.health_score import compute_health_score
+from core.health_score import compute_health_score, _is_on_target, _is_critical, _gap_pct
 from core.kpi_defs import KPI_DEFS, ALL_CAUSATION_RULES, BENCHMARKS
 
 router = APIRouter()
@@ -294,23 +294,20 @@ def get_kpi_detail(kpi_key: str, request: Request):
 
     conn.close()
 
-    # Compute current status (green / yellow / red / grey)
+    # Compute current status (green / yellow / red / grey) using direction-aware helpers
     status = "grey"
     pct_of_target = None
     if time_series and target_value is not None:
         recent_vals = [pt["value"] for pt in time_series[-3:]]
         avg = sum(recent_vals) / len(recent_vals)
-        if direction == "lower":
-            pct = target_value / avg if avg else 0
-        else:
-            pct = avg / target_value if target_value else 0
-        pct_of_target = round(pct * 100, 1)
-        if pct >= 0.98:
+        gap = _gap_pct(avg, target_value, direction)
+        pct_of_target = round(gap * 100, 1)
+        if _is_on_target(avg, target_value, direction):
             status = "green"
-        elif pct >= 0.90:
-            status = "yellow"
-        else:
+        elif _is_critical(avg, target_value, direction):
             status = "red"
+        else:
+            status = "yellow"
 
     # Direction guidance
     direction_label = "Higher is better" if direction == "higher" else "Lower is better"
