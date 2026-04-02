@@ -7,7 +7,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 import pytest
 from core.health_score import (
     _compute_momentum,
-    _compute_target_achievement,
+    _compute_target_achievement_with_directions as _compute_target_achievement,
     _compute_risk_flags,
 )
 

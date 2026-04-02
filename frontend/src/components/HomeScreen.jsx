@@ -926,6 +926,71 @@ function DistributionModal({ health, onClose, onNavigate, onOpenKpi }) {
   )
 }
 
+// ── Composite Score Breakdown (mini bar chart for the 4 signals) ─────────────
+function CompositeBreakdown({ kpi, compact = false }) {
+  const signals = [
+    { key: 'gap',    label: 'Gap',    value: kpi.gap_score,    color: '#DC2626' },
+    { key: 'trend',  label: 'Trend',  value: kpi.trend_score,  color: '#D97706' },
+    { key: 'impact', label: 'Impact', value: kpi.impact_score, color: '#7c3aed' },
+    { key: 'domain', label: 'Domain', value: kpi.domain_score, color: '#0055A4' },
+  ].filter(s => s.value != null)
+
+  if (signals.length === 0) return null
+
+  if (compact) {
+    return (
+      <div className="flex items-center gap-0.5">
+        {signals.map(s => (
+          <div key={s.key} className="relative group">
+            <div
+              className="h-1.5 rounded-full"
+              style={{ width: `${Math.max(s.value / 100 * 24, 2)}px`, backgroundColor: s.color, opacity: 0.7 }}
+            />
+            <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1 hidden group-hover:block z-20">
+              <div className="bg-slate-900 text-white text-[9px] px-1.5 py-0.5 rounded whitespace-nowrap">
+                {s.label}: {s.value}
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
+    )
+  }
+
+  return (
+    <div className="flex items-center gap-2">
+      {signals.map(s => (
+        <div key={s.key} className="flex items-center gap-1">
+          <div className="w-1.5 h-1.5 rounded-full flex-shrink-0" style={{ backgroundColor: s.color }} />
+          <span className="text-[9px] text-slate-400">{s.label}</span>
+          <span className="text-[9px] font-bold" style={{ color: s.color }}>{s.value}</span>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+// ── Domain Badge ─────────────────────────────────────────────────────────────
+const DOMAIN_COLORS = {
+  cashflow:      { bg: 'bg-blue-100',    text: 'text-blue-700' },
+  risk:          { bg: 'bg-red-100',     text: 'text-red-700' },
+  growth:        { bg: 'bg-emerald-100', text: 'text-emerald-700' },
+  revenue:       { bg: 'bg-violet-100',  text: 'text-violet-700' },
+  retention:     { bg: 'bg-amber-100',   text: 'text-amber-700' },
+  profitability: { bg: 'bg-cyan-100',    text: 'text-cyan-700' },
+  efficiency:    { bg: 'bg-slate-100',   text: 'text-slate-600' },
+  other:         { bg: 'bg-slate-100',   text: 'text-slate-500' },
+}
+
+function DomainBadge({ domain, label }) {
+  const dc = DOMAIN_COLORS[domain] || DOMAIN_COLORS.other
+  return (
+    <span className={`text-[9px] font-semibold px-1.5 py-0.5 rounded-full ${dc.bg} ${dc.text}`}>
+      {label || domain}
+    </span>
+  )
+}
+
 // ── KPI Card (compact, clickable) ─────────────────────────────────────────────
 function KpiCard({ kpi, status, onOpen }) {
   const s = {
@@ -953,7 +1018,10 @@ function KpiCard({ kpi, status, onOpen }) {
       className={`w-full text-left card p-3.5 ${s.bg} ${s.border} ${s.hover} hover:shadow-md transition-all group cursor-pointer`}
     >
       <div className="flex items-start justify-between gap-2 mb-1.5">
-        <p className="text-slate-800 text-[12px] font-semibold leading-tight flex-1">{label}</p>
+        <div className="flex items-center gap-1.5 flex-1 min-w-0 flex-wrap">
+          <p className="text-slate-800 text-[12px] font-semibold leading-tight">{label}</p>
+          {kpi.domain && <DomainBadge domain={kpi.domain} label={kpi.domain_label} />}
+        </div>
         <div className="flex items-center gap-1 flex-shrink-0">
           <Sparkline data={kpi.sparkline} color={sparkColor} width={56} height={22} />
           <ChevronRight size={12} className="text-slate-300 group-hover:text-slate-500 transition-colors" />
@@ -1555,7 +1623,7 @@ export default function HomeScreen({ onNavigate, onAskAnika }) {
         </div>
       </div>
 
-      {/* ── Top 3 Most Critical ──────────────────────────────────────── */}
+      {/* ── Top 3 Most Critical (Composite Ranked) ─────────────────── */}
       {topCritical.length > 0 && (
         <div>
           <div className="flex items-center justify-between mb-1.5">
@@ -1569,12 +1637,30 @@ export default function HomeScreen({ onNavigate, onAskAnika }) {
               Full Analysis <ArrowRight size={10}/>
             </button>
           </div>
-          <p className="text-[10px] text-slate-400 mb-2.5 leading-snug">
-            Ranked by distance from target — the KPIs furthest below their target for the selected period appear first.
-            {topCritical[0]?.gap_pct != null && (
-              <span className="text-slate-500 font-medium"> #{1} is {topCritical[0].gap_pct}% below target.</span>
-            )}
-          </p>
+
+          {/* Methodology explanation */}
+          {data?.composite_methodology && (
+            <div className="bg-slate-50 rounded-xl p-3 mb-3">
+              <p className="text-[10px] text-slate-500 leading-snug mb-2">
+                <span className="font-bold text-slate-600">Composite Criticality Score</span> — ranked by a multi-signal formula, not just distance from target.
+              </p>
+              <div className="flex items-center gap-3 flex-wrap">
+                {data.composite_methodology.signals.map(s => (
+                  <div key={s.key} className="flex items-center gap-1 group relative">
+                    <div className="w-1.5 h-1.5 rounded-full flex-shrink-0" style={{ backgroundColor: s.key === 'gap' ? '#DC2626' : s.key === 'trend' ? '#D97706' : s.key === 'impact' ? '#7c3aed' : '#0055A4' }} />
+                    <span className="text-[10px] text-slate-500">{s.label}</span>
+                    <span className="text-[10px] font-bold text-slate-600">{s.weight}%</span>
+                    <div className="absolute bottom-full left-0 mb-1 hidden group-hover:block z-20">
+                      <div className="bg-slate-900 text-white text-[9px] px-2 py-1 rounded max-w-[180px] leading-snug">
+                        {s.desc}
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
           <div className="space-y-2">
             {topCritical.map(kpi => {
               const kLabel = formatKpiLabel(kpi.key)
@@ -1586,11 +1672,11 @@ export default function HomeScreen({ onNavigate, onAskAnika }) {
                     ? ((kpi.target - kpi.avg) / Math.abs(kpi.target) * 100).toFixed(1)
                     : ((kpi.avg / kpi.target - 1) * 100).toFixed(1))
                 : null
-              // For critical cards: always underperforming, so show how far behind
               const kIsWell = kIsLower ? kpi.avg <= kpi.target : kpi.avg >= kpi.target
               const kInfo = KPI_INFO[kpi.key]
               const kRank = kpi.rank
               const kGapFromApi = kpi.gap_pct
+              const kComposite = kpi.composite
               return (
                 <button
                   key={kpi.key}
@@ -1599,13 +1685,14 @@ export default function HomeScreen({ onNavigate, onAskAnika }) {
                 >
                   <div className="flex items-start justify-between gap-3">
                     <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2 mb-1">
+                      <div className="flex items-center gap-2 mb-1 flex-wrap">
                         {kRank && (
                           <span className="bg-red-600 text-white text-[9px] font-bold w-4 h-4 rounded-full flex items-center justify-center flex-shrink-0">
                             {kRank}
                           </span>
                         )}
                         <span className="text-slate-800 text-[13px] font-bold">{kLabel}</span>
+                        {kpi.domain && <DomainBadge domain={kpi.domain} label={kpi.domain_label} />}
                         {kGapFromApi != null ? (
                           <span className="text-red-600 text-[12px] font-bold">{kGapFromApi}% below target</span>
                         ) : kGap !== null ? (
@@ -1617,7 +1704,18 @@ export default function HomeScreen({ onNavigate, onAskAnika }) {
                       <div className="flex items-center gap-3 mb-1.5">
                         <span className="text-slate-900 text-lg font-extrabold">{kAvg}</span>
                         <span className="text-slate-400 text-[11px]">target: {kTarget}</span>
+                        {kComposite != null && (
+                          <span className="text-[10px] font-bold text-red-500 bg-red-100 px-1.5 py-0.5 rounded-full">
+                            Criticality: {kComposite}
+                          </span>
+                        )}
                       </div>
+                      {/* Composite breakdown (4-signal mini bars) */}
+                      {kpi.gap_score != null && (
+                        <div className="mb-1.5">
+                          <CompositeBreakdown kpi={kpi} />
+                        </div>
+                      )}
                       {/* Contextual narrative */}
                       <div className="space-y-1 mt-1">
                         {kInfo?.why && (
@@ -1647,7 +1745,7 @@ export default function HomeScreen({ onNavigate, onAskAnika }) {
         </div>
       )}
 
-      {/* ── Other Critical ──────────────────────────────────────────── */}
+      {/* ── Other Critical (by Business Domain) ─────────────────────── */}
       {otherCritical.length > 0 && (
         <div>
           <button
@@ -1658,28 +1756,55 @@ export default function HomeScreen({ onNavigate, onAskAnika }) {
             <span className="bg-red-100 text-red-700 text-[10px] font-bold px-1.5 py-0.5 rounded-full">{otherCritical.length}</span>
             <ChevronDown size={12} className={`text-slate-400 transition-transform ${showOtherCritical ? 'rotate-180' : ''}`} />
           </button>
-          {showOtherCritical && (
-            <div className="space-y-1 bg-slate-50 rounded-xl p-2">
-              {otherCritical.map(kpi => {
-                const kLabel = formatKpiLabel(kpi.key)
-                const kAvg = kpi.avg != null ? `${kpi.avg}${kpi.unit || ''}` : '--'
-                const kTarget = kpi.target != null ? `${kpi.target}${kpi.unit || ''}` : '--'
-                return (
-                  <button
-                    key={kpi.key}
-                    onClick={() => setSlideOut({ kpi, status: 'red' })}
-                    className="flex items-center gap-3 w-full text-left px-3 py-2 rounded-lg hover:bg-white transition-colors group"
-                  >
-                    <div className="w-1.5 h-1.5 rounded-full bg-red-500 flex-shrink-0" />
-                    <span className="text-[11px] font-semibold text-slate-700 flex-1 truncate">{kLabel}</span>
-                    <span className="text-[11px] text-slate-800 font-bold">{kAvg}</span>
-                    <span className="text-[10px] text-slate-400">vs {kTarget}</span>
-                    <ChevronRight size={11} className="text-slate-300 group-hover:text-slate-500 flex-shrink-0" />
-                  </button>
-                )
-              })}
-            </div>
-          )}
+          {showOtherCritical && (() => {
+            // Group other critical KPIs by domain
+            const byDomain = {}
+            otherCritical.forEach(kpi => {
+              const d = kpi.domain || 'other'
+              if (!byDomain[d]) byDomain[d] = { label: kpi.domain_label || d, kpis: [] }
+              byDomain[d].kpis.push(kpi)
+            })
+            const domainKeys = Object.keys(byDomain).sort((a, b) => {
+              const order = ['cashflow','risk','growth','revenue','retention','profitability','efficiency','other']
+              return order.indexOf(a) - order.indexOf(b)
+            })
+            return (
+              <div className="space-y-2">
+                {domainKeys.map(dk => (
+                  <div key={dk} className="bg-slate-50 rounded-xl p-2">
+                    <div className="flex items-center gap-1.5 px-2 mb-1">
+                      <DomainBadge domain={dk} label={byDomain[dk].label} />
+                      <span className="text-[10px] text-slate-400">{byDomain[dk].kpis.length} metric{byDomain[dk].kpis.length > 1 ? 's' : ''}</span>
+                    </div>
+                    {byDomain[dk].kpis.map(kpi => {
+                      const kLabel = formatKpiLabel(kpi.key)
+                      const kAvg = kpi.avg != null ? `${kpi.avg}${kpi.unit || ''}` : '--'
+                      const kTarget = kpi.target != null ? `${kpi.target}${kpi.unit || ''}` : '--'
+                      return (
+                        <button
+                          key={kpi.key}
+                          onClick={() => setSlideOut({ kpi, status: 'red' })}
+                          className="flex items-center gap-3 w-full text-left px-3 py-2 rounded-lg hover:bg-white transition-colors group"
+                        >
+                          <span className="text-[9px] font-bold text-red-500 bg-red-100 w-5 h-5 rounded-full flex items-center justify-center flex-shrink-0">
+                            {kpi.rank || '·'}
+                          </span>
+                          <span className="text-[11px] font-semibold text-slate-700 flex-1 truncate">{kLabel}</span>
+                          {kpi.composite != null && (
+                            <span className="text-[10px] font-bold text-red-500">{kpi.composite}</span>
+                          )}
+                          <span className="text-[11px] text-slate-800 font-bold">{kAvg}</span>
+                          <span className="text-[10px] text-slate-400">vs {kTarget}</span>
+                          <CompositeBreakdown kpi={kpi} compact />
+                          <ChevronRight size={11} className="text-slate-300 group-hover:text-slate-500 flex-shrink-0" />
+                        </button>
+                      )
+                    })}
+                  </div>
+                ))}
+              </div>
+            )
+          })()}
         </div>
       )}
 

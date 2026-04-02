@@ -9,6 +9,13 @@ import json
 import math
 from typing import Optional
 
+from core.criticality import (
+    compute_composite_criticality,
+    group_by_domain,
+    get_kpi_domain,
+    DOMAIN_LABELS,
+)
+
 
 def _compute_momentum(time_series_by_kpi: dict, directions: dict) -> float:
     """
@@ -334,6 +341,12 @@ def compute_health_score(
         "primary_action": primary_action,
     }
 
+    # ── Composite criticality scoring ─────────────────────────────────────────
+    composite_ranked = compute_composite_criticality(
+        kpi_avgs, targets, directions, time_series,
+    )
+    domain_groups = group_by_domain(composite_ranked)
+
     return {
         "score":              score,
         "grade":              grade,
@@ -360,4 +373,6 @@ def compute_health_score(
         "grey_kpis_list":     grey_kpis,
         "weights":            {"momentum": w_momentum, "target": w_target, "risk": w_risk},
         "narrative_detail":   narrative_detail,
+        "composite_ranked":   composite_ranked,
+        "domain_groups":      domain_groups,
     }

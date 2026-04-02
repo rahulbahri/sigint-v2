@@ -165,22 +165,65 @@ def get_home(
 
     conn.close()
 
-    # Enrich needs_attention with ranking data (gap_pct, rank)
+    # ── Composite criticality ranking ─────────────────────────────────────────
+    # Use the new multi-signal composite scores from health engine
+    composite_ranked = health.get("composite_ranked", [])
+    composite_map = {r["key"]: r for r in composite_ranked}
+
+    # Enrich needs_attention with composite ranking data
     ranked_map = {r["key"]: r for r in health.get("needs_attention_ranked", [])}
     needs_enriched = []
     for k in health["needs_attention"]:
         spot = _kpi_spotlight(k)
+        # Legacy gap data
         r = ranked_map.get(k)
         if r:
             spot["gap_pct"] = r["gap_pct"]
-            spot["rank"]    = r["rank"]
+        # Composite criticality data
+        cr = composite_map.get(k)
+        if cr:
+            spot["composite"]    = cr["composite"]
+            spot["gap_score"]    = cr["gap_score"]
+            spot["trend_score"]  = cr["trend_score"]
+            spot["impact_score"] = cr["impact_score"]
+            spot["domain_score"] = cr["domain_score"]
+            spot["domain"]       = cr["domain"]
+            spot["domain_label"] = cr["domain_label"]
         needs_enriched.append(spot)
+
+    # Re-sort needs_attention by composite score (most critical first)
+    needs_enriched.sort(key=lambda x: x.get("composite", 0), reverse=True)
+    for idx, item in enumerate(needs_enriched):
+        item["rank"] = idx + 1
+
+    # Enrich doing_well with domain info
+    doing_well_enriched = []
+    for k in health["doing_well"]:
+        spot = _kpi_spotlight(k)
+        cr = composite_map.get(k)
+        if cr:
+            spot["domain"]       = cr["domain"]
+            spot["domain_label"] = cr["domain_label"]
+        doing_well_enriched.append(spot)
+
+    # Domain groups for the business-area view
+    domain_groups = health.get("domain_groups", [])
 
     return {
         "health":          health,
         "data_period":     data_period,
         "needs_attention": needs_enriched,
-        "doing_well":      [_kpi_spotlight(k) for k in health["doing_well"]],
+        "doing_well":      doing_well_enriched,
+        "domain_groups":   domain_groups,
+        "composite_methodology": {
+            "signals": [
+                {"key": "gap",    "label": "Gap Severity",    "weight": 25, "desc": "How far the KPI is from its target"},
+                {"key": "trend",  "label": "Trend Momentum",  "weight": 25, "desc": "Rate of deterioration or improvement over recent months"},
+                {"key": "impact", "label": "Business Impact",  "weight": 30, "desc": "Downstream causal effect on other KPIs (from the causal graph)"},
+                {"key": "domain", "label": "Domain Urgency",  "weight": 20, "desc": "Business-area survival tier (Cash > Revenue > Retention > Profitability > Efficiency)"},
+            ],
+            "description": "Composite Criticality Score = (Gap × 25%) + (Trend × 25%) + (Impact × 30%) + (Domain × 20%). Higher score = more critical. This multi-signal approach prevents ranking KPIs solely by distance from target, and instead surfaces metrics with outsized business impact.",
+        },
     }
 
 
