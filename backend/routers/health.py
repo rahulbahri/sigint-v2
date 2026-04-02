@@ -178,6 +178,73 @@ def get_home(
 # Build lookup dicts once at import time
 _KPI_DEFS_MAP = {d["key"]: d for d in KPI_DEFS}
 
+# Data requirements: what raw data columns are needed to compute each KPI
+DATA_REQUIREMENTS = {
+    "revenue_growth":        ["Monthly revenue figures"],
+    "gross_margin":          ["Monthly revenue", "Cost of goods sold (COGS)"],
+    "operating_margin":      ["Monthly revenue", "COGS", "Operating expenses (OpEx)"],
+    "ebitda_margin":         ["EBITDA or (Revenue, COGS, OpEx, Depreciation & Amortization)"],
+    "cash_conv_cycle":       ["Days Sales Outstanding (DSO)", "Days Inventory Outstanding (DIO)", "Days Payable Outstanding (DPO)"],
+    "dso":                   ["Accounts receivable (AR)", "Monthly revenue"],
+    "ar_turnover":           ["Net credit sales", "Average accounts receivable"],
+    "avg_collection_period": ["AR Turnover Ratio (or data to compute it)"],
+    "cei":                   ["Beginning AR", "Monthly sales", "Ending AR", "Current AR"],
+    "ar_aging_current":      ["Current AR (0-30 days)", "Total AR"],
+    "ar_aging_overdue":      ["Overdue AR (30+ days)", "Total AR"],
+    "billable_utilization":  ["Billable hours", "Total available hours"],
+    "arr_growth":            ["Monthly or annual recurring revenue (ARR)"],
+    "nrr":                   ["Starting MRR", "Expansion revenue", "Churned revenue", "Contraction revenue"],
+    "burn_multiple":         ["Net burn (cash outflow)", "Net new ARR"],
+    "opex_ratio":            ["Operating expenses", "Monthly revenue"],
+    "contribution_margin":   ["Revenue", "COGS", "Variable costs"],
+    "revenue_quality":       ["Recurring revenue", "Total revenue"],
+    "cac_payback":           ["Customer acquisition cost (CAC)", "ARPU", "Gross margin percentage"],
+    "sales_efficiency":      ["New ARR", "Sales & marketing spend"],
+    "customer_concentration":["Revenue by customer (top customer revenue, total revenue)"],
+    "recurring_revenue":     ["Recurring revenue", "Total revenue"],
+    "churn_rate":            ["Lost customers per month", "Total customers"],
+    "operating_leverage":    ["Month-over-month change in operating income", "Month-over-month change in revenue"],
+    "growth_efficiency":     ["ARR growth rate", "Burn multiple"],
+    "revenue_momentum":      ["Current month revenue growth", "Annual average revenue growth"],
+    "revenue_fragility":     ["Customer concentration", "Churn rate", "Net revenue retention (NRR)"],
+    "burn_convexity":        ["Month-over-month burn multiple figures"],
+    "margin_volatility":     ["6 months of gross margin data"],
+    "pipeline_conversion":   ["MQL count", "Closed-won deal count"],
+    "customer_decay_slope":  ["Month-over-month churn rate figures"],
+    "customer_ltv":          ["ARPU", "Gross margin percentage", "Monthly churn rate"],
+    "pricing_power_index":   ["Month-over-month ARPU change", "Month-over-month customer volume change"],
+}
+
+
+def _build_causal_chain(
+    kpi_key: str, depth: int = 0, max_depth: int = 3, visited: Optional[set] = None
+) -> dict:
+    """
+    Recursively walk ALL_CAUSATION_RULES to build a multi-hop cause-effect tree.
+    Returns a dict with node, hop, root_causes, and children list.
+    """
+    if visited is None:
+        visited = set()
+
+    causation = ALL_CAUSATION_RULES.get(kpi_key, {})
+    node = {
+        "node": kpi_key,
+        "hop": depth,
+        "root_causes": causation.get("root_causes", []),
+        "children": [],
+    }
+
+    if depth >= max_depth or kpi_key in visited:
+        return node
+
+    visited.add(kpi_key)
+
+    for downstream_key in causation.get("downstream_impact", []):
+        child = _build_causal_chain(downstream_key, depth + 1, max_depth, visited.copy())
+        node["children"].append(child)
+
+    return node
+
 
 @router.get("/api/kpi-detail/{kpi_key}", tags=["Intelligence"])
 def get_kpi_detail(kpi_key: str, request: Request):
@@ -245,12 +312,28 @@ def get_kpi_detail(kpi_key: str, request: Request):
         else:
             status = "red"
 
+    # Direction guidance
+    direction_label = "Higher is better" if direction == "higher" else "Lower is better"
+
+    # Causal chain (multi-hop)
+    causal_chain = _build_causal_chain(kpi_key)
+
+    # Typical range from benchmarks (series_a p25–p75)
+    typical_range = None
+    series_a_bench = benchmark.get("series_a")
+    if series_a_bench and "p25" in series_a_bench and "p75" in series_a_bench:
+        typical_range = {"low": series_a_bench["p25"], "high": series_a_bench["p75"]}
+
+    # Data requirements
+    data_requirements = DATA_REQUIREMENTS.get(kpi_key)
+
     return {
         "kpi_key":        kpi_key,
         "name":           kpi_def.get("name", kpi_key),
         "formula":        kpi_def.get("formula", ""),
         "unit":           unit,
         "direction":      direction,
+        "direction_label": direction_label,
         "domain":         kpi_def.get("domain", ""),
         "target":         target_value,
         "pct_of_target":  pct_of_target,
@@ -260,4 +343,7 @@ def get_kpi_detail(kpi_key: str, request: Request):
         "downstream_impact": causation.get("downstream_impact", []),
         "corrective_actions":causation.get("corrective_actions", []),
         "benchmarks":        benchmark,
+        "causal_chain":      causal_chain,
+        "typical_range":     typical_range,
+        "data_requirements": data_requirements,
     }

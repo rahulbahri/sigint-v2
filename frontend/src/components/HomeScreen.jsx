@@ -180,30 +180,42 @@ function Sparkline({ data, color = '#059669', width = 64, height = 24 }) {
   )
 }
 
-// ── KPI Slide-out drawer (enriched) ──────────────────────────────────────────
-function KpiSlideOut({ kpi, status, onClose, onNavigate }) {
-  const info = KPI_INFO[kpi?.key] || {}
-  const label = formatKpiLabel(kpi?.key)
-  const avg    = kpi?.avg  != null ? `${kpi.avg}${kpi.unit || ''}` : '—'
-  const target = kpi?.target != null ? `${kpi.target}${kpi.unit || ''}` : 'Not set'
-  const sparkColor = status === 'green' ? '#059669' : status === 'red' ? '#DC2626' : '#D97706'
+// ── KPI Slide-out drawer (enriched with navigation history + causal chain) ──
+function KpiSlideOut({ kpi: initialKpi, status: initialStatus, onClose, onNavigate }) {
+  // Navigation history for drilling into downstream KPIs
+  const [history, setHistory] = useState([])
+  const [currentKpi, setCurrentKpi] = useState(initialKpi)
+  const [currentStatus, setCurrentStatus] = useState(initialStatus)
+
+  const info = KPI_INFO[currentKpi?.key] || {}
+  const label = formatKpiLabel(currentKpi?.key)
+  const avg    = currentKpi?.avg  != null ? `${currentKpi.avg}${currentKpi.unit || ''}` : '—'
+  const target = currentKpi?.target != null ? `${currentKpi.target}${currentKpi.unit || ''}` : 'Not set'
+  const sparkColor = currentStatus === 'green' ? '#059669' : currentStatus === 'red' ? '#DC2626' : '#D97706'
   const statusColors = {
     red:   { pill: 'bg-red-100 text-red-700',     label: 'Below Target' },
     amber: { pill: 'bg-amber-100 text-amber-700', label: 'Watch Zone'   },
     green: { pill: 'bg-emerald-100 text-emerald-700', label: 'On Target' },
   }
-  const sc = statusColors[status] || { pill: 'bg-slate-100 text-slate-600', label: 'No Target' }
+  const sc = statusColors[currentStatus] || { pill: 'bg-slate-100 text-slate-600', label: 'No Target' }
 
-  const gapPct = (kpi?.avg != null && kpi?.target)
-    ? (kpi.direction === 'higher'
-        ? ((kpi.avg / kpi.target - 1) * 100).toFixed(1)
-        : ((kpi.target / kpi.avg - 1) * 100).toFixed(1))
+  // Direction guidance
+  const directionLabel = currentKpi?.direction === 'higher'
+    ? { arrow: '\u2191', text: 'Higher is better', color: 'text-emerald-600' }
+    : currentKpi?.direction === 'lower'
+    ? { arrow: '\u2193', text: 'Lower is better', color: 'text-blue-600' }
+    : null
+
+  const gapPct = (currentKpi?.avg != null && currentKpi?.target)
+    ? (currentKpi.direction === 'higher'
+        ? ((currentKpi.avg / currentKpi.target - 1) * 100).toFixed(1)
+        : ((currentKpi.target / currentKpi.avg - 1) * 100).toFixed(1))
     : null
 
   const narrative = () => {
-    if (!kpi?.avg || !kpi?.target) return `No target has been set for ${label}. Add a target in Settings to track performance.`
-    if (status === 'green') return `${label} is performing at ${avg} against a target of ${target} — ${gapPct > 0 ? `${gapPct}% above target` : 'on track'}. This is a positive signal for your business health.`
-    if (status === 'red') return `${label} is at ${avg}, which is ${Math.abs(gapPct)}% ${kpi.direction === 'higher' ? 'below' : 'above'} the target of ${target}. This is dragging down your health score and needs attention.`
+    if (!currentKpi?.avg || !currentKpi?.target) return `No target has been set for ${label}. Add a target in Settings to track performance.`
+    if (currentStatus === 'green') return `${label} is performing at ${avg} against a target of ${target} — ${gapPct > 0 ? `${gapPct}% above target` : 'on track'}. This is a positive signal for your business health.`
+    if (currentStatus === 'red') return `${label} is at ${avg}, which is ${Math.abs(gapPct)}% ${currentKpi.direction === 'higher' ? 'below' : 'above'} the target of ${target}. This is dragging down your health score and needs attention.`
     return `${label} is at ${avg} against a target of ${target} — within watch range. Monitor closely over the next 1–2 months.`
   }
 
@@ -212,16 +224,50 @@ function KpiSlideOut({ kpi, status, onClose, onNavigate }) {
   const [detailLoading, setDetailLoading] = useState(false)
 
   useEffect(() => {
-    if (!kpi?.key) return
+    if (!currentKpi?.key) return
     setDetailLoading(true)
-    axios.get(`/api/kpi-detail/${kpi.key}`)
+    axios.get(`/api/kpi-detail/${currentKpi.key}`)
       .then(r => setDetail(r.data))
       .catch(() => setDetail(null))
       .finally(() => setDetailLoading(false))
-  }, [kpi?.key])
+  }, [currentKpi?.key])
+
+  // Navigate to a downstream KPI
+  const navigateToKpi = (dkKey, dkStatus) => {
+    setHistory(prev => [...prev, { kpi: currentKpi, status: currentStatus }])
+    setCurrentKpi({ key: dkKey })
+    setCurrentStatus(dkStatus || 'grey')
+  }
+
+  // Go back in navigation history
+  const goBack = () => {
+    if (history.length === 0) return
+    const prev = history[history.length - 1]
+    setHistory(h => h.slice(0, -1))
+    setCurrentKpi(prev.kpi)
+    setCurrentStatus(prev.status)
+  }
+
+  // Close and clear history
+  const handleClose = () => {
+    setHistory([])
+    onClose()
+  }
+
+  // Compute typical range from benchmarks if available
+  const typicalRange = (() => {
+    if (!detail?.benchmarks) return null
+    const stages = Object.values(detail.benchmarks)
+    if (stages.length === 0) return null
+    const firstStage = stages[0]
+    if (firstStage?.p25 != null && firstStage?.p75 != null) {
+      return `${firstStage.p25}${currentKpi?.unit || ''} - ${firstStage.p75}${currentKpi?.unit || ''}`
+    }
+    return null
+  })()
 
   return (
-    <div className="fixed inset-0 z-50 flex justify-end" onClick={onClose}>
+    <div className="fixed inset-0 z-50 flex justify-end" onClick={handleClose}>
       {/* Backdrop */}
       <div className="absolute inset-0 bg-black/20 backdrop-blur-[1px]" />
       {/* Drawer */}
@@ -230,30 +276,58 @@ function KpiSlideOut({ kpi, status, onClose, onNavigate }) {
         style={{ animation: 'slideInRight 0.22s ease-out' }}
         onClick={e => e.stopPropagation()}
       >
+        {/* Back button (when navigating downstream) */}
+        {history.length > 0 && (
+          <button
+            onClick={goBack}
+            className="flex items-center gap-1.5 px-5 py-2 bg-slate-50 text-[11px] font-semibold text-[#0055A4] hover:bg-slate-100 transition-colors border-b border-slate-100"
+          >
+            <ArrowRight size={11} className="rotate-180" />
+            Back to {formatKpiLabel(history[history.length - 1]?.kpi?.key)}
+          </button>
+        )}
+
         {/* Header */}
         <div className="flex items-center justify-between px-5 py-4 border-b border-slate-100">
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 flex-wrap">
             <span className={`text-[11px] font-semibold px-2 py-0.5 rounded-full ${sc.pill}`}>{sc.label}</span>
             <span className="text-slate-700 text-sm font-bold">{label}</span>
           </div>
-          <button onClick={onClose} className="p-1 rounded-md hover:bg-slate-100 text-slate-400 hover:text-slate-600 transition-colors">
+          <button onClick={handleClose} className="p-1 rounded-md hover:bg-slate-100 text-slate-400 hover:text-slate-600 transition-colors">
             <X size={15} />
           </button>
         </div>
 
         <div className="flex-1 overflow-y-auto px-5 py-4 space-y-5">
+          {/* Direction guidance + Typical range + Benchmark placeholder */}
+          <div className="flex items-center gap-3 flex-wrap">
+            {directionLabel && (
+              <span className={`text-[11px] font-semibold ${directionLabel.color}`}>
+                {directionLabel.arrow} {directionLabel.text}
+              </span>
+            )}
+            {typicalRange && (
+              <span className="text-[11px] text-slate-400">
+                Typical range: <span className="font-semibold text-slate-500">{typicalRange}</span>
+              </span>
+            )}
+            {!typicalRange && (
+              <span className="text-[11px] text-slate-300">Industry Benchmark: —</span>
+            )}
+          </div>
+
           {/* Value + Sparkline */}
           <div className="flex items-end justify-between">
             <div>
               <div className="text-3xl font-extrabold text-slate-900">{avg}</div>
               <div className="text-slate-400 text-[11px] mt-0.5">6-month avg vs target: <span className="font-semibold text-slate-600">{target}</span></div>
               {gapPct !== null && (
-                <div className={`text-xs font-bold mt-1 ${status === 'green' ? 'text-emerald-600' : status === 'red' ? 'text-red-600' : 'text-amber-600'}`}>
+                <div className={`text-xs font-bold mt-1 ${currentStatus === 'green' ? 'text-emerald-600' : currentStatus === 'red' ? 'text-red-600' : 'text-amber-600'}`}>
                   {gapPct > 0 ? '+' : ''}{gapPct}% vs target
                 </div>
               )}
             </div>
-            <Sparkline data={kpi?.sparkline} color={sparkColor} width={96} height={40} />
+            <Sparkline data={currentKpi?.sparkline} color={sparkColor} width={96} height={40} />
           </div>
 
           {/* Narrative */}
@@ -320,7 +394,7 @@ function KpiSlideOut({ kpi, status, onClose, onNavigate }) {
                           <tr key={i} className={i % 2 === 0 ? '' : 'bg-white'}>
                             <td className="px-3 py-1.5 text-slate-600">{row.period || row.date || '—'}</td>
                             <td className="px-3 py-1.5 text-slate-800 font-semibold text-right">
-                              {row.value != null ? `${row.value}${kpi.unit || ''}` : '—'}
+                              {row.value != null ? `${row.value}${currentKpi.unit || ''}` : '—'}
                             </td>
                           </tr>
                         ))}
@@ -345,7 +419,80 @@ function KpiSlideOut({ kpi, status, onClose, onNavigate }) {
                 </div>
               )}
 
-              {/* Downstream Impact */}
+              {/* Cause & Effect Chain */}
+              {detail.causal_chain && detail.causal_chain.length > 0 && (
+                <div>
+                  <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400 mb-2">Cause & Effect Chain</p>
+                  <div className="bg-slate-50 rounded-xl p-3">
+                    {/* Root node: current KPI */}
+                    <div className="flex items-center gap-2 mb-1">
+                      <div className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${sc.pill}`}>
+                        {label}
+                      </div>
+                      {detail.root_causes && detail.root_causes.length > 0 && (
+                        <span className="text-[9px] text-slate-400">--- {detail.root_causes.slice(0, 2).join(', ')}</span>
+                      )}
+                    </div>
+                    {/* Downstream tree */}
+                    <div className="ml-2 border-l-2 border-slate-300 pl-3 space-y-1.5 mt-1">
+                      {detail.causal_chain.map((node, i) => {
+                        const nodeKey = typeof node === 'string' ? node : node.key || node
+                        const nodeLabel = formatKpiLabel(nodeKey)
+                        const nodeStatus = typeof node === 'object' ? node.status : null
+                        const nodeColor = nodeStatus === 'green' ? 'bg-emerald-100 text-emerald-700'
+                          : nodeStatus === 'red' ? 'bg-red-100 text-red-700'
+                          : nodeStatus === 'amber' ? 'bg-amber-100 text-amber-700'
+                          : 'bg-slate-100 text-slate-600'
+                        const nodeCauses = typeof node === 'object' && node.root_causes ? node.root_causes : []
+                        const nodeChildren = typeof node === 'object' && node.children ? node.children : []
+                        return (
+                          <div key={i}>
+                            <div className="flex items-center gap-2">
+                              <div className="w-1.5 h-1.5 rounded-full bg-slate-400 flex-shrink-0" />
+                              <button
+                                onClick={() => navigateToKpi(nodeKey, nodeStatus)}
+                                className={`text-[10px] font-semibold px-2 py-0.5 rounded-full cursor-pointer hover:opacity-80 transition-opacity ${nodeColor}`}
+                              >
+                                {nodeLabel}
+                              </button>
+                              {nodeCauses.length > 0 && (
+                                <span className="text-[9px] text-slate-400">--- {nodeCauses.slice(0, 2).join(', ')}</span>
+                              )}
+                            </div>
+                            {/* Second-hop children */}
+                            {nodeChildren.length > 0 && (
+                              <div className="ml-4 border-l border-slate-200 pl-2.5 mt-1 space-y-1">
+                                {nodeChildren.map((child, ci) => {
+                                  const childKey = typeof child === 'string' ? child : child.key || child
+                                  const childLabel = formatKpiLabel(childKey)
+                                  const childStatus = typeof child === 'object' ? child.status : null
+                                  const childColor = childStatus === 'green' ? 'bg-emerald-100 text-emerald-700'
+                                    : childStatus === 'red' ? 'bg-red-100 text-red-700'
+                                    : childStatus === 'amber' ? 'bg-amber-100 text-amber-700'
+                                    : 'bg-slate-100 text-slate-600'
+                                  return (
+                                    <div key={ci} className="flex items-center gap-2">
+                                      <div className="w-1 h-1 rounded-full bg-slate-300 flex-shrink-0" />
+                                      <button
+                                        onClick={() => navigateToKpi(childKey, childStatus)}
+                                        className={`text-[9px] font-semibold px-1.5 py-0.5 rounded-full cursor-pointer hover:opacity-80 transition-opacity ${childColor}`}
+                                      >
+                                        {childLabel}
+                                      </button>
+                                    </div>
+                                  )
+                                })}
+                              </div>
+                            )}
+                          </div>
+                        )
+                      })}
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Downstream Impact (clickable pills) */}
               {detail.downstream_impact && detail.downstream_impact.length > 0 && (
                 <div>
                   <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400 mb-1.5">Downstream Impact</p>
@@ -353,14 +500,18 @@ function KpiSlideOut({ kpi, status, onClose, onNavigate }) {
                     {detail.downstream_impact.map((dk, i) => {
                       const dkKey = typeof dk === 'string' ? dk : dk.key || dk
                       const dkStatus = typeof dk === 'object' ? dk.status : null
-                      const dkColor = dkStatus === 'green' ? 'bg-emerald-100 text-emerald-700'
-                        : dkStatus === 'red' ? 'bg-red-100 text-red-700'
-                        : dkStatus === 'amber' ? 'bg-amber-100 text-amber-700'
-                        : 'bg-slate-100 text-slate-600'
+                      const dkColor = dkStatus === 'green' ? 'bg-emerald-100 text-emerald-700 hover:bg-emerald-200'
+                        : dkStatus === 'red' ? 'bg-red-100 text-red-700 hover:bg-red-200'
+                        : dkStatus === 'amber' ? 'bg-amber-100 text-amber-700 hover:bg-amber-200'
+                        : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
                       return (
-                        <span key={i} className={`text-[10px] font-semibold px-2 py-0.5 rounded-full ${dkColor}`}>
+                        <button
+                          key={i}
+                          onClick={() => navigateToKpi(dkKey, dkStatus)}
+                          className={`text-[10px] font-semibold px-2 py-0.5 rounded-full cursor-pointer transition-colors ${dkColor}`}
+                        >
                           {formatKpiLabel(dkKey)}
-                        </span>
+                        </button>
                       )
                     })}
                   </div>
@@ -399,7 +550,7 @@ function KpiSlideOut({ kpi, status, onClose, onNavigate }) {
                             <div key={bl} className="bg-slate-50 rounded-lg p-2 text-center">
                               <div className="text-[10px] text-slate-400 font-medium">{bl}</div>
                               <div className="text-[13px] font-bold text-slate-700">
-                                {bv != null ? `${bv}${vals?.label ? ` ${vals.label}` : (kpi.unit || '')}` : '—'}
+                                {bv != null ? `${bv}${vals?.label ? ` ${vals.label}` : (currentKpi.unit || '')}` : '—'}
                               </div>
                             </div>
                           ))}
@@ -417,7 +568,7 @@ function KpiSlideOut({ kpi, status, onClose, onNavigate }) {
         {info.tab && (
           <div className="px-5 py-4 border-t border-slate-100">
             <button
-              onClick={() => { onNavigate?.(info.tab); onClose() }}
+              onClick={() => { onNavigate?.(info.tab); handleClose() }}
               className="w-full flex items-center justify-center gap-2 bg-[#0055A4] hover:bg-[#004688] text-white text-[12px] font-semibold py-2.5 rounded-xl transition-colors"
             >
               Open Full Analysis <ArrowRight size={13} />
@@ -430,7 +581,7 @@ function KpiSlideOut({ kpi, status, onClose, onNavigate }) {
 }
 
 // ── Score Breakdown Modal (with adjustable weight sliders) ───────────────────
-function ScoreBreakdownModal({ health, onClose }) {
+function ScoreBreakdownModal({ health, onClose, onWeightsApply }) {
   const score = health?.score ?? 0
   const color = health?.color ?? 'grey'
   const mom = health?.momentum ?? 0
@@ -493,6 +644,7 @@ function ScoreBreakdownModal({ health, onClose }) {
         weight_risk: weights.risk,
       })
       setSaved(true)
+      onWeightsApply?.(weights)
     } catch {}
     setSaving(false)
   }
@@ -919,16 +1071,74 @@ function computePeriodParams(preset) {
   }
 }
 
-// ── Period Selector ─────────────────────────────────────────────────────────
+// ── Months / Years for period picker ────────────────────────────────────────
+const MONTH_NAMES = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']
+function buildYearOptions() {
+  const cur = new Date().getFullYear()
+  const yrs = []
+  for (let y = cur - 6; y <= cur; y++) yrs.push(y)
+  return yrs
+}
+
+const QUICK_PRESETS = [
+  { label: 'L3M', months: 3 },
+  { label: 'L6M', months: 6 },
+  { label: 'L12M', months: 12 },
+  { label: 'YTD', months: -1 },
+  { label: 'All', months: 0 },
+]
+
+// ── Period Selector (From-To date picker with quick presets) ───────────────
 function PeriodSelector({ selected, onSelect }) {
-  const [open, setOpen] = useState(false)
+  const now = new Date()
+  const [fromMonth, setFromMonth] = useState(1)
+  const [fromYear, setFromYear]   = useState(now.getFullYear() - 1)
+  const [toMonth, setToMonth]     = useState(now.getMonth() + 1)
+  const [toYear, setToYear]       = useState(now.getFullYear())
+  const [open, setOpen]           = useState(false)
+  const [activePreset, setActivePreset] = useState(selected || 'All')
   const ref = useRef(null)
+  const yearOptions = buildYearOptions()
 
   useEffect(() => {
     const handler = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false) }
     document.addEventListener('mousedown', handler)
     return () => document.removeEventListener('mousedown', handler)
   }, [])
+
+  const applyFromTo = (fm, fy, tm, ty, presetLabel) => {
+    setFromMonth(fm); setFromYear(fy); setToMonth(tm); setToYear(ty)
+    setActivePreset(presetLabel || null)
+    if (fy === 0 && ty === 0) {
+      // "All" preset
+      onSelect({ label: 'All Data', months: 0 })
+    } else {
+      onSelect({
+        label: presetLabel || `${MONTH_NAMES[fm-1]} ${fy} - ${MONTH_NAMES[tm-1]} ${ty}`,
+        months: null,
+        _params: { from_year: fy, from_month: fm, to_year: ty, to_month: tm },
+      })
+    }
+  }
+
+  const handlePreset = (p) => {
+    if (p.months === 0) {
+      setActivePreset(p.label)
+      onSelect({ label: 'All Data', months: 0 })
+      return
+    }
+    const params = computePeriodParams(p)
+    setFromMonth(params.from_month); setFromYear(params.from_year)
+    setToMonth(params.to_month); setToYear(params.to_year)
+    setActivePreset(p.label)
+    onSelect(p)
+  }
+
+  const handleManualChange = (fm, fy, tm, ty) => {
+    applyFromTo(fm, fy, tm, ty, null)
+  }
+
+  const displayLabel = activePreset || `${MONTH_NAMES[fromMonth-1]} ${fromYear} - ${MONTH_NAMES[toMonth-1]} ${toYear}`
 
   return (
     <div ref={ref} className="relative">
@@ -937,25 +1147,69 @@ function PeriodSelector({ selected, onSelect }) {
         className="flex items-center gap-1.5 px-2.5 py-1.5 border border-slate-200 hover:border-slate-300 rounded-lg text-[11px] text-slate-600 font-medium transition-colors bg-white"
       >
         <Calendar size={11} className="text-slate-400" />
-        {selected}
+        {displayLabel}
         <ChevronDown size={10} className={`text-slate-400 transition-transform ${open ? 'rotate-180' : ''}`} />
       </button>
       {open && (
-        <div className="absolute right-0 top-full mt-1 bg-white border border-slate-200 rounded-xl shadow-lg py-1 z-30 min-w-[140px]"
+        <div className="absolute right-0 top-full mt-1 bg-white border border-slate-200 rounded-xl shadow-lg p-3 z-30 min-w-[280px]"
              style={{ animation: 'fadeInScale 0.12s ease-out' }}>
-          {PERIOD_PRESETS.map(p => (
-            <button
-              key={p.label}
-              onClick={() => { onSelect(p); setOpen(false) }}
-              className={`w-full text-left px-3 py-1.5 text-[11px] transition-colors ${
-                selected === p.label
-                  ? 'bg-[#0055A4]/10 text-[#0055A4] font-semibold'
-                  : 'text-slate-600 hover:bg-slate-50'
-              }`}
-            >
-              {p.label}
-            </button>
-          ))}
+          {/* Quick presets */}
+          <div className="flex items-center gap-1 mb-3">
+            {QUICK_PRESETS.map(p => (
+              <button
+                key={p.label}
+                onClick={() => { handlePreset(p); setOpen(false) }}
+                className={`px-2 py-1 rounded-full text-[10px] font-semibold transition-colors ${
+                  activePreset === p.label
+                    ? 'bg-[#0055A4] text-white'
+                    : 'bg-slate-100 text-slate-500 hover:bg-slate-200'
+                }`}
+              >
+                {p.label}
+              </button>
+            ))}
+          </div>
+          {/* From selects */}
+          <div className="space-y-2">
+            <div>
+              <p className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider mb-1">From</p>
+              <div className="flex items-center gap-1.5">
+                <select
+                  value={fromMonth}
+                  onChange={e => { const fm = Number(e.target.value); setFromMonth(fm); handleManualChange(fm, fromYear, toMonth, toYear) }}
+                  className="flex-1 text-[11px] border border-slate-200 rounded-lg px-2 py-1.5 text-slate-600 bg-white focus:outline-none focus:border-[#0055A4]"
+                >
+                  {MONTH_NAMES.map((m, i) => <option key={m} value={i+1}>{m}</option>)}
+                </select>
+                <select
+                  value={fromYear}
+                  onChange={e => { const fy = Number(e.target.value); setFromYear(fy); handleManualChange(fromMonth, fy, toMonth, toYear) }}
+                  className="w-20 text-[11px] border border-slate-200 rounded-lg px-2 py-1.5 text-slate-600 bg-white focus:outline-none focus:border-[#0055A4]"
+                >
+                  {yearOptions.map(y => <option key={y} value={y}>{y}</option>)}
+                </select>
+              </div>
+            </div>
+            <div>
+              <p className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider mb-1">To</p>
+              <div className="flex items-center gap-1.5">
+                <select
+                  value={toMonth}
+                  onChange={e => { const tm = Number(e.target.value); setToMonth(tm); handleManualChange(fromMonth, fromYear, tm, toYear) }}
+                  className="flex-1 text-[11px] border border-slate-200 rounded-lg px-2 py-1.5 text-slate-600 bg-white focus:outline-none focus:border-[#0055A4]"
+                >
+                  {MONTH_NAMES.map((m, i) => <option key={m} value={i+1}>{m}</option>)}
+                </select>
+                <select
+                  value={toYear}
+                  onChange={e => { const ty = Number(e.target.value); setToYear(ty); handleManualChange(fromMonth, fromYear, toMonth, ty) }}
+                  className="w-20 text-[11px] border border-slate-200 rounded-lg px-2 py-1.5 text-slate-600 bg-white focus:outline-none focus:border-[#0055A4]"
+                >
+                  {yearOptions.map(y => <option key={y} value={y}>{y}</option>)}
+                </select>
+              </div>
+            </div>
+          </div>
         </div>
       )}
     </div>
@@ -971,22 +1225,34 @@ export default function HomeScreen({ onNavigate, onAskAnika }) {
   const [showScoreModal, setShowScoreModal] = useState(false)
   const [showDistModal, setShowDistModal]   = useState(false)
   const [seeding, setSeeding]         = useState(false)
-  const [showAllAttention, setShowAllAttention] = useState(false)
+  const [showOtherCritical, setShowOtherCritical] = useState(false)
   const [showAllDoingWell, setShowAllDoingWell] = useState(false)
   const [selectedPeriod, setSelectedPeriod] = useState('All Data')
+  const [activeWeights, setActiveWeights] = useState(null)
 
-  const load = useCallback((periodParams = {}) => {
+  const load = useCallback((periodParams = {}, weightOverrides = null) => {
     setLoading(true); setError(false)
     const params = new URLSearchParams()
     if (periodParams.from_year) params.set('from_year', periodParams.from_year)
     if (periodParams.from_month) params.set('from_month', periodParams.from_month)
     if (periodParams.to_year) params.set('to_year', periodParams.to_year)
     if (periodParams.to_month) params.set('to_month', periodParams.to_month)
+    const w = weightOverrides || null
+    if (w) {
+      params.set('weight_momentum', w.momentum)
+      params.set('weight_target', w.target)
+      params.set('weight_risk', w.risk)
+    }
     const qs = params.toString()
     axios.get(`/api/home${qs ? `?${qs}` : ''}`)
       .then(r  => { setData(r.data); setLoading(false) })
       .catch(() => { setError(true); setLoading(false) })
   }, [])
+
+  const handleWeightsApply = useCallback((weights) => {
+    setActiveWeights(weights)
+    load({}, weights)
+  }, [load])
 
   const loadDemoData = async () => {
     setSeeding(true)
@@ -999,7 +1265,8 @@ export default function HomeScreen({ onNavigate, onAskAnika }) {
 
   const handlePeriodChange = (preset) => {
     setSelectedPeriod(preset.label)
-    const params = computePeriodParams(preset)
+    // Support direct _params from the from-to picker
+    const params = preset._params ? preset._params : computePeriodParams(preset)
     load(params)
   }
 
@@ -1038,7 +1305,10 @@ export default function HomeScreen({ onNavigate, onAskAnika }) {
   const narrative = healthNarrative(health)
 
   // Determine visible KPIs for show all / collapse
-  const attentionVisible = showAllAttention ? needs_attention : needs_attention?.slice(0, 6)
+  const topCritical = needs_attention?.slice(0, 3) || []
+  const otherCritical = needs_attention?.slice(3) || []
+  const watchKpis = (health?.yellow_kpis_detail || []).slice(0, 4)
+  const greyKpis = (health?.grey_kpis_list || []).map(k => typeof k === 'string' ? { key: k } : k)
   const doingWellVisible = showAllDoingWell ? doing_well : doing_well?.slice(0, 6)
 
   return (
@@ -1169,38 +1439,119 @@ export default function HomeScreen({ onNavigate, onAskAnika }) {
         </div>
       </div>
 
-      {/* ── Needs Attention ────────────────────────────────────────────── */}
-      {needs_attention?.length > 0 && (
+      {/* ── Top 3 Most Critical ──────────────────────────────────────── */}
+      {topCritical.length > 0 && (
         <div>
           <div className="flex items-center justify-between mb-2.5">
             <div className="flex items-center gap-2">
               <AlertTriangle size={13} className="text-red-500" />
-              <h2 className="text-slate-700 text-[11px] font-bold uppercase tracking-wider">Needs Attention</h2>
-              <span className="bg-red-100 text-red-700 text-[10px] font-bold px-1.5 py-0.5 rounded-full">{needs_attention.length}</span>
-              <span className="text-[9px] text-slate-300 italic">— click any card to explore</span>
+              <h2 className="text-slate-700 text-[11px] font-bold uppercase tracking-wider">Most Critical</h2>
+              <span className="bg-red-100 text-red-700 text-[10px] font-bold px-1.5 py-0.5 rounded-full">{needs_attention?.length || 0}</span>
+              <span className="text-[9px] text-slate-300 italic">-- click any card to explore</span>
             </div>
             <button onClick={() => onNavigate?.('variance')}
               className="text-[11px] text-slate-400 hover:text-[#0055A4] flex items-center gap-1 transition-colors font-medium">
               Full Analysis <ArrowRight size={10}/>
             </button>
           </div>
-          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-2.5">
-            {attentionVisible.map(kpi => (
-              <KpiCard key={kpi.key} kpi={kpi} status="red"
-                onOpen={(k, s) => setSlideOut({ kpi: k, status: s })} />
-            ))}
+          <div className="space-y-2">
+            {topCritical.map(kpi => {
+              const kLabel = formatKpiLabel(kpi.key)
+              const kAvg = kpi.avg != null ? `${kpi.avg}${kpi.unit || ''}` : '--'
+              const kTarget = kpi.target != null ? `${kpi.target}${kpi.unit || ''}` : '--'
+              const kGap = (kpi.avg != null && kpi.target)
+                ? (kpi.direction === 'higher'
+                    ? ((kpi.avg / kpi.target - 1) * 100).toFixed(1)
+                    : ((kpi.target / kpi.avg - 1) * 100).toFixed(1))
+                : null
+              const kInfo = KPI_INFO[kpi.key]
+              return (
+                <button
+                  key={kpi.key}
+                  onClick={() => setSlideOut({ kpi, status: 'red' })}
+                  className="w-full text-left card p-4 bg-red-50 border-red-200 hover:border-red-300 hover:shadow-md transition-all group cursor-pointer"
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2 mb-1">
+                        <span className="text-slate-800 text-[13px] font-bold">{kLabel}</span>
+                        {kGap !== null && (
+                          <span className="text-red-600 text-[12px] font-bold">{kGap > 0 ? '+' : ''}{kGap}% vs target</span>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-3 mb-1.5">
+                        <span className="text-slate-900 text-lg font-extrabold">{kAvg}</span>
+                        <span className="text-slate-400 text-[11px]">target: {kTarget}</span>
+                      </div>
+                      {kInfo?.why && (
+                        <p className="text-slate-500 text-[11px] leading-relaxed line-clamp-2">{kInfo.why}</p>
+                      )}
+                    </div>
+                    <div className="flex flex-col items-end gap-1 flex-shrink-0">
+                      <Sparkline data={kpi.sparkline} color="#DC2626" width={72} height={28} />
+                      <ChevronRight size={12} className="text-slate-300 group-hover:text-slate-500" />
+                    </div>
+                  </div>
+                </button>
+              )
+            })}
           </div>
-          {needs_attention.length > 6 && (
-            <button
-              onClick={() => setShowAllAttention(!showAllAttention)}
-              className="mt-2 text-[11px] text-slate-400 hover:text-[#0055A4] font-medium transition-colors flex items-center gap-1"
-            >
-              {showAllAttention
-                ? <>Show less</>
-                : <>Show all {needs_attention.length} <ArrowRight size={10}/></>
-              }
-            </button>
+        </div>
+      )}
+
+      {/* ── Other Critical ──────────────────────────────────────────── */}
+      {otherCritical.length > 0 && (
+        <div>
+          <button
+            onClick={() => setShowOtherCritical(!showOtherCritical)}
+            className="flex items-center gap-2 mb-2 group"
+          >
+            <h2 className="text-slate-700 text-[11px] font-bold uppercase tracking-wider">Other Critical</h2>
+            <span className="bg-red-100 text-red-700 text-[10px] font-bold px-1.5 py-0.5 rounded-full">{otherCritical.length}</span>
+            <ChevronDown size={12} className={`text-slate-400 transition-transform ${showOtherCritical ? 'rotate-180' : ''}`} />
+          </button>
+          {showOtherCritical && (
+            <div className="space-y-1 bg-slate-50 rounded-xl p-2">
+              {otherCritical.map(kpi => {
+                const kLabel = formatKpiLabel(kpi.key)
+                const kAvg = kpi.avg != null ? `${kpi.avg}${kpi.unit || ''}` : '--'
+                const kTarget = kpi.target != null ? `${kpi.target}${kpi.unit || ''}` : '--'
+                return (
+                  <button
+                    key={kpi.key}
+                    onClick={() => setSlideOut({ kpi, status: 'red' })}
+                    className="flex items-center gap-3 w-full text-left px-3 py-2 rounded-lg hover:bg-white transition-colors group"
+                  >
+                    <div className="w-1.5 h-1.5 rounded-full bg-red-500 flex-shrink-0" />
+                    <span className="text-[11px] font-semibold text-slate-700 flex-1 truncate">{kLabel}</span>
+                    <span className="text-[11px] text-slate-800 font-bold">{kAvg}</span>
+                    <span className="text-[10px] text-slate-400">vs {kTarget}</span>
+                    <ChevronRight size={11} className="text-slate-300 group-hover:text-slate-500 flex-shrink-0" />
+                  </button>
+                )
+              })}
+            </div>
           )}
+        </div>
+      )}
+
+      {/* ── Watch Zone ──────────────────────────────────────────────── */}
+      {watchKpis.length > 0 && (
+        <div>
+          <div className="flex items-center gap-2 mb-2.5">
+            <Eye size={13} className="text-amber-500" />
+            <h2 className="text-slate-700 text-[11px] font-bold uppercase tracking-wider">Watch Zone</h2>
+            <span className="bg-amber-100 text-amber-700 text-[10px] font-bold px-1.5 py-0.5 rounded-full">{health?.kpis_yellow || watchKpis.length}</span>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5">
+            {watchKpis.map(kpi => {
+              const wKey = kpi.key || kpi
+              return (
+                <KpiCard key={wKey} kpi={{ key: wKey, avg: kpi.avg, target: kpi.target, unit: kpi.unit, sparkline: kpi.sparkline, direction: kpi.direction }} status="amber"
+                  onOpen={(k, s) => setSlideOut({ kpi: k, status: s })} />
+              )
+            })}
+          </div>
         </div>
       )}
 
@@ -1236,6 +1587,40 @@ export default function HomeScreen({ onNavigate, onAskAnika }) {
               }
             </button>
           )}
+        </div>
+      )}
+
+      {/* ── No Target KPIs ────────────────────────────────────────────── */}
+      {greyKpis.length > 0 && (needs_attention?.length > 0 || doing_well?.length > 0) && (
+        <div>
+          <div className="flex items-center gap-2 mb-2.5">
+            <Target size={13} className="text-slate-400" />
+            <h2 className="text-slate-700 text-[11px] font-bold uppercase tracking-wider">No Target</h2>
+            <span className="bg-slate-100 text-slate-600 text-[10px] font-bold px-1.5 py-0.5 rounded-full">{greyKpis.length}</span>
+          </div>
+          <div className="bg-slate-50 rounded-xl p-3 space-y-1.5">
+            {greyKpis.map(kpi => {
+              const gKey = kpi.key || kpi
+              const gLabel = formatKpiLabel(gKey)
+              const gInfo = KPI_INFO[gKey]
+              const requirement = gInfo?.how || 'Target configuration required'
+              return (
+                <div key={gKey} className="flex items-start gap-2.5 px-2 py-1.5">
+                  <div className="w-1.5 h-1.5 rounded-full bg-slate-300 flex-shrink-0 mt-1.5" />
+                  <div className="flex-1 min-w-0">
+                    <span className="text-[11px] font-semibold text-slate-600">{gLabel}</span>
+                    <p className="text-[10px] text-slate-400 leading-snug">Requires: {requirement}</p>
+                  </div>
+                </div>
+              )
+            })}
+            <button
+              onClick={() => onNavigate?.('targets')}
+              className="mt-1.5 text-[10px] font-semibold text-[#0055A4] hover:underline"
+            >
+              Configure targets to unlock scoring
+            </button>
+          </div>
         </div>
       )}
 
@@ -1328,7 +1713,7 @@ export default function HomeScreen({ onNavigate, onAskAnika }) {
         />
       )}
       {showScoreModal && (
-        <ScoreBreakdownModal health={health} onClose={() => setShowScoreModal(false)} />
+        <ScoreBreakdownModal health={health} onClose={() => setShowScoreModal(false)} onWeightsApply={handleWeightsApply} />
       )}
       {showDistModal && (
         <DistributionModal
