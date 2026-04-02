@@ -593,9 +593,21 @@ export default function HomeScreen({ onNavigate, onAskAnika }) {
             <span className="text-slate-400 italic">No data uploaded yet</span>
           )}
         </div>
-        <button onClick={load} className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-400 hover:text-slate-600 transition-colors" title="Refresh">
-          <RefreshCw size={13} />
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={loadDemoData}
+            disabled={seeding}
+            className="flex items-center gap-1.5 px-3 py-1.5 bg-[#0055A4] hover:bg-[#003d80] text-white text-[11px] font-semibold rounded-lg transition-colors disabled:opacity-60"
+          >
+            {seeding
+              ? <><div className="w-2.5 h-2.5 rounded-full border-2 border-white/40 border-t-white animate-spin"/>Loading…</>
+              : <><Zap size={11}/> Load Demo Data</>
+            }
+          </button>
+          <button onClick={load} className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-400 hover:text-slate-600 transition-colors" title="Refresh">
+            <RefreshCw size={13} />
+          </button>
+        </div>
       </div>
 
       {/* ── Health Score Card ───────────────────────────────────────────── */}
