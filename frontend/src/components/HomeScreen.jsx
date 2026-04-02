@@ -515,15 +515,25 @@ export default function HomeScreen({ onNavigate, onAskAnika }) {
   const [data, setData]               = useState(null)
   const [loading, setLoading]         = useState(true)
   const [error, setError]             = useState(false)
-  const [slideOut, setSlideOut]       = useState(null)   // { kpi, status }
+  const [slideOut, setSlideOut]       = useState(null)
   const [showScoreModal, setShowScoreModal] = useState(false)
   const [showDistModal, setShowDistModal]   = useState(false)
+  const [seeding, setSeeding]         = useState(false)
 
   const load = () => {
     setLoading(true); setError(false)
     axios.get('/api/home')
       .then(r  => { setData(r.data); setLoading(false) })
       .catch(() => { setError(true); setLoading(false) })
+  }
+
+  const loadDemoData = async () => {
+    setSeeding(true)
+    try {
+      await axios.get('/api/seed-multiyear')
+    } catch {}
+    setSeeding(false)
+    load()
   }
 
   useEffect(() => { load() }, [])
@@ -739,12 +749,21 @@ export default function HomeScreen({ onNavigate, onAskAnika }) {
                     and the Needs Attention / Doing Well sections stay empty. Set targets to unlock red/green status,
                     the full health score, clickable KPI cards, and Slack alerts.
                   </p>
-                  <button
-                    onClick={() => onNavigate?.('targets')}
-                    className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-amber-500 hover:bg-amber-600 text-white text-[11px] font-semibold rounded-lg transition-colors"
-                  >
-                    Configure KPI Targets <ArrowRight size={11}/>
-                  </button>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <button
+                      onClick={() => onNavigate?.('targets')}
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-amber-500 hover:bg-amber-600 text-white text-[11px] font-semibold rounded-lg transition-colors"
+                    >
+                      Configure KPI Targets <ArrowRight size={11}/>
+                    </button>
+                    <button
+                      onClick={loadDemoData}
+                      disabled={seeding}
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 border border-amber-400 text-amber-700 hover:bg-amber-100 text-[11px] font-semibold rounded-lg transition-colors disabled:opacity-60"
+                    >
+                      {seeding ? 'Loading…' : 'Or: Load Demo Data with targets'}
+                    </button>
+                  </div>
                 </div>
               </div>
             </div>
@@ -754,12 +773,24 @@ export default function HomeScreen({ onNavigate, onAskAnika }) {
               <BarChart2 size={28} className="text-slate-300" />
               <div>
                 <p className="text-slate-600 text-sm font-semibold mb-1">No data yet</p>
-                <p className="text-slate-400 text-[12px]">Upload your financial data or load demo data to see your health score.</p>
+                <p className="text-slate-400 text-[12px] max-w-sm">Upload your financial data or load 5 years of demo data (including KPI targets) to explore the full platform.</p>
               </div>
-              <button onClick={() => onNavigate?.('upload')}
-                className="px-4 py-2 border border-slate-300 rounded-lg text-slate-600 hover:border-slate-400 text-[12px] font-medium transition-colors">
-                Upload Data
-              </button>
+              <div className="flex items-center gap-3">
+                <button
+                  onClick={loadDemoData}
+                  disabled={seeding}
+                  className="flex items-center gap-2 px-4 py-2 bg-[#0055A4] hover:bg-[#003d80] text-white text-[12px] font-semibold rounded-lg transition-colors disabled:opacity-60"
+                >
+                  {seeding
+                    ? <><div className="w-3 h-3 rounded-full border-2 border-white/40 border-t-white animate-spin"/>Loading…</>
+                    : <>Load Demo Data (5 years)</>
+                  }
+                </button>
+                <button onClick={() => onNavigate?.('upload')}
+                  className="px-4 py-2 border border-slate-300 rounded-lg text-slate-600 hover:border-slate-400 text-[12px] font-medium transition-colors">
+                  Upload CSV
+                </button>
+              </div>
             </div>
           )
       )}

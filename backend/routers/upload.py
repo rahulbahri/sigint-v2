@@ -1530,6 +1530,60 @@ def seed_multiyear(request: Request):
             (proj_upload_id, 2026, mo, json.dumps(kpis), workspace_id)
         )
 
+    # ── Seed KPI targets (Series B benchmarks) ───────────────────────────────
+    # Without targets every KPI shows grey and the home screen is empty.
+    # These benchmarks match the 2022-era data so several KPIs show green.
+    _MULTIYEAR_TARGETS = [
+        ("revenue_growth",         10.0,  "higher"),
+        ("gross_margin",           65.0,  "higher"),
+        ("operating_margin",        5.0,  "higher"),
+        ("ebitda_margin",           8.0,  "higher"),
+        ("cash_conv_cycle",        45.0,  "lower"),
+        ("dso",                    42.0,  "lower"),
+        ("ar_turnover",             8.5,  "higher"),
+        ("avg_collection_period",  43.0,  "lower"),
+        ("cei",                    90.0,  "higher"),
+        ("ar_aging_current",       75.0,  "higher"),
+        ("ar_aging_overdue",       25.0,  "lower"),
+        ("billable_utilization",   72.0,  "higher"),
+        ("arr_growth",             10.0,  "higher"),
+        ("nrr",                   105.0,  "higher"),
+        ("burn_multiple",           1.5,  "lower"),
+        ("opex_ratio",             55.0,  "lower"),
+        ("contribution_margin",    50.0,  "higher"),
+        ("revenue_quality",        75.0,  "higher"),
+        ("cac_payback",            14.0,  "lower"),
+        ("sales_efficiency",        1.5,  "higher"),
+        ("customer_concentration", 30.0,  "lower"),
+        ("recurring_revenue",      75.0,  "higher"),
+        ("churn_rate",              3.0,  "lower"),
+        ("operating_leverage",      1.2,  "higher"),
+        ("growth_efficiency",       2.5,  "higher"),
+        ("revenue_momentum",        1.0,  "higher"),
+        ("revenue_fragility",       0.4,  "lower"),
+        ("burn_convexity",          0.3,  "lower"),
+        ("margin_volatility",       2.0,  "lower"),
+        ("pipeline_conversion",    20.0,  "higher"),
+        ("customer_decay_slope",    0.5,  "lower"),
+        ("customer_ltv",           80.0,  "higher"),
+        ("pricing_power_index",     3.0,  "higher"),
+    ]
+    existing_targets = {
+        r["kpi_key"]
+        for r in conn.execute(
+            "SELECT kpi_key FROM kpi_targets WHERE workspace_id=?", (workspace_id,)
+        ).fetchall()
+    }
+    for kpi_key, target_value, direction in _MULTIYEAR_TARGETS:
+        conn.execute(
+            """INSERT INTO kpi_targets (kpi_key, target_value, direction, workspace_id)
+               VALUES (?,?,?,?)
+               ON CONFLICT(kpi_key, workspace_id) DO UPDATE
+               SET target_value=excluded.target_value,
+                   direction=excluded.direction""",
+            (kpi_key, target_value, direction, workspace_id)
+        )
+
     conn.commit()
     conn.close()
     return {
@@ -1537,6 +1591,7 @@ def seed_multiyear(request: Request):
         "years":  "2021–2026",
         "actual_months": total_months,
         "projection_months": 60 + 9,
+        "targets_seeded": len(_MULTIYEAR_TARGETS),
         "narrative": [
             "2021: Startup phase — high churn, negative margins, rapid growth from small base",
             "2022: Series B scaling — rapid hiring, margins climbing, peak growth",
