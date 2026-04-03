@@ -6,7 +6,8 @@ import {
   Activity, Target, Shield, BarChart2,
   X, ChevronRight, Info, Clock, Eye,
   ChevronDown, Sliders, RotateCcw, Save,
-  Loader2, AlertCircle, Calendar
+  Loader2, AlertCircle, Calendar,
+  Flame, Zap, FileText, MessageSquare
 } from 'lucide-react'
 
 // ── KPI contextual info dictionary ───────────────────────────────────────────
@@ -592,21 +593,94 @@ function KpiSlideOut({ kpi: initialKpi, status: initialStatus, onClose, onNaviga
                   </div>
                 )
               })()}
+
+              {/* Benchmark positioning (stage-specific) */}
+              {detail.benchmark_position && (
+                <div>
+                  <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400 mb-1.5">Peer Positioning</p>
+                  <div className="bg-slate-50 rounded-xl p-3">
+                    <div className="flex items-center gap-2 mb-1">
+                      <span className={`text-[11px] font-bold ${
+                        detail.benchmark_position.quartile === 4 ? 'text-emerald-600' :
+                        detail.benchmark_position.quartile === 1 ? 'text-red-600' :
+                        'text-amber-600'
+                      }`}>
+                        {detail.benchmark_position.quartile_label}
+                      </span>
+                      {detail.benchmark_position.stage_label && (
+                        <span className="text-[10px] text-slate-400">for {detail.benchmark_position.stage_label} companies</span>
+                      )}
+                    </div>
+                    {detail.benchmark_position.percentile != null && (
+                      <div className="w-full bg-slate-200 rounded-full h-1.5 mt-2">
+                        <div className="h-1.5 rounded-full transition-all"
+                          style={{
+                            width: `${Math.min(100, Math.max(0, detail.benchmark_position.percentile))}%`,
+                            backgroundColor: detail.benchmark_position.quartile >= 3 ? '#059669' : detail.benchmark_position.quartile === 2 ? '#D97706' : '#DC2626',
+                          }}
+                        />
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {/* Correlated KPIs */}
+              {detail.correlations && detail.correlations.length > 0 && (
+                <div>
+                  <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400 mb-1.5">Correlated KPIs</p>
+                  <p className="text-[9px] text-slate-400 mb-2">Data-driven correlations from your actual monthly trends</p>
+                  <div className="space-y-1.5">
+                    {detail.correlations.slice(0, 5).map((corr, i) => (
+                      <button key={i}
+                        onClick={() => navigateToKpi(corr.key || corr.kpi_key)}
+                        className="flex items-center gap-2 w-full text-left px-3 py-2 bg-slate-50 rounded-lg hover:bg-slate-100 transition-colors"
+                      >
+                        <span className={`w-2 h-2 rounded-full flex-shrink-0 ${
+                          corr.correlation > 0 ? 'bg-emerald-400' : 'bg-red-400'
+                        }`}/>
+                        <span className="text-[11px] text-slate-700 font-medium flex-1 truncate">
+                          {formatKpiLabel(corr.key || corr.kpi_key)}
+                        </span>
+                        <span className={`text-[10px] font-bold ${
+                          corr.correlation > 0 ? 'text-emerald-600' : 'text-red-600'
+                        }`}>
+                          {corr.correlation > 0 ? '+' : ''}{(corr.correlation * 100).toFixed(0)}%
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
           )}
         </div>
 
-        {/* Footer */}
-        {info.tab && (
-          <div className="px-5 py-4 border-t border-slate-100">
+        {/* Footer with cross-page CTAs */}
+        <div className="px-5 py-4 border-t border-slate-100 space-y-2">
+          {info.tab && (
             <button
               onClick={() => { onNavigate?.(info.tab); handleClose() }}
               className="w-full flex items-center justify-center gap-2 bg-[#0055A4] hover:bg-[#004688] text-white text-[12px] font-semibold py-2.5 rounded-xl transition-colors"
             >
               Open Full Analysis <ArrowRight size={13} />
             </button>
+          )}
+          <div className="flex items-center gap-2">
+            <button onClick={() => { onNavigate?.('forecast'); handleClose() }}
+              className="flex-1 flex items-center justify-center gap-1.5 py-2 text-[11px] font-semibold text-slate-600 hover:text-[#0055A4] bg-slate-50 hover:bg-slate-100 rounded-lg transition-colors">
+              <BarChart2 size={11}/> Forecast
+            </button>
+            <button onClick={() => { onNavigate?.('variance'); handleClose() }}
+              className="flex-1 flex items-center justify-center gap-1.5 py-2 text-[11px] font-semibold text-slate-600 hover:text-[#0055A4] bg-slate-50 hover:bg-slate-100 rounded-lg transition-colors">
+              <Activity size={11}/> Variance
+            </button>
+            <button onClick={() => { onNavigate?.('decisions'); handleClose() }}
+              className="flex-1 flex items-center justify-center gap-1.5 py-2 text-[11px] font-semibold text-slate-600 hover:text-[#0055A4] bg-slate-50 hover:bg-slate-100 rounded-lg transition-colors">
+              <FileText size={11}/> Decision
+            </button>
           </div>
-        )}
+        </div>
       </div>
     </div>
   )
@@ -1661,6 +1735,25 @@ export default function HomeScreen({ onNavigate, onAskAnika }) {
                         {kGapFromApi != null && (
                           <span className="text-red-600 text-[10px] font-bold">{kGapFromApi}% off</span>
                         )}
+                        {kpi.is_structural && (
+                          <span className="text-[9px] font-semibold text-orange-600 bg-orange-100 px-1.5 py-0.5 rounded-full flex items-center gap-0.5">
+                            <Flame size={8}/>{kpi.miss_streak}mo streak
+                          </span>
+                        )}
+                        {!kpi.is_structural && kpi.miss_streak > 1 && (
+                          <span className="text-[9px] font-medium text-amber-600 bg-amber-50 px-1.5 py-0.5 rounded-full">
+                            {kpi.miss_streak}mo miss
+                          </span>
+                        )}
+                        {kpi.benchmark?.quartile_label && (
+                          <span className={`text-[9px] font-medium px-1.5 py-0.5 rounded-full ${
+                            kpi.benchmark.quartile === 1 ? 'text-red-600 bg-red-50' :
+                            kpi.benchmark.quartile === 4 ? 'text-emerald-600 bg-emerald-50' :
+                            'text-slate-500 bg-slate-100'
+                          }`}>
+                            {kpi.benchmark.quartile_label}
+                          </span>
+                        )}
                         {kComposite != null && (
                           <span className="text-[9px] font-bold text-red-500 bg-red-100 px-1.5 py-0.5 rounded-full ml-auto">
                             {kComposite}
@@ -1672,6 +1765,22 @@ export default function HomeScreen({ onNavigate, onAskAnika }) {
                       <Sparkline data={kpi.sparkline} color="#DC2626" width={60} height={24} />
                       <ChevronRight size={11} className="text-slate-300 group-hover:text-slate-500" />
                     </div>
+                  </div>
+                  {/* Cross-page CTAs */}
+                  <div className="flex items-center gap-1.5 mt-2 pt-2 border-t border-red-100">
+                    <span className="text-[9px] text-red-300 font-medium flex-shrink-0">Quick:</span>
+                    <button onClick={(e) => { e.stopPropagation(); onNavigate?.('forecast') }}
+                      className="text-[9px] font-semibold text-slate-500 hover:text-[#0055A4] bg-white border border-slate-200 hover:border-[#0055A4]/30 px-2 py-0.5 rounded-md transition-colors">
+                      Forecast →
+                    </button>
+                    <button onClick={(e) => { e.stopPropagation(); onNavigate?.('variance') }}
+                      className="text-[9px] font-semibold text-slate-500 hover:text-[#0055A4] bg-white border border-slate-200 hover:border-[#0055A4]/30 px-2 py-0.5 rounded-md transition-colors">
+                      Variance →
+                    </button>
+                    <button onClick={(e) => { e.stopPropagation(); onNavigate?.('decisions') }}
+                      className="text-[9px] font-semibold text-slate-500 hover:text-[#0055A4] bg-white border border-slate-200 hover:border-[#0055A4]/30 px-2 py-0.5 rounded-md transition-colors">
+                      Log Decision →
+                    </button>
                   </div>
                 </button>
               )
@@ -1695,6 +1804,105 @@ export default function HomeScreen({ onNavigate, onAskAnika }) {
       )}
 
       </div>{/* end side-by-side grid */}
+
+      {/* ── Decision Check-ins (30-day reminders) ──────────────────── */}
+      {data?.decision_check_ins?.length > 0 && (
+        <div className="space-y-2">
+          {data.decision_check_ins.map((ci, i) => (
+            <button key={i} onClick={() => onNavigate?.('decisions')}
+              className="w-full text-left card p-3.5 bg-blue-50/60 border-blue-200 hover:border-blue-300 hover:shadow-md transition-all group">
+              <div className="flex items-start gap-3">
+                <MessageSquare size={14} className="text-blue-500 mt-0.5 flex-shrink-0" />
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2 mb-0.5">
+                    <span className="text-slate-700 text-[12px] font-bold">{ci.title}</span>
+                    <span className="text-[9px] font-medium text-blue-600 bg-blue-100 px-1.5 py-0.5 rounded-full">{ci.days_since}d ago</span>
+                  </div>
+                  <p className="text-slate-500 text-[11px] leading-snug">{ci.reason}</p>
+                </div>
+                <span className="text-[10px] text-blue-500 font-semibold flex items-center gap-1 flex-shrink-0 group-hover:text-blue-700">
+                  Review <ArrowRight size={10}/>
+                </span>
+              </div>
+            </button>
+          ))}
+        </div>
+      )}
+
+      {/* ── Domain Narratives + Period Comparison ─────────────────────── */}
+      {(data?.domain_narratives?.length > 0 || data?.period_comparison) && (
+        <div className="grid grid-cols-1 lg:grid-cols-[1fr_1fr] gap-4">
+
+          {/* Domain narratives */}
+          {data?.domain_narratives?.length > 0 && (
+            <div className="card p-4 shadow-sm">
+              <div className="flex items-center gap-2 mb-3">
+                <FileText size={13} className="text-slate-400" />
+                <h2 className="text-slate-700 text-[11px] font-bold uppercase tracking-wider">Domain Intelligence</h2>
+              </div>
+              <div className="space-y-2">
+                {data.domain_narratives.map((dn, i) => (
+                  <div key={i} className="flex items-start gap-2.5">
+                    <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 mt-1.5 ${
+                      dn.severity === 'critical' ? 'bg-red-500' :
+                      dn.severity === 'warning'  ? 'bg-amber-500' :
+                      'bg-emerald-500'
+                    }`} />
+                    <div className="min-w-0">
+                      <span className="text-slate-600 text-[11px] font-semibold">{dn.domain_label || dn.domain}: </span>
+                      <span className="text-slate-500 text-[11px] leading-relaxed">{dn.narrative}</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Period comparison */}
+          {data?.period_comparison && (data.period_comparison.improved?.length > 0 || data.period_comparison.deteriorated?.length > 0) && (
+            <div className="card p-4 shadow-sm">
+              <div className="flex items-center gap-2 mb-3">
+                <Zap size={13} className="text-slate-400" />
+                <h2 className="text-slate-700 text-[11px] font-bold uppercase tracking-wider">vs Prior Period</h2>
+              </div>
+              <div className="space-y-3">
+                {data.period_comparison.improved?.length > 0 && (
+                  <div>
+                    <div className="flex items-center gap-1.5 mb-1.5">
+                      <TrendingUp size={11} className="text-emerald-500" />
+                      <span className="text-[10px] font-bold text-emerald-600 uppercase tracking-wider">Improved ({data.period_comparison.improved.length})</span>
+                    </div>
+                    <div className="flex flex-wrap gap-1.5">
+                      {data.period_comparison.improved.map(kpi => (
+                        <button key={kpi.key} onClick={() => setSlideOut({ kpi: { key: kpi.key }, status: 'green' })}
+                          className="text-[10px] font-medium text-emerald-700 bg-emerald-50 px-2 py-1 rounded-lg hover:bg-emerald-100 transition-colors cursor-pointer">
+                          {formatKpiLabel(kpi.key)} <span className="font-bold">{kpi.delta > 0 ? '+' : ''}{kpi.delta?.toFixed?.(1) ?? kpi.delta}%</span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                {data.period_comparison.deteriorated?.length > 0 && (
+                  <div>
+                    <div className="flex items-center gap-1.5 mb-1.5">
+                      <TrendingDown size={11} className="text-red-500" />
+                      <span className="text-[10px] font-bold text-red-600 uppercase tracking-wider">Deteriorated ({data.period_comparison.deteriorated.length})</span>
+                    </div>
+                    <div className="flex flex-wrap gap-1.5">
+                      {data.period_comparison.deteriorated.map(kpi => (
+                        <button key={kpi.key} onClick={() => setSlideOut({ kpi: { key: kpi.key }, status: 'red' })}
+                          className="text-[10px] font-medium text-red-700 bg-red-50 px-2 py-1 rounded-lg hover:bg-red-100 transition-colors cursor-pointer">
+                          {formatKpiLabel(kpi.key)} <span className="font-bold">{kpi.delta > 0 ? '+' : ''}{kpi.delta?.toFixed?.(1) ?? kpi.delta}%</span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* ── Other Critical (by Business Domain) ─────────────────────── */}
       {otherCritical.length > 0 && (

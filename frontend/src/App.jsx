@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, lazy, Suspense } from 'react'
 import axios from 'axios'
 import {
   LayoutDashboard, Fingerprint, TrendingUp,
@@ -8,39 +8,51 @@ import {
   BookMarked, Sliders, Users, Gauge, FlaskConical, Presentation,
   Database, Lock,
 } from 'lucide-react'
-import Scorecard from './components/Scorecard.jsx'
-import Fingerprint2 from './components/Fingerprint.jsx'
-import MonthlyTrend from './components/MonthlyTrend.jsx'
-import CSVUpload from './components/CSVUpload.jsx'
-import APIReference from './components/APIReference.jsx'
+
+// ── Critical-path imports (always loaded) ────────────────────────────────────
 import SummaryBar from './components/SummaryBar.jsx'
-import KpiDetailPanel from './components/KpiDetailPanel.jsx'
-import AiQueryPanel from './components/AiQueryPanel.jsx'
-import ProjectionBridge from './components/ProjectionBridge.jsx'
 import MonthRangeFilter from './components/MonthRangeFilter.jsx'
-import OntologyPage from './components/OntologyPage.jsx'
-import BoardReady from './components/BoardReady.jsx'
-import ForecastPage from './components/ForecastPage.jsx'
-import DevDocs from './components/DevDocs.jsx'
-import SlackAlerts from './components/SlackAlerts.jsx'
-import CompanySettings from './components/CompanySettings.jsx'
-import TeamSettings from './components/TeamSettings.jsx'
 import OnboardingModal from './components/OnboardingModal.jsx'
-import VarianceCommand from './components/VarianceCommand.jsx'
-import TargetsEditor from './components/TargetsEditor.jsx'
-import AuditLog from './components/AuditLog.jsx'
 import OnboardingChecklist from './components/OnboardingChecklist.jsx'
-import PricingPage from './components/PricingPage'
 import LoginPage from './components/LoginPage'
-import AdminPanel from './components/AdminPanel.jsx'
-import LegalPage from './components/LegalPage.jsx'
-import DecisionLog from './components/DecisionLog.jsx'
-import ScenarioPlanner from './components/ScenarioPlanner.jsx'
-import DocsPage from './components/DocsPage.jsx'
 import HomeScreen from './components/HomeScreen.jsx'
-import DataHealthPage from './components/DataHealthPage.jsx'
-import BoardPackGenerator from './components/BoardPackGenerator.jsx'
-import TutorialPage from './components/TutorialPage.jsx'
+
+// ── Lazy-loaded route components (code-split) ────────────────────────────────
+const Scorecard         = lazy(() => import('./components/Scorecard.jsx'))
+const Fingerprint2      = lazy(() => import('./components/Fingerprint.jsx'))
+const MonthlyTrend      = lazy(() => import('./components/MonthlyTrend.jsx'))
+const CSVUpload         = lazy(() => import('./components/CSVUpload.jsx'))
+const APIReference      = lazy(() => import('./components/APIReference.jsx'))
+const KpiDetailPanel    = lazy(() => import('./components/KpiDetailPanel.jsx'))
+const AiQueryPanel      = lazy(() => import('./components/AiQueryPanel.jsx'))
+const ProjectionBridge  = lazy(() => import('./components/ProjectionBridge.jsx'))
+const OntologyPage      = lazy(() => import('./components/OntologyPage.jsx'))
+const BoardReady        = lazy(() => import('./components/BoardReady.jsx'))
+const ForecastPage      = lazy(() => import('./components/ForecastPage.jsx'))
+const DevDocs           = lazy(() => import('./components/DevDocs.jsx'))
+const SlackAlerts       = lazy(() => import('./components/SlackAlerts.jsx'))
+const CompanySettings   = lazy(() => import('./components/CompanySettings.jsx'))
+const TeamSettings      = lazy(() => import('./components/TeamSettings.jsx'))
+const VarianceCommand   = lazy(() => import('./components/VarianceCommand.jsx'))
+const TargetsEditor     = lazy(() => import('./components/TargetsEditor.jsx'))
+const AuditLog          = lazy(() => import('./components/AuditLog.jsx'))
+const PricingPage       = lazy(() => import('./components/PricingPage'))
+const AdminPanel        = lazy(() => import('./components/AdminPanel.jsx'))
+const LegalPage         = lazy(() => import('./components/LegalPage.jsx'))
+const DecisionLog       = lazy(() => import('./components/DecisionLog.jsx'))
+const ScenarioPlanner   = lazy(() => import('./components/ScenarioPlanner.jsx'))
+const DocsPage          = lazy(() => import('./components/DocsPage.jsx'))
+const DataHealthPage    = lazy(() => import('./components/DataHealthPage.jsx'))
+const BoardPackGenerator= lazy(() => import('./components/BoardPackGenerator.jsx'))
+const TutorialPage      = lazy(() => import('./components/TutorialPage.jsx'))
+
+// ── Suspense fallback ────────────────────────────────────────────────────────
+const PageLoader = () => (
+  <div className="flex items-center justify-center py-20">
+    <div className="w-5 h-5 rounded-full border-2 border-slate-300 border-t-[#0055A4] animate-spin" />
+    <span className="text-slate-400 text-sm ml-3">Loading...</span>
+  </div>
+)
 
 // ── Navigation — 4 groups + Labs ─────────────────────────────────────────────
 const NAV_GROUPS = [
@@ -798,7 +810,7 @@ export default function App() {
           )}
 
           {!loading && (
-            <>
+            <Suspense fallback={<PageLoader />}>
               {/* ── Home screen ───────────────────────────────────────────────── */}
               {tab === 'home' && (
                 <HomeScreen
@@ -906,7 +918,7 @@ export default function App() {
               )}
               {!noData && tab === 'fingerprint' && <Fingerprint2 fingerprint={yearFilteredFingerprint} onKpiClick={openKpi}/>}
               {!noData && tab === 'trends'      && <MonthlyTrend fingerprint={filteredFingerprint} monthly={filteredMonthly} onKpiClick={openKpi} periodLabel={periodLabel}/>}
-            </>
+            </Suspense>
           )}
         </main>
       </div>
