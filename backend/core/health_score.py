@@ -250,6 +250,54 @@ def compute_health_score(
     target_achieve    = _compute_target_achievement_with_directions(kpi_avgs, targets, directions)
     risk              = _compute_risk_flags(kpi_avgs, targets, directions)
 
+    # ── Per-KPI detail for each component ─────────────────────────────────────
+    momentum_kpis = []
+    for key, vals in time_series.items():
+        if len(vals) < 6:
+            continue
+        recent_avg = sum(vals[-3:]) / 3
+        prior_avg  = sum(vals[-6:-3]) / 3
+        direction  = directions.get(key, "higher")
+        if direction == "higher":
+            status = "improving" if recent_avg > prior_avg * 1.005 else ("declining" if recent_avg < prior_avg * 0.995 else "stable")
+        else:
+            status = "improving" if recent_avg < prior_avg * 0.995 else ("declining" if recent_avg > prior_avg * 1.005 else "stable")
+        delta_pct = round(((recent_avg - prior_avg) / abs(prior_avg)) * 100, 1) if prior_avg != 0 else 0.0
+        momentum_kpis.append({"key": key, "name": _friendly_name(key), "status": status, "delta_pct": delta_pct})
+    momentum_kpis.sort(key=lambda x: x["delta_pct"])
+
+    target_kpis = []
+    for key, tval in targets.items():
+        if tval is None:
+            continue
+        avg = kpi_avgs.get(key)
+        if avg is None:
+            continue
+        dirn = directions.get(key, "higher")
+        on_target = _is_on_target(avg, tval, dirn)
+        target_kpis.append({
+            "key": key, "name": _friendly_name(key),
+            "avg": round(avg, 2), "target": tval,
+            "on_target": on_target, "direction": dirn,
+        })
+    target_kpis.sort(key=lambda x: (0 if x["on_target"] else 1, x["key"]))
+
+    risk_kpis = []
+    for key, tval in targets.items():
+        if tval is None:
+            continue
+        avg = kpi_avgs.get(key)
+        if avg is None:
+            continue
+        dirn = directions.get(key, "higher")
+        is_red = _is_critical(avg, tval, dirn)
+        if is_red:
+            risk_kpis.append({
+                "key": key, "name": _friendly_name(key),
+                "avg": round(avg, 2), "target": tval, "direction": dirn,
+            })
+    risk_kpis.sort(key=lambda x: x["key"])
+
     # Weighted composite
     raw_score = (momentum * w_momentum) + (target_achieve * w_target) + (risk * w_risk)
     score = round(raw_score)
@@ -384,6 +432,27 @@ def compute_health_score(
         "red_kpis_detail":    [{"key": k, "pct": round(p * 100, 1)} for k, p in red_kpis],
         "grey_kpis_list":     grey_kpis,
         "weights":            {"momentum": w_momentum, "target": w_target, "risk": w_risk},
+        "component_detail": {
+            "momentum": {
+                "score": momentum,
+                "kpis": momentum_kpis,
+                "total_improving": sum(1 for k in momentum_kpis if k["status"] == "improving"),
+                "total_declining": sum(1 for k in momentum_kpis if k["status"] == "declining"),
+                "total_stable":    sum(1 for k in momentum_kpis if k["status"] == "stable"),
+            },
+            "target_achievement": {
+                "score": target_achieve,
+                "kpis": target_kpis,
+                "total_on_target": sum(1 for k in target_kpis if k["on_target"]),
+                "total_off_target": sum(1 for k in target_kpis if not k["on_target"]),
+            },
+            "risk": {
+                "score": risk,
+                "kpis": risk_kpis,
+                "total_red": len(risk_kpis),
+                "total_scored": len([k for k, t in targets.items() if t is not None and kpi_avgs.get(k) is not None]),
+            },
+        },
         "narrative_detail":   narrative_detail,
         "composite_ranked":   composite_ranked,
         "domain_groups":      domain_groups,

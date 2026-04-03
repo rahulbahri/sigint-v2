@@ -686,18 +686,20 @@ function KpiSlideOut({ kpi: initialKpi, status: initialStatus, onClose, onNaviga
   )
 }
 
-// ── Score Breakdown Modal (with adjustable weight sliders) ───────────────────
+// ── Score Breakdown Modal (with expandable component detail) ──────────────────
 function ScoreBreakdownModal({ health, onClose, onWeightsApply }) {
   const score = health?.score ?? 0
   const color = health?.color ?? 'grey'
   const mom = health?.momentum ?? 0
   const tgt = health?.target_achievement ?? 0
   const rsk = health?.risk_flags ?? 0
+  const cd = health?.component_detail || {}
 
   // Editable weights
   const [weights, setWeights] = useState({ momentum: 30, target: 40, risk: 30 })
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
+  const [expandedComponent, setExpandedComponent] = useState(null)
 
   // Compute preview score
   const previewScore = (
@@ -715,7 +717,6 @@ function ScoreBreakdownModal({ health, onClose, onWeightsApply }) {
 
     const newWeights = { ...weights, [key]: val }
     if (otherTotal === 0) {
-      // Split evenly
       otherKeys.forEach(k => { newWeights[k] = Math.round(remaining / otherKeys.length) })
     } else {
       let allocated = 0
@@ -730,7 +731,6 @@ function ScoreBreakdownModal({ health, onClose, onWeightsApply }) {
         }
       })
     }
-    // Clamp negatives
     otherKeys.forEach(k => { if (newWeights[k] < 0) newWeights[k] = 0 })
     setWeights(newWeights)
     setSaved(false)
@@ -767,94 +767,218 @@ function ScoreBreakdownModal({ health, onClose, onWeightsApply }) {
       : `Your overall health score of ${score} reflects the weighted combination of momentum, target achievement, and risk factors below.`
   }
 
+  const toggleExpand = (key) => setExpandedComponent(prev => prev === key ? null : key)
+
   const components = [
-    { key: 'momentum', label: 'Momentum', value: mom, Icon: Activity, desc: 'Measures how many KPIs are improving vs declining over the last 3 months.' },
-    { key: 'target', label: 'Target Achievement', value: tgt, Icon: Target, desc: 'Percentage of KPIs with targets that are currently on track (green status).' },
-    { key: 'risk', label: 'Risk Score', value: rsk, Icon: Shield, desc: 'Inverse of risk — penalises for KPIs in critical/red status and negative momentum.' },
+    {
+      key: 'momentum', label: 'Momentum', value: mom, Icon: Activity, wKey: 'momentum',
+      desc: 'Compares the average of each KPI over the last 3 months vs the 3 months before that. KPIs improving by >0.5% count as "improving"; declining by >0.5% count as "declining".',
+      rationale: 'Why this matters: Momentum captures the direction of change, not just the current level. A business hitting all targets but trending downward has different urgency than one recovering from a dip. This signal detects deterioration before it shows up in targets.',
+      formula: 'Score = (Improving KPIs / (Improving + Declining)) x 100. Stable KPIs are excluded. 50 = neutral.',
+    },
+    {
+      key: 'target', label: 'Target Achievement', value: tgt, Icon: Target, wKey: 'target',
+      desc: 'Percentage of KPIs with targets that are currently on track (within 2% of target, direction-aware). Higher-is-better and lower-is-better KPIs are scored correctly.',
+      rationale: 'Why this matters: Target achievement is the most direct measure of whether the business is executing against its plan. It carries the highest default weight (40%) because a company hitting its targets is fundamentally healthy regardless of other signals.',
+      formula: 'Score = (KPIs on target / Total KPIs with targets) x 100. "On target" = within 2% tolerance.',
+    },
+    {
+      key: 'risk', label: 'Risk Score', value: rsk, Icon: Shield, wKey: 'risk',
+      desc: 'Starts at 100 and deducts points for each KPI in critical/red status (>10% miss from target). More red KPIs = lower risk score.',
+      rationale: 'Why this matters: Risk score penalises concentration of failures. Even if most KPIs are green, having several critical misses signals structural problems. This prevents a high target achievement score from masking serious underperformance in key areas.',
+      formula: 'Score = (1 - Red KPIs / Total Scored KPIs) x 100. No targets = 70 (moderate default).',
+    },
   ]
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4" onClick={onClose}>
       <div className="absolute inset-0 bg-black/30 backdrop-blur-[2px]" />
       <div
-        className="relative bg-white rounded-2xl shadow-2xl w-full max-w-lg p-6"
+        className="relative bg-white rounded-2xl shadow-2xl w-full max-w-lg max-h-[90vh] flex flex-col"
         onClick={e => e.stopPropagation()}
         style={{ animation: 'fadeInScale 0.18s ease-out' }}
       >
-        <div className="flex items-center justify-between mb-4">
+        {/* Header */}
+        <div className="flex items-center justify-between px-6 pt-6 pb-3">
           <p className="text-slate-800 font-bold text-sm">How is the Health Score calculated?</p>
           <button onClick={onClose} className="p-1 rounded-md hover:bg-slate-100 text-slate-400"><X size={14}/></button>
         </div>
-        <p className="text-slate-500 text-[12px] leading-relaxed mb-5">{narrative()}</p>
 
-        <div className="space-y-4">
-          {components.map(({ key, label, value, Icon, desc }) => {
-            const c = value >= 70 ? '#059669' : value >= 50 ? '#D97706' : '#DC2626'
-            return (
-              <div key={key}>
-                <div className="flex items-center gap-2 mb-1">
-                  <Icon size={13} style={{ color: c }} />
-                  <span className="text-slate-700 text-[12px] font-semibold flex-1">{label}</span>
-                  <span className="text-[12px] font-bold" style={{ color: c }}>{value.toFixed(0)}</span>
+        {/* Scrollable content */}
+        <div className="flex-1 overflow-y-auto px-6 pb-6">
+          <p className="text-slate-500 text-[12px] leading-relaxed mb-5">{narrative()}</p>
+
+          <div className="space-y-3">
+            {components.map(({ key, label, value, Icon, desc, rationale, formula, wKey }) => {
+              const c = value >= 70 ? '#059669' : value >= 50 ? '#D97706' : '#DC2626'
+              const isExpanded = expandedComponent === key
+              const detail = key === 'momentum' ? cd.momentum : key === 'target' ? cd.target_achievement : cd.risk
+              return (
+                <div key={key} className="rounded-xl border border-slate-200 overflow-hidden">
+                  {/* Clickable header */}
+                  <button
+                    onClick={() => toggleExpand(key)}
+                    className="w-full text-left px-4 py-3 hover:bg-slate-50 transition-colors"
+                  >
+                    <div className="flex items-center gap-2">
+                      <Icon size={14} style={{ color: c }} />
+                      <span className="text-slate-700 text-[12px] font-bold flex-1">{label}</span>
+                      <span className="text-[13px] font-extrabold tabular-nums" style={{ color: c }}>{value.toFixed(0)}</span>
+                      <span className="text-[10px] text-slate-400 font-medium">/ 100</span>
+                      <ChevronDown size={12} className={`text-slate-400 transition-transform ${isExpanded ? 'rotate-180' : ''}`} />
+                    </div>
+                    <div className="h-1.5 bg-slate-100 rounded-full overflow-hidden mt-2">
+                      <div className="h-full rounded-full transition-all duration-700" style={{ width: `${value}%`, backgroundColor: c }} />
+                    </div>
+                  </button>
+
+                  {/* Expanded detail */}
+                  {isExpanded && (
+                    <div className="px-4 pb-4 space-y-3 border-t border-slate-100 bg-slate-50/50">
+                      {/* What it measures */}
+                      <div className="pt-3">
+                        <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400 mb-1">What it measures</p>
+                        <p className="text-slate-600 text-[11px] leading-relaxed">{desc}</p>
+                      </div>
+
+                      {/* Formula */}
+                      <div>
+                        <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400 mb-1">Formula</p>
+                        <p className="text-slate-700 text-[11px] leading-relaxed font-mono bg-white px-3 py-2 rounded-lg border border-slate-100">{formula}</p>
+                      </div>
+
+                      {/* Rationale */}
+                      <div>
+                        <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400 mb-1">Rationale</p>
+                        <p className="text-slate-600 text-[11px] leading-relaxed">{rationale}</p>
+                      </div>
+
+                      {/* Per-KPI breakdown */}
+                      {key === 'momentum' && detail?.kpis?.length > 0 && (
+                        <div>
+                          <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400 mb-1.5">
+                            KPI Breakdown ({detail.total_improving} improving, {detail.total_declining} declining, {detail.total_stable} stable)
+                          </p>
+                          <div className="space-y-1 max-h-48 overflow-y-auto">
+                            {detail.kpis.map(k => (
+                              <div key={k.key} className="flex items-center gap-2 px-2 py-1.5 bg-white rounded-lg text-[11px]">
+                                <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${
+                                  k.status === 'improving' ? 'bg-emerald-500' : k.status === 'declining' ? 'bg-red-500' : 'bg-slate-300'
+                                }`} />
+                                <span className="text-slate-700 font-medium flex-1 truncate">{k.name}</span>
+                                <span className={`font-bold tabular-nums ${
+                                  k.status === 'improving' ? 'text-emerald-600' : k.status === 'declining' ? 'text-red-600' : 'text-slate-400'
+                                }`}>
+                                  {k.delta_pct > 0 ? '+' : ''}{k.delta_pct}%
+                                </span>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+
+                      {key === 'target' && detail?.kpis?.length > 0 && (
+                        <div>
+                          <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400 mb-1.5">
+                            KPI Breakdown ({detail.total_on_target} on target, {detail.total_off_target} off target)
+                          </p>
+                          <div className="space-y-1 max-h-48 overflow-y-auto">
+                            {detail.kpis.map(k => (
+                              <div key={k.key} className="flex items-center gap-2 px-2 py-1.5 bg-white rounded-lg text-[11px]">
+                                {k.on_target
+                                  ? <CheckCircle2 size={11} className="text-emerald-500 flex-shrink-0" />
+                                  : <AlertCircle size={11} className="text-red-500 flex-shrink-0" />
+                                }
+                                <span className="text-slate-700 font-medium flex-1 truncate">{k.name}</span>
+                                <span className="text-slate-500 tabular-nums">{k.avg}</span>
+                                <span className="text-slate-300">vs</span>
+                                <span className="text-slate-500 tabular-nums">{k.target}</span>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+
+                      {key === 'risk' && (
+                        <div>
+                          <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400 mb-1.5">
+                            {detail?.total_red || 0} red KPI{(detail?.total_red || 0) !== 1 ? 's' : ''} out of {detail?.total_scored || 0} scored
+                          </p>
+                          {detail?.kpis?.length > 0 ? (
+                            <div className="space-y-1 max-h-48 overflow-y-auto">
+                              {detail.kpis.map(k => (
+                                <div key={k.key} className="flex items-center gap-2 px-2 py-1.5 bg-white rounded-lg text-[11px]">
+                                  <AlertTriangle size={11} className="text-red-500 flex-shrink-0" />
+                                  <span className="text-slate-700 font-medium flex-1 truncate">{k.name}</span>
+                                  <span className="text-red-600 font-bold tabular-nums">{k.avg}</span>
+                                  <span className="text-slate-300">vs</span>
+                                  <span className="text-slate-500 tabular-nums">{k.target}</span>
+                                </div>
+                              ))}
+                            </div>
+                          ) : (
+                            <p className="text-emerald-600 text-[11px] font-medium">No KPIs in critical status. Risk score is at maximum.</p>
+                          )}
+                        </div>
+                      )}
+
+                      {/* Weight slider */}
+                      <div className="flex items-center gap-3 bg-white rounded-lg px-3 py-2 border border-slate-100">
+                        <Sliders size={11} className="text-slate-400 flex-shrink-0" />
+                        <span className="text-slate-500 text-[10px] font-medium w-12 flex-shrink-0">Weight:</span>
+                        <input
+                          type="range"
+                          min={0}
+                          max={100}
+                          value={weights[wKey]}
+                          onChange={e => handleWeightChange(wKey, e.target.value)}
+                          className="flex-1 h-1.5 accent-[#0055A4] cursor-pointer"
+                        />
+                        <span className="text-[12px] font-bold text-[#0055A4] w-10 text-right">{weights[wKey]}%</span>
+                      </div>
+                    </div>
+                  )}
                 </div>
-                <div className="h-1.5 bg-slate-100 rounded-full overflow-hidden mb-1.5">
-                  <div className="h-full rounded-full transition-all duration-700" style={{ width: `${value}%`, backgroundColor: c }} />
-                </div>
-                <p className="text-slate-400 text-[11px] leading-snug mb-2">{desc}</p>
-                {/* Weight slider */}
-                <div className="flex items-center gap-3 bg-slate-50 rounded-lg px-3 py-2">
-                  <Sliders size={11} className="text-slate-400 flex-shrink-0" />
-                  <span className="text-slate-500 text-[10px] font-medium w-12 flex-shrink-0">Weight:</span>
-                  <input
-                    type="range"
-                    min={0}
-                    max={100}
-                    value={weights[key]}
-                    onChange={e => handleWeightChange(key, e.target.value)}
-                    className="flex-1 h-1.5 accent-[#0055A4] cursor-pointer"
-                  />
-                  <span className="text-[12px] font-bold text-[#0055A4] w-10 text-right">{weights[key]}%</span>
-                </div>
+              )
+            })}
+          </div>
+
+          {/* Preview score */}
+          <div className="mt-5 bg-slate-50 rounded-xl p-3">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-slate-500 text-[11px]">
+                  <span className="font-semibold text-slate-600">Formula: </span>
+                  Score = (Momentum x {weights.momentum/100}) + (Target x {weights.target/100}) + (Risk x {weights.risk/100})
+                </p>
+                <p className="text-slate-400 text-[10px] mt-0.5">
+                  Weights must sum to 100%. Currently: {weights.momentum + weights.target + weights.risk}%
+                </p>
               </div>
-            )
-          })}
-        </div>
-
-        {/* Preview score */}
-        <div className="mt-5 bg-slate-50 rounded-xl p-3">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-slate-500 text-[11px]">
-                <span className="font-semibold text-slate-600">Formula: </span>
-                Score = (Momentum x {weights.momentum/100}) + (Target x {weights.target/100}) + (Risk x {weights.risk/100})
-              </p>
-              <p className="text-slate-400 text-[10px] mt-0.5">
-                Weights must sum to 100%. Currently: {weights.momentum + weights.target + weights.risk}%
-              </p>
-            </div>
-            <div className="text-right">
-              <div className="text-[10px] text-slate-400 uppercase font-bold">Preview</div>
-              <div className="text-xl font-extrabold text-slate-900">{previewScore}</div>
+              <div className="text-right">
+                <div className="text-[10px] text-slate-400 uppercase font-bold">Preview</div>
+                <div className="text-xl font-extrabold text-slate-900">{previewScore}</div>
+              </div>
             </div>
           </div>
-        </div>
 
-        {/* Action buttons */}
-        <div className="flex items-center gap-2 mt-4">
-          <button
-            onClick={resetDefaults}
-            className="flex items-center gap-1.5 px-3 py-2 border border-slate-200 hover:border-slate-300 text-slate-600 text-[11px] font-semibold rounded-xl transition-colors"
-          >
-            <RotateCcw size={11} /> Reset to Default
-          </button>
-          <button
-            onClick={saveWeights}
-            disabled={saving}
-            className="flex items-center gap-1.5 px-4 py-2 bg-[#0055A4] hover:bg-[#004688] text-white text-[11px] font-semibold rounded-xl transition-colors disabled:opacity-60 ml-auto"
-          >
-            {saving ? <Loader2 size={11} className="animate-spin" /> : <Save size={11} />}
-            {saved ? 'Saved!' : 'Save Weights'}
-          </button>
+          {/* Action buttons */}
+          <div className="flex items-center gap-2 mt-4">
+            <button
+              onClick={resetDefaults}
+              className="flex items-center gap-1.5 px-3 py-2 border border-slate-200 hover:border-slate-300 text-slate-600 text-[11px] font-semibold rounded-xl transition-colors"
+            >
+              <RotateCcw size={11} /> Reset to Default
+            </button>
+            <button
+              onClick={saveWeights}
+              disabled={saving}
+              className="flex items-center gap-1.5 px-4 py-2 bg-[#0055A4] hover:bg-[#004688] text-white text-[11px] font-semibold rounded-xl transition-colors disabled:opacity-60 ml-auto"
+            >
+              {saving ? <Loader2 size={11} className="animate-spin" /> : <Save size={11} />}
+              {saved ? 'Saved!' : 'Save Weights'}
+            </button>
+          </div>
         </div>
       </div>
     </div>
