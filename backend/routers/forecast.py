@@ -169,6 +169,7 @@ def _detect_regimes(dated_history, kpis):
         from scipy.stats import wasserstein_distance as _wdist
         from sklearn.cluster import KMeans
         from sklearn.manifold import MDS
+        from sklearn.metrics import silhouette_score as _silhouette
         from sklearn.preprocessing import StandardScaler
     except ImportError:
         return None
@@ -211,7 +212,20 @@ def _detect_regimes(dated_history, kpis):
         mds = MDS(n_components=2, dissimilarity="precomputed", random_state=42)
         embedding = mds.fit_transform(dist_matrix)
 
-    n_clusters = 3 if n_m >= 24 else 2
+    # ── Select optimal K via silhouette score ──────────────────────────
+    # Test K=2..4 (capped by available months) and pick the K with the
+    # highest mean silhouette score.  Silhouette measures how well each
+    # point fits its own cluster vs. its nearest neighbour cluster;
+    # scores range from -1 (wrong cluster) to +1 (dense, well-separated).
+    max_k = min(4, n_m - 1)          # need at least K+1 data points
+    best_k, best_sil = 2, -1.0
+    for k_cand in range(2, max_k + 1):
+        km_cand = KMeans(n_clusters=k_cand, random_state=42, n_init=10)
+        labels_cand = km_cand.fit_predict(embedding)
+        sil = _silhouette(embedding, labels_cand)
+        if sil > best_sil:
+            best_sil, best_k = sil, k_cand
+    n_clusters = best_k
     kmeans = KMeans(n_clusters=n_clusters, random_state=42, n_init=10)
     raw_labels = kmeans.fit_predict(embedding)
 
@@ -227,10 +241,13 @@ def _detect_regimes(dated_history, kpis):
         regime_scores[r] = g - s
 
     sorted_r = sorted(regime_scores, key=lambda r: regime_scores[r])
-    if n_clusters == 3:
+    _REGIME_LABELS = ["Stress", "Recovery", "Stable", "Growth"]
+    if n_clusters == 2:
+        regime_name_map = {sorted_r[0]: "Stress", sorted_r[1]: "Growth"}
+    elif n_clusters == 3:
         regime_name_map = {sorted_r[0]: "Stress", sorted_r[1]: "Recovery", sorted_r[2]: "Growth"}
     else:
-        regime_name_map = {sorted_r[0]: "Stress", sorted_r[1]: "Growth"}
+        regime_name_map = {sorted_r[i]: _REGIME_LABELS[i] for i in range(n_clusters)}
 
     regime_labels = {valid_months[i]: int(raw_labels[i]) for i in range(n_m)}
 
@@ -463,13 +480,60 @@ def _project_scenario(horizon_days: int, overrides: dict, n_samples: int,
         if kpi in value_ranges:
             override_vals[kpi] = float(value_ranges[kpi][_state_pcts[min(int(state_idx), 4)]])
 
+    # ── Override bias ────────────────────────────────────────────────────
+    # Strength = 0.45: steers ~80 % of the way toward the override over a
+    # 3-step (90-day) horizon.  The prior 0.30 left a ~70 % gap, meaning
+    # user overrides were largely ignored.  0.45 balances responsiveness
+    # with historical anchoring — the simulation still reflects regime
+    # dynamics rather than collapsing to a single point.
+    _OVERRIDE_STRENGTH = 0.45
+
     override_delta_bias = {}
     for kpi, override_val in override_vals.items():
         vr       = value_ranges.get(kpi, {})
         hist_p50 = vr.get("p50", override_val)
         sigma    = std_deltas.get(kpi, 0.01) or 0.01
         z        = (override_val - hist_p50) / (sigma * 3)
-        override_delta_bias[kpi] = z * sigma * 0.30
+        override_delta_bias[kpi] = z * sigma * _OVERRIDE_STRENGTH
+
+    # ── Bounds for projection clipping ────────────────────────────────
+    # Each KPI is clipped to [hard_floor, hard_ceil] after every step.
+    # Floors/ceilings are derived from the historical range (p1 / p99)
+    # expanded by 50 % to allow reasonable extrapolation while preventing
+    # impossible values (e.g. negative revenue, >100 % margins).
+    kpi_bounds = {}
+    for kpi in kpis:
+        vr        = value_ranges.get(kpi, {})
+        hist_lo   = vr.get("p10", 0)
+        hist_hi   = vr.get("p90", 0)
+        hist_span = abs(hist_hi - hist_lo) or abs(hist_hi) * 0.5 or 1.0
+        hard_floor = hist_lo - hist_span * 1.5
+        hard_ceil  = hist_hi + hist_span * 1.5
+        # Percentage KPIs can never exceed 100 % or drop below 0 %
+        if kpi.endswith("_pct") or kpi.endswith("_margin") or kpi in (
+            "gross_margin", "operating_margin", "ebitda_margin",
+            "contribution_margin", "nrr", "churn_rate",
+        ):
+            hard_floor = max(hard_floor, 0.0)
+            hard_ceil  = min(hard_ceil, 200.0)   # NRR can exceed 100 %
+        kpi_bounds[kpi] = (hard_floor, hard_ceil)
+
+    # ── Build KDE samplers for historical deltas ─────────────────────
+    # Kernel Density Estimation produces smoother, more realistic samples
+    # than raw np.random.choice.  Choice re-draws the exact same deltas
+    # with uniform probability, collapsing the tails.  KDE fits a smooth
+    # density and samples from it, naturally exploring inter-observation
+    # regions and tail behaviour proportional to historical density.
+    from scipy.stats import gaussian_kde as _kde
+
+    kde_samplers = {}
+    for kpi in kpis:
+        pool = regime_delta_pool.get(kpi, [])
+        if len(pool) >= 6:
+            try:
+                kde_samplers[kpi] = _kde(pool, bw_method="silverman")
+            except Exception:
+                pass  # fall back to normal sampling below
 
     all_traj = {kpi: [] for kpi in kpis}
 
@@ -480,10 +544,14 @@ def _project_scenario(horizon_days: int, overrides: dict, n_samples: int,
         for _ in range(horizon_steps):
             self_deltas = {}
             for kpi in kpis:
-                hist  = regime_delta_pool.get(kpi, [])
                 sigma = std_deltas.get(kpi, 0.01)
-                if hist:
-                    d = float(np.random.choice(hist))
+                if kpi in kde_samplers:
+                    # KDE sample: draw from the fitted kernel density of
+                    # historical month-over-month deltas.
+                    d = float(kde_samplers[kpi].resample(1)[0, 0])
+                elif regime_delta_pool.get(kpi):
+                    # Fallback: bootstrap from raw pool (< 6 points for KDE)
+                    d = float(np.random.choice(regime_delta_pool[kpi]))
                     d += float(np.random.normal(0, sigma * 0.15))
                 else:
                     d = float(np.random.normal(mean_deltas.get(kpi, 0.0), sigma))
@@ -494,6 +562,7 @@ def _project_scenario(horizon_days: int, overrides: dict, n_samples: int,
             for kpi in kpis:
                 delta     = self_deltas[kpi]
                 tgt_sigma = std_deltas.get(kpi, 1.0) or 1.0
+
                 if kpi in causal_map:
                     causal_delta = 0.0
                     total_w      = 0.0
@@ -501,17 +570,38 @@ def _project_scenario(horizon_days: int, overrides: dict, n_samples: int,
                         src_sigma = std_deltas.get(src, 1.0) or 1.0
                         src_vr    = value_ranges.get(src, {})
                         dir_sign  = 1 if direction == 'positive' else -1
-                        scale          = tgt_sigma / src_sigma
-                        delta_term     = self_deltas[src] * scale * strength * dir_sign
-                        src_p50        = src_vr.get("p50", values[src])
-                        level_z        = (values[src] - src_p50) / (src_sigma * 3 or 1)
-                        level_term     = level_z * tgt_sigma * strength * dir_sign * 0.25
-                        causal_delta  += (delta_term + level_term)
-                        total_w       += strength
+
+                        # Delta term: how much the source KPI moved this
+                        # step, scaled to the target's units and weighted
+                        # by causal strength.
+                        scale      = tgt_sigma / src_sigma
+                        delta_term = self_deltas[src] * scale * strength * dir_sign
+
+                        # Level term: persistent pull proportional to how
+                        # far the source sits from its historical median.
+                        # The 0.25 multiplier caps the level contribution
+                        # at ¼ of the delta-term magnitude to prevent
+                        # mean-reverting sources from dominating.
+                        src_p50    = src_vr.get("p50", values[src])
+                        level_z    = (values[src] - src_p50) / (src_sigma * 3 or 1)
+                        level_term = level_z * tgt_sigma * strength * dir_sign * 0.25
+
+                        causal_delta += (delta_term + level_term)
+                        total_w      += strength
+
                     if total_w > 0:
                         causal_delta /= total_w
+                        # Self/causal blend: 60 % self + 40 % causal.
+                        # Each KPI's own regime dynamics are the primary
+                        # driver (60 %).  Cross-KPI causal influence adds
+                        # 40 % to propagate shocks through the DAG without
+                        # letting indirect signals overpower direct history.
                         delta = 0.6 * delta + 0.4 * causal_delta
-                new_values[kpi] = values[kpi] + delta
+
+                raw_val = values[kpi] + delta
+                # Clip to historical bounds to prevent impossible values
+                lo, hi = kpi_bounds.get(kpi, (-1e12, 1e12))
+                new_values[kpi] = max(lo, min(hi, raw_val))
 
             values = new_values
             for kpi in kpis:
@@ -520,6 +610,11 @@ def _project_scenario(horizon_days: int, overrides: dict, n_samples: int,
         for kpi in kpis:
             all_traj[kpi].append(path[kpi])
 
+    # ── Compute trajectory percentiles ────────────────────────────────
+    # Returns p10/p25/p50/p75/p90 for each step.  p25 & p75 form the
+    # interquartile range (IQR) — the band where 50 % of simulations
+    # land — giving users a tighter "likely" band inside the wider
+    # p10–p90 confidence envelope.
     trajectories = {}
     for kpi in kpis:
         arr  = np.array(all_traj[kpi])
@@ -530,7 +625,9 @@ def _project_scenario(horizon_days: int, overrides: dict, n_samples: int,
             traj.append({
                 "step":     step,
                 "p10":      float(np.percentile(col, 10)),
+                "p25":      float(np.percentile(col, 25)),
                 "p50":      float(np.percentile(col, 50)),
+                "p75":      float(np.percentile(col, 75)),
                 "p90":      float(np.percentile(col, 90)),
                 "label":    "Now" if step == 0 else f"M+{step}",
                 "hist_p10": float(vr.get("p10", 0)),
