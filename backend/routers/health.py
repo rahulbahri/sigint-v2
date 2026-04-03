@@ -17,6 +17,9 @@ from core.intelligence import (
     streak_detection,
     domain_narratives,
     period_comparison,
+    stage_aware_actions,
+    compute_kpi_correlations,
+    decision_check_ins,
     _normalise_stage,
 )
 from core.kpi_defs import KPI_DEFS, ALL_CAUSATION_RULES, BENCHMARKS
@@ -180,6 +183,16 @@ def get_home(
     except Exception:
         company_stage = "series_a"
 
+    # P3.2: Fetch active decisions for check-in detection
+    try:
+        decision_rows = conn.execute(
+            "SELECT id, title, status, kpi_context, decided_at FROM decisions WHERE workspace_id=? AND status='active'",
+            [workspace_id],
+        ).fetchall()
+        raw_decisions = [dict(r) for r in decision_rows]
+    except Exception:
+        raw_decisions = []
+
     conn.close()
 
     # ── Composite criticality ranking ─────────────────────────────────────────
@@ -255,6 +268,14 @@ def get_home(
     # ── P1.4: Period-over-period comparison ───────────────────────────────────
     period_delta = period_comparison(kpi_monthly, targets_map)
 
+    # ── P3.2: Decision check-ins (30-day reminders) ──────────────────────────
+    from datetime import datetime as _dt
+    check_ins = decision_check_ins(
+        raw_decisions,
+        [k for k in health.get("needs_attention", [])],
+        _dt.utcnow().isoformat(),
+    )
+
     return {
         "health":          health,
         "data_period":     data_period,
@@ -263,6 +284,7 @@ def get_home(
         "domain_groups":   domain_groups,
         "domain_narratives": domain_narrs,
         "period_comparison": period_delta,
+        "decision_check_ins": check_ins,
         "company_stage":   company_stage,
         "composite_methodology": {
             "signals": [
@@ -395,8 +417,6 @@ def get_kpi_detail(kpi_key: str, request: Request):
     direction = target_row["direction"] if target_row else kpi_def.get("direction", "higher")
     unit = target_row["unit"] if target_row else kpi_def.get("unit", "")
 
-    conn.close()
-
     # Compute current status (green / yellow / red / grey) using direction-aware helpers
     status = "grey"
     pct_of_target = None
@@ -418,14 +438,49 @@ def get_kpi_detail(kpi_key: str, request: Request):
     # Causal chain (multi-hop)
     causal_chain = _build_causal_chain(kpi_key)
 
-    # Typical range from benchmarks (series_a p25–p75)
+    # Typical range from benchmarks (company stage, falling back to series_a)
+    try:
+        stage_row = conn.execute(
+            "SELECT value FROM company_settings WHERE workspace_id=? AND key='funding_stage'",
+            [workspace_id],
+        ).fetchone()
+        company_stage = _normalise_stage(stage_row["value"] if stage_row else None)
+    except Exception:
+        company_stage = "series_a"
+
     typical_range = None
-    series_a_bench = benchmark.get("series_a")
-    if series_a_bench and "p25" in series_a_bench and "p75" in series_a_bench:
-        typical_range = {"low": series_a_bench["p25"], "high": series_a_bench["p75"]}
+    stage_bench = benchmark.get(company_stage) or benchmark.get("series_a")
+    if stage_bench and "p25" in stage_bench and "p75" in stage_bench:
+        typical_range = {"low": stage_bench["p25"], "high": stage_bench["p75"]}
+
+    # Stage-aware corrective actions
+    base_actions = causation.get("corrective_actions", [])
+    actions = stage_aware_actions(kpi_key, base_actions, company_stage)
+
+    # Benchmark positioning
+    bench_pos = None
+    if time_series and target_value is not None:
+        recent_avg = sum(pt["value"] for pt in time_series[-3:]) / min(len(time_series), 3)
+        bench_pos = benchmark_position(kpi_key, recent_avg, direction, company_stage)
+
+    # Data-driven correlations
+    kpi_monthly_all: dict = {}
+    for row in conn.execute(
+        "SELECT year, month, data_json FROM monthly_data WHERE workspace_id=? ORDER BY year, month",
+        [workspace_id],
+    ).fetchall():
+        d = json.loads(row["data_json"])
+        period = f"{row['year']}-{row['month']:02d}"
+        for k, v in d.items():
+            if v is not None and k not in ("year", "month"):
+                kpi_monthly_all.setdefault(k, []).append({"period": period, "value": v})
+
+    correlations = compute_kpi_correlations(kpi_monthly_all, kpi_key)
 
     # Data requirements
     data_requirements = DATA_REQUIREMENTS.get(kpi_key)
+
+    conn.close()
 
     return {
         "kpi_key":        kpi_key,
@@ -441,9 +496,11 @@ def get_kpi_detail(kpi_key: str, request: Request):
         "time_series":    time_series,
         "root_causes":       causation.get("root_causes", []),
         "downstream_impact": causation.get("downstream_impact", []),
-        "corrective_actions":causation.get("corrective_actions", []),
+        "corrective_actions": actions,
         "benchmarks":        benchmark,
+        "benchmark_position": bench_pos,
         "causal_chain":      causal_chain,
+        "correlations":      correlations,
         "typical_range":     typical_range,
         "data_requirements": data_requirements,
     }

@@ -417,3 +417,253 @@ def period_comparison(
         "recovered":      recovered,
         "narrative":      " ".join(parts) if parts else "No significant movements detected.",
     }
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# 5.  STAGE-AWARE CORRECTIVE ACTIONS
+# ═════════════════════════════════════════════════════════════════════════════
+
+_STAGE_CONTEXT = {
+    "seed": {
+        "prefix": "At Seed stage with a small customer base",
+        "themes": {
+            "churn_rate":            "losing even 1-2 accounts has outsized impact — prioritise 1:1 founder-led retention over scalable programmes.",
+            "cac_payback":           "capital is scarce — focus on organic and referral channels before scaling paid acquisition.",
+            "burn_multiple":         "runway preservation is existential — cut discretionary spend before optimising unit economics.",
+            "revenue_growth":        "growth at this stage is about product-market fit signals, not scale — focus on conversion rate and repeat usage over volume.",
+            "customer_concentration":"with few customers, concentration is natural — focus on diversifying the pipeline rather than restructuring the base.",
+            "nrr":                   "expansion in a small base is about depth of engagement — ensure the product solves a must-have problem before upselling.",
+        },
+    },
+    "series_a": {
+        "prefix": "At Series A with early product-market fit",
+        "themes": {
+            "churn_rate":            "retention is the proof point investors watch — instrument early-warning signals and assign a dedicated CS resource.",
+            "cac_payback":           "payback period determines how fast you can reinvest — test 2-3 channels and double down on the one with best LTV:CAC.",
+            "burn_multiple":         "investors expect efficient growth — target <2x burn multiple and track monthly.",
+            "revenue_growth":        "growth rate is the primary valuation driver — prioritise pipeline velocity and expansion revenue.",
+            "sales_efficiency":      "each S&M dollar must produce measurable ARR — track revenue per rep and cost per SQL weekly.",
+        },
+    },
+    "series_b": {
+        "prefix": "At Series B scaling operations",
+        "themes": {
+            "churn_rate":            "at scale, a 1% churn improvement compounds to significant ARR — invest in automated health scoring and proactive outreach.",
+            "cac_payback":           "efficiency matters as much as growth now — benchmark against peers (target <18 months) and optimise by segment.",
+            "burn_multiple":         "path to profitability should be visible — model the break-even timeline and communicate it to the board.",
+            "gross_margin":          "margin expansion is expected at this stage — renegotiate infrastructure contracts and review pricing tiers.",
+            "operating_margin":      "operating leverage should be emerging — fixed costs should grow slower than revenue.",
+        },
+    },
+    "series_c": {
+        "prefix": "At Series C / Growth stage",
+        "themes": {
+            "churn_rate":            "at this scale, retention is a profit centre — implement predictive churn models and dedicated renewal teams.",
+            "burn_multiple":         "investors expect near-profitability — every dollar of spend should have a clear ROI model.",
+            "gross_margin":          "margins should be best-in-class — automate cost centres and pursue volume discounts.",
+            "operating_margin":      "positive operating margin is the expectation — identify and eliminate any remaining negative-ROI activities.",
+            "nrr":                   "NRR >120% is the gold standard at this stage — invest in product-led expansion and usage-based pricing.",
+        },
+    },
+}
+
+
+def stage_aware_actions(
+    kpi_key: str,
+    base_actions: list[str],
+    stage: str,
+) -> list[str]:
+    """
+    Prepend a stage-specific context sentence to the standard corrective
+    actions if one exists for this KPI + stage combination.
+
+    Returns a new list (does not mutate base_actions).
+    """
+    stage_cfg = _STAGE_CONTEXT.get(stage, {})
+    theme = stage_cfg.get("themes", {}).get(kpi_key)
+    if not theme:
+        return list(base_actions)
+    prefix = stage_cfg.get("prefix", "At your current stage")
+    return [f"{prefix}, {theme}"] + list(base_actions)
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# 6.  DATA-DRIVEN ROOT CAUSE INFERENCE (CORRELATION ENGINE)
+# ═════════════════════════════════════════════════════════════════════════════
+
+def compute_kpi_correlations(
+    kpi_monthly: dict,
+    target_kpi: str,
+    min_overlap: int = 4,
+) -> list[dict]:
+    """
+    For a given target KPI, compute Pearson correlation with every other
+    KPI's month-over-month deltas.  This surfaces which KPIs actually move
+    together in THIS company's data (as opposed to the static causal rules).
+
+    Uses delta correlation (MoM changes) rather than level correlation to
+    avoid spurious trends-in-common effects.
+
+    kpi_monthly: {kpi_key: [{"period": "YYYY-MM", "value": float}, ...]}
+    target_kpi:  the KPI to find correlates for.
+    min_overlap: minimum shared periods to compute correlation.
+
+    Returns sorted list of:
+        {key, name, correlation, abs_correlation, lag, direction_label}
+    """
+    target_entries = sorted(
+        kpi_monthly.get(target_kpi, []), key=lambda x: x["period"],
+    )
+    if len(target_entries) < min_overlap + 1:
+        return []
+
+    # Build target delta series keyed by period
+    target_deltas = {}
+    for i in range(1, len(target_entries)):
+        period = target_entries[i]["period"]
+        delta = target_entries[i]["value"] - target_entries[i - 1]["value"]
+        target_deltas[period] = delta
+
+    results = []
+    for other_kpi, other_entries in kpi_monthly.items():
+        if other_kpi == target_kpi:
+            continue
+        other_sorted = sorted(other_entries, key=lambda x: x["period"])
+        if len(other_sorted) < min_overlap + 1:
+            continue
+
+        # Build other delta series
+        other_deltas = {}
+        for i in range(1, len(other_sorted)):
+            period = other_sorted[i]["period"]
+            other_deltas[period] = other_sorted[i]["value"] - other_sorted[i - 1]["value"]
+
+        # Align on shared periods (lag=0: same month)
+        shared = sorted(set(target_deltas) & set(other_deltas))
+        if len(shared) < min_overlap:
+            continue
+
+        t_vals = [target_deltas[p] for p in shared]
+        o_vals = [other_deltas[p] for p in shared]
+
+        # Pearson correlation
+        corr = _pearson(t_vals, o_vals)
+        if corr is None:
+            continue
+
+        abs_corr = abs(corr)
+        if abs_corr < 0.3:
+            continue  # weak correlation — don't surface
+
+        dir_label = "moves together" if corr > 0 else "moves inversely"
+
+        results.append({
+            "key":            other_kpi,
+            "name":           _friendly_name(other_kpi),
+            "correlation":    round(corr, 3),
+            "abs_correlation": round(abs_corr, 3),
+            "strength":       "strong" if abs_corr >= 0.7 else "moderate",
+            "direction_label": dir_label,
+        })
+
+    results.sort(key=lambda x: x["abs_correlation"], reverse=True)
+    return results[:10]
+
+
+def _pearson(x: list[float], y: list[float]) -> Optional[float]:
+    """Compute Pearson correlation coefficient. Returns None if degenerate."""
+    n = len(x)
+    if n < 3:
+        return None
+    mx = sum(x) / n
+    my = sum(y) / n
+    sx = (sum((xi - mx) ** 2 for xi in x)) ** 0.5
+    sy = (sum((yi - my) ** 2 for yi in y)) ** 0.5
+    if sx == 0 or sy == 0:
+        return None
+    cov = sum((x[i] - mx) * (y[i] - my) for i in range(n))
+    return cov / (sx * sy)
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# 7.  DECISION CHECK-IN DETECTION
+# ═════════════════════════════════════════════════════════════════════════════
+
+def decision_check_ins(
+    decisions: list[dict],
+    needs_attention_keys: list[str],
+    now_iso: str,
+) -> list[dict]:
+    """
+    Identify active decisions that are due for a 30-day check-in.
+
+    decisions:            list of decision dicts from DB (id, title, status,
+                          kpi_context, decided_at).
+    needs_attention_keys: list of currently-red KPI keys.
+    now_iso:              current ISO timestamp string.
+
+    Returns list of check-in prompts:
+        {decision_id, title, days_since, linked_kpis,
+         still_critical (list of KPIs still red), prompt}
+    """
+    from datetime import datetime, timedelta
+
+    try:
+        now = datetime.fromisoformat(now_iso.replace("Z", "+00:00"))
+    except Exception:
+        now = datetime.utcnow()
+
+    check_ins = []
+    red_set = set(needs_attention_keys)
+
+    for dec in decisions:
+        if dec.get("status") != "active":
+            continue
+
+        decided_at_raw = dec.get("decided_at", "")
+        try:
+            decided_at = datetime.fromisoformat(
+                decided_at_raw.replace("Z", "+00:00")
+            )
+        except Exception:
+            continue
+
+        days_since = (now - decided_at).days
+        if days_since < 30:
+            continue  # not yet due
+
+        linked = dec.get("kpi_context", [])
+        if isinstance(linked, str):
+            try:
+                import json as _json
+                linked = _json.loads(linked)
+            except Exception:
+                linked = []
+
+        still_critical = [k for k in linked if k in red_set]
+
+        prompt_parts = [
+            f"You committed to \"{dec['title']}\" {days_since} days ago.",
+        ]
+        if still_critical:
+            names = ", ".join(_friendly_name(k) for k in still_critical[:3])
+            prompt_parts.append(
+                f"The linked KPIs ({names}) are still critical. "
+                "Review whether the action is working or needs adjustment."
+            )
+        else:
+            prompt_parts.append(
+                "The linked KPIs have improved. Consider recording "
+                "the outcome and marking this decision as resolved."
+            )
+
+        check_ins.append({
+            "decision_id":   dec.get("id"),
+            "title":         dec.get("title", ""),
+            "days_since":    days_since,
+            "linked_kpis":   linked,
+            "still_critical": still_critical,
+            "prompt":        " ".join(prompt_parts),
+        })
+
+    return check_ins
