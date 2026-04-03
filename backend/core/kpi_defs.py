@@ -386,7 +386,7 @@ CAUSATION_RULES = {
             "Sales & marketing spend rising faster than new ARR",
             "Burn Multiple worsening due to increased infrastructure or headcount costs",
         ],
-        "downstream_impact": ["burn_multiple", "arr_growth", "revenue_momentum"],
+        "downstream_impact": ["cash_runway"],
         "corrective_actions": [
             "Reduce sales cycle length to improve ARR per dollar spent",
             "Improve lead quality to increase ARR from existing S&M spend",
@@ -399,7 +399,7 @@ CAUSATION_RULES = {
             "Seasonal softness or one-time pull-forward in prior period",
             "Win rate declining relative to historical pace",
         ],
-        "downstream_impact": ["revenue_growth", "arr_growth"],
+        "downstream_impact": ["cash_runway"],
         "corrective_actions": [
             "Accelerate late-stage pipeline deals to restore momentum",
             "Review ICP qualification to rebuild pipeline faster",
@@ -412,7 +412,7 @@ CAUSATION_RULES = {
             "Churn accelerating while NRR weakens simultaneously",
             "Largest accounts at renewal risk without expansion offsetting",
         ],
-        "downstream_impact": ["nrr", "customer_concentration", "churn_rate"],
+        "downstream_impact": ["cash_runway"],
         "corrective_actions": [
             "Accelerate new logo acquisition to diversify revenue base",
             "Implement key account retention programme for top-10 customers",
@@ -425,7 +425,7 @@ CAUSATION_RULES = {
             "Fixed cost structure not scaling with revenue slowdown",
             "One-time spend items creating month-over-month burn spikes",
         ],
-        "downstream_impact": ["burn_multiple", "cash_runway"],
+        "downstream_impact": ["cash_runway"],
         "corrective_actions": [
             "Identify one-time vs structural components of burn increase",
             "Move more cost structure to variable to align burn with revenue",
@@ -477,7 +477,7 @@ CAUSATION_RULES = {
             "ARPU declining due to discount pressure or downgrading",
             "Gross margin compression reducing value per customer relationship",
         ],
-        "downstream_impact": ["cac_payback", "revenue_quality", "revenue_fragility"],
+        "downstream_impact": ["cac_payback", "revenue_quality"],
         "corrective_actions": [
             "Extend customer tenure through proactive success programmes",
             "Protect ARPU by reducing discretionary discounting",
