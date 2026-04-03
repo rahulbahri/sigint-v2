@@ -151,7 +151,7 @@ export default function CSVUpload({ onUploaded }) {
             <button
               onClick={seedFullDemo}
               disabled={fullSeeding}
-              className="flex items-center gap-2 px-4 py-2 bg-[#0055A4] hover:bg-[#003d80] text-white text-sm font-semibold rounded-lg transition-colors disabled:opacity-60 shadow-sm hover:shadow-md"
+              className="flex items-center gap-2 px-4 py-2 bg-[#0055A4] hover:bg-[#003d80] text-white text-sm font-semibold rounded-xl transition-all disabled:opacity-60 shadow-sm hover:shadow-md"
             >
               {fullSeeding
                 ? <><div className="w-3 h-3 rounded-full border-2 border-white/40 border-t-white animate-spin"/>Loading demo data...</>

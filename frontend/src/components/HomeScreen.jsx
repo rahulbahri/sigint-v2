@@ -2,12 +2,11 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 import axios from 'axios'
 import {
   TrendingUp, TrendingDown, Minus, AlertTriangle,
-  CheckCircle2, Zap, ArrowRight, RefreshCw,
+  CheckCircle2, ArrowRight, RefreshCw,
   Activity, Target, Shield, BarChart2,
   X, ChevronRight, Info, Clock, Eye,
   ChevronDown, Sliders, RotateCcw, Save,
-  Loader2, GitBranch, AlertCircle, Bookmark,
-  ExternalLink, Calendar
+  Loader2, AlertCircle, Calendar
 } from 'lucide-react'
 
 // ── KPI contextual info dictionary ───────────────────────────────────────────
@@ -1527,7 +1526,7 @@ export default function HomeScreen({ onNavigate, onAskAnika }) {
       </div>
 
       {/* ── Health Score + Most Critical (side-by-side) ────────────────── */}
-      <div className="grid grid-cols-1 lg:grid-cols-[1fr_1fr] gap-4 items-start">
+      <div className={`grid grid-cols-1 ${topCritical.length > 0 ? 'lg:grid-cols-[1fr_1fr]' : ''} gap-4 items-start`}>
 
       {/* ── Health Score Card ───────────────────────────────────────────── */}
       <div className="card p-5 shadow-sm hover:shadow-md transition-shadow">
@@ -1617,7 +1616,7 @@ export default function HomeScreen({ onNavigate, onAskAnika }) {
       </div>
 
       {/* ── Top 3 Most Critical (Compact Right Panel) ────────────────── */}
-      {topCritical.length > 0 ? (
+      {topCritical.length > 0 && (
         <div className="card p-4 shadow-sm hover:shadow-md transition-shadow border-red-100 bg-red-50/30">
           <div className="flex items-center justify-between mb-3">
             <div className="flex items-center gap-2">
@@ -1693,7 +1692,7 @@ export default function HomeScreen({ onNavigate, onAskAnika }) {
             </div>
           )}
         </div>
-      ) : <div />}
+      )}
 
       </div>{/* end side-by-side grid */}
 
