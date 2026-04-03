@@ -5,7 +5,7 @@ import base64
 
 from fastapi import APIRouter, HTTPException, Request, UploadFile, File
 
-from core.database import get_db
+from core.database import get_db, _audit
 from core.deps import _get_workspace, _require_workspace
 
 router = APIRouter()
@@ -41,6 +41,12 @@ async def update_company_settings(request: Request):
         )
     conn.commit()
     conn.close()
+
+    changed_keys = ", ".join(body.keys())
+    _audit("settings_changed", "company_settings", changed_keys,
+           f"Company settings updated: {changed_keys}",
+           workspace_id=workspace_id)
+
     return {"status": "ok"}
 
 

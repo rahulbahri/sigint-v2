@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import axios from 'axios'
-import { Upload, Building2, Check, AlertCircle } from 'lucide-react'
+import { Upload, Building2, Check, AlertCircle, Sliders, RotateCcw } from 'lucide-react'
 
 const STAGES = [
   { id: 'seed',     label: 'Seed',     desc: 'Pre-revenue or early traction' },
@@ -20,6 +20,11 @@ export default function CompanySettings({ onSave }) {
   const [logoError, setLogoError]       = useState(null)
   const fileRef = useRef(null)
 
+  // Composite criticality weights
+  const DEFAULT_CW = { gap: 25, trend: 25, impact: 30, domain: 20 }
+  const [critWeights, setCritWeights] = useState({ ...DEFAULT_CW })
+  const [cwSaved, setCwSaved]         = useState(false)
+
   // Load current settings on mount
   useEffect(() => {
     axios.get('/api/company-settings')
@@ -30,6 +35,12 @@ export default function CompanySettings({ onSave }) {
         if (r.data.company_stage) {
           setStage(r.data.company_stage)
           localStorage.setItem('axiom_stage', r.data.company_stage)
+        }
+        if (r.data.criticality_weights) {
+          try {
+            const cw = JSON.parse(r.data.criticality_weights)
+            setCritWeights({ gap: cw.gap ?? 25, trend: cw.trend ?? 25, impact: cw.impact ?? 30, domain: cw.domain ?? 20 })
+          } catch {}
         }
       })
       .catch(() => {})
@@ -43,6 +54,7 @@ export default function CompanySettings({ onSave }) {
         company_name: companyName,
         industry,
         company_stage: stage,
+        criticality_weights: JSON.stringify(critWeights),
       })
       localStorage.setItem('axiom_stage', stage)
       setStatus('ok')
@@ -188,6 +200,76 @@ export default function CompanySettings({ onSave }) {
               <p className="text-[11px] text-slate-400 mt-0.5 leading-snug">{desc}</p>
             </button>
           ))}
+        </div>
+      </div>
+
+      {/* Composite Criticality Weights */}
+      <div className="bg-white rounded-xl border border-slate-200 p-5 space-y-4">
+        <div className="flex items-center justify-between">
+          <div>
+            <h3 className="text-sm font-semibold text-slate-700 flex items-center gap-2">
+              <Sliders size={15} className="text-[#0055A4]"/> Criticality Ranking Weights
+            </h3>
+            <p className="text-xs text-slate-500 mt-1">
+              Controls how KPIs are ranked on the Home screen. Weights auto-normalise to 100%.
+            </p>
+          </div>
+          <button
+            onClick={() => setCritWeights({ ...DEFAULT_CW })}
+            className="flex items-center gap-1 text-[10px] font-medium text-slate-400 hover:text-slate-600 transition-colors"
+            title="Reset to defaults"
+          >
+            <RotateCcw size={11}/> Reset
+          </button>
+        </div>
+        <div className="space-y-3">
+          {[
+            { key: 'gap',    label: 'Gap Severity',    desc: 'How far from target',         color: '#DC2626' },
+            { key: 'trend',  label: 'Trend Momentum',  desc: 'Rate of deterioration',       color: '#D97706' },
+            { key: 'impact', label: 'Business Impact',  desc: 'Downstream causal effect',    color: '#7c3aed' },
+            { key: 'domain', label: 'Domain Urgency',  desc: 'Business area survival tier', color: '#0891b2' },
+          ].map(({ key, label, desc, color }) => {
+            const total = Object.values(critWeights).reduce((s, v) => s + v, 0) || 1
+            const pct = Math.round(critWeights[key] / total * 100)
+            return (
+              <div key={key}>
+                <div className="flex items-center justify-between mb-1">
+                  <div>
+                    <span className="text-xs font-semibold text-slate-700">{label}</span>
+                    <span className="text-[10px] text-slate-400 ml-2">{desc}</span>
+                  </div>
+                  <span className="text-xs font-bold tabular-nums" style={{ color }}>{pct}%</span>
+                </div>
+                <input
+                  type="range"
+                  min={0} max={100} step={5}
+                  value={critWeights[key]}
+                  onChange={e => setCritWeights(prev => ({ ...prev, [key]: Number(e.target.value) }))}
+                  className="w-full h-1.5 rounded-full appearance-none cursor-pointer"
+                  style={{
+                    background: `linear-gradient(to right, ${color} 0%, ${color} ${critWeights[key]}%, #e2e8f0 ${critWeights[key]}%, #e2e8f0 100%)`,
+                  }}
+                />
+              </div>
+            )
+          })}
+        </div>
+        <div className="flex items-center gap-2 pt-2 border-t border-slate-100">
+          <div className="flex-1 flex items-center gap-1.5">
+            {[
+              { key: 'gap', color: '#DC2626' }, { key: 'trend', color: '#D97706' },
+              { key: 'impact', color: '#7c3aed' }, { key: 'domain', color: '#0891b2' },
+            ].map(({ key, color }) => {
+              const total = Object.values(critWeights).reduce((s, v) => s + v, 0) || 1
+              const pct = critWeights[key] / total * 100
+              return (
+                <div key={key} className="h-2 rounded-full" style={{ width: `${pct}%`, backgroundColor: color, minWidth: 4 }} />
+              )
+            })}
+          </div>
+          <span className="text-[10px] text-slate-400 flex-shrink-0">
+            = 100%
+          </span>
         </div>
       </div>
 

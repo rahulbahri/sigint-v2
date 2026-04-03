@@ -5,7 +5,7 @@ import json
 
 from fastapi import APIRouter, HTTPException, Request
 
-from core.database import get_db
+from core.database import get_db, _audit
 from core.deps import _get_workspace
 
 router = APIRouter()
@@ -62,6 +62,11 @@ async def create_decision(request: Request):
     conn.commit()
     new_id = conn.lastrowid
     conn.close()
+
+    _audit("decision_created", "decision", str(new_id),
+           f"Decision logged: {title}",
+           workspace_id=workspace_id)
+
     return {"id": new_id, "status": "created"}
 
 
@@ -80,6 +85,11 @@ async def update_decision(decision_id: int, request: Request):
     )
     conn.commit()
     conn.close()
+
+    _audit("decision_updated", "decision", str(decision_id),
+           f"Decision #{decision_id} status changed to {status}",
+           workspace_id=workspace_id)
+
     return {"status": "updated"}
 
 

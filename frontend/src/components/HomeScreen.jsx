@@ -1441,9 +1441,10 @@ export default function HomeScreen({ onNavigate, onAskAnika }) {
   const [selectedPeriod, setSelectedPeriod] = useState('All Data')
   const [periodDates, setPeriodDates] = useState({ fromMonth: 1, fromYear: new Date().getFullYear() - 1, toMonth: new Date().getMonth() + 1, toYear: new Date().getFullYear() })
   const [activeWeights, setActiveWeights] = useState(null)
+  const [critWeights, setCritWeights]     = useState(null)
   const [settingsLoaded, setSettingsLoaded] = useState(false)
 
-  // Load persisted period selection from company_settings on mount
+  // Load persisted period selection + criticality weights from company_settings on mount
   useEffect(() => {
     axios.get('/api/company-settings')
       .then(r => {
@@ -1457,6 +1458,12 @@ export default function HomeScreen({ onNavigate, onAskAnika }) {
             if (d.fromMonth && d.fromYear && d.toMonth && d.toYear) {
               setPeriodDates(d)
             }
+          } catch {}
+        }
+        if (s.criticality_weights) {
+          try {
+            const cw = JSON.parse(s.criticality_weights)
+            setCritWeights(cw)
           } catch {}
         }
         setSettingsLoaded(true)
@@ -1477,11 +1484,21 @@ export default function HomeScreen({ onNavigate, onAskAnika }) {
       params.set('w_target', w.target)
       params.set('w_risk', w.risk)
     }
+    // Pass criticality weights if configured
+    if (critWeights) {
+      const total = (critWeights.gap || 0) + (critWeights.trend || 0) + (critWeights.impact || 0) + (critWeights.domain || 0)
+      if (total > 0) {
+        params.set('cw_gap',    (critWeights.gap    / total).toFixed(3))
+        params.set('cw_trend',  (critWeights.trend  / total).toFixed(3))
+        params.set('cw_impact', (critWeights.impact / total).toFixed(3))
+        params.set('cw_domain', (critWeights.domain / total).toFixed(3))
+      }
+    }
     const qs = params.toString()
     axios.get(`/api/home${qs ? `?${qs}` : ''}`)
       .then(r  => { setData(r.data); setLoading(false) })
       .catch(() => { setError(true); setLoading(false) })
-  }, [])
+  }, [critWeights])
 
   const handleWeightsApply = useCallback((weights) => {
     setActiveWeights(weights)

@@ -91,6 +91,10 @@ def get_home(
     from_month: Optional[int] = Query(None),
     to_year: Optional[int] = Query(None),
     to_month: Optional[int] = Query(None),
+    cw_gap: Optional[float] = Query(None, description="Criticality weight: Gap Severity (0-1)"),
+    cw_trend: Optional[float] = Query(None, description="Criticality weight: Trend Momentum (0-1)"),
+    cw_impact: Optional[float] = Query(None, description="Criticality weight: Business Impact (0-1)"),
+    cw_domain: Optional[float] = Query(None, description="Criticality weight: Domain Urgency (0-1)"),
 ):
     """
     Aggregated home-screen payload: health score + recent brief + spotlight KPIs.
@@ -102,6 +106,16 @@ def get_home(
     kwargs = _parse_weight_and_period_params(
         w_momentum, w_target, w_risk, from_year, from_month, to_year, to_month
     )
+
+    # Build criticality weights if any were provided
+    if any(v is not None for v in [cw_gap, cw_trend, cw_impact, cw_domain]):
+        crit_w = {}
+        if cw_gap is not None:    crit_w["gap"]    = cw_gap
+        if cw_trend is not None:  crit_w["trend"]  = cw_trend
+        if cw_impact is not None: crit_w["impact"] = cw_impact
+        if cw_domain is not None: crit_w["domain"] = cw_domain
+        kwargs["criticality_weights"] = crit_w
+
     health = compute_health_score(conn, workspace_id, **kwargs)
 
     has_period_filter = from_year is not None or to_year is not None

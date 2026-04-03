@@ -237,7 +237,8 @@ def _migrate_workspace_data(conn, old_workspace_id: str, new_workspace_id: str):
 # ── Audit log helper ──────────────────────────────────────────────────────────
 
 def _audit(conn_or_event_type, event_type_or_entity_type=None, description_or_entity_id=None,
-           entity_type_or_description=None, entity_id=None, user: str = "system"):
+           entity_type_or_description=None, entity_id=None, user: str = "system",
+           workspace_id: str = ""):
     """
     Write a row to audit_log. Always opens its own isolated DB connection so
     that audit failures can NEVER roll back the caller's data transaction.
@@ -273,8 +274,8 @@ def _audit(conn_or_event_type, event_type_or_entity_type=None, description_or_en
         try:
             # "user" is double-quoted to avoid PostgreSQL reserved-word error
             _conn.execute(
-                'INSERT INTO audit_log (event_type, entity_type, entity_id, description, "user") VALUES (?,?,?,?,?)',
-                (event_type, entity_type, _entity_id, description, user)
+                'INSERT INTO audit_log (event_type, entity_type, entity_id, description, "user", workspace_id) VALUES (?,?,?,?,?,?)',
+                (event_type, entity_type, _entity_id, description, user, workspace_id)
             )
             _conn.commit()
         finally:

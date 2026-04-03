@@ -891,6 +891,11 @@ async def update_target(request: Request, kpi_key: str):
     finally:
         conn.close()
 
+    from core.database import _audit
+    _audit("target_changed", "kpi_target", kpi_key,
+           f"Target for {kpi_key} set to {target_value}{unit} ({direction} is better)",
+           workspace_id=workspace_id)
+
     return {"kpi_key": kpi_key, "target_value": target_value, "unit": unit, "direction": direction}
 
 

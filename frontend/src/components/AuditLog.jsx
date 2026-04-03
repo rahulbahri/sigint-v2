@@ -1,20 +1,48 @@
 import { useState, useEffect } from 'react'
 import axios from 'axios'
-import { Clock, Upload, Target, User, RefreshCw } from 'lucide-react'
+import { Clock, Upload, Target, User, RefreshCw, Settings, BookMarked, Link2, CreditCard, Zap } from 'lucide-react'
 
 const EVENT_ICONS = {
   data_upload: Upload,
+  data_seed: Zap,
   target_changed: Target,
+  settings_changed: Settings,
+  decision_created: BookMarked,
+  decision_updated: BookMarked,
   accountability_update: User,
+  integration_connected: Link2,
+  integration_disconnected: Link2,
+  data_synced: RefreshCw,
+  subscription_activated: CreditCard,
+  subscription_cancelled: CreditCard,
   default: Clock,
 }
 
 const EVENT_COLORS = {
   data_upload: 'text-blue-500 bg-blue-50',
+  data_seed: 'text-blue-500 bg-blue-50',
   target_changed: 'text-amber-500 bg-amber-50',
+  settings_changed: 'text-slate-500 bg-slate-50',
+  decision_created: 'text-indigo-500 bg-indigo-50',
+  decision_updated: 'text-indigo-500 bg-indigo-50',
   accountability_update: 'text-violet-500 bg-violet-50',
+  integration_connected: 'text-emerald-500 bg-emerald-50',
+  integration_disconnected: 'text-red-500 bg-red-50',
+  data_synced: 'text-cyan-500 bg-cyan-50',
+  subscription_activated: 'text-emerald-500 bg-emerald-50',
+  subscription_cancelled: 'text-red-500 bg-red-50',
   default: 'text-slate-400 bg-slate-100',
 }
+
+const EVENT_FILTERS = [
+  { key: 'all',               label: 'All' },
+  { key: 'data_upload',       label: 'Uploads' },
+  { key: 'target_changed',    label: 'Targets' },
+  { key: 'settings_changed',  label: 'Settings' },
+  { key: 'decision_created',  label: 'Decisions' },
+  { key: 'integration_connected', label: 'Integrations' },
+  { key: 'accountability_update', label: 'Accountability' },
+]
 
 export default function AuditLog() {
   const [events, setEvents] = useState([])
@@ -48,13 +76,13 @@ export default function AuditLog() {
         </button>
       </div>
 
-      <div className="flex gap-2">
-        {['all','data_upload','target_changed','accountability_update'].map(f => (
+      <div className="flex gap-2 flex-wrap">
+        {EVENT_FILTERS.map(({ key: f, label }) => (
           <button key={f} onClick={() => setFilter(f)}
             className={`px-3 py-1 text-[10px] font-medium rounded-full border transition-colors ${
               filter === f ? 'bg-[#0055A4] text-white border-[#0055A4]' : 'text-slate-500 border-slate-200 hover:border-slate-300'
             }`}>
-            {f === 'all' ? 'All' : f.replace(/_/g,' ').replace(/\b\w/g, c => c.toUpperCase())}
+            {label}
           </button>
         ))}
       </div>

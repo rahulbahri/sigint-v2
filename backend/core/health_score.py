@@ -193,6 +193,7 @@ def compute_health_score(
     w_risk: float = 0.30,
     from_period: Optional[tuple] = None,
     to_period: Optional[tuple] = None,
+    criticality_weights: Optional[dict] = None,
 ) -> dict:
     """
     Main entry point. Pulls data from DB and returns full health score breakdown.
@@ -354,6 +355,7 @@ def compute_health_score(
     # ── Composite criticality scoring ─────────────────────────────────────────
     composite_ranked = compute_composite_criticality(
         kpi_avgs, targets, directions, time_series,
+        weights=criticality_weights,
     )
     domain_groups = group_by_domain(composite_ranked)
 
