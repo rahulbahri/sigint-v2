@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from 'react'
 import axios from 'axios'
-import { Upload, CheckCircle, AlertCircle, FileText, Trash2, GitBranch, Activity, AlertTriangle, Download, Database } from 'lucide-react'
+import { Upload, CheckCircle, AlertCircle, FileText, Trash2, GitBranch, Activity, AlertTriangle, Download, Database, Zap } from 'lucide-react'
 
 const ACTUALS_TEMPLATE = `date,revenue,cogs,opex,ar,customers,churn,is_recurring,sm_allocated,arr
 2025-01-15,25000,9500,7200,28000,1,0,1,3200,18000
@@ -122,11 +122,45 @@ export default function CSVUpload({ onUploaded }) {
     setProjSeeding(false)
   }
 
+  // ── Full demo data (5 years + targets) ────────────────────────────────────
+  const [fullSeeding, setFullSeeding] = useState(false)
+  async function seedFullDemo() {
+    setFullSeeding(true)
+    try { await axios.get('/api/seed-multiyear'); onUploaded?.(); fetchUploads(); fetchProjUploads() }
+    catch { /* silently ignore */ }
+    setFullSeeding(false)
+  }
+
   // Fetch both on mount
   useEffect(() => { fetchUploads(); fetchProjUploads() }, [])
 
   return (
     <div className="space-y-10 max-w-3xl">
+
+      {/* ══ Quick Start: Load Demo Data ════════════════════════════════ */}
+      <div className="card p-5 border border-blue-100 bg-gradient-to-r from-blue-50/60 to-slate-50/40">
+        <div className="flex items-start gap-4">
+          <div className="w-10 h-10 rounded-xl bg-[#0055A4] flex items-center justify-center flex-shrink-0">
+            <Zap size={18} className="text-white" />
+          </div>
+          <div className="flex-1">
+            <h2 className="text-slate-800 font-semibold text-base mb-1">Quick Start with Demo Data</h2>
+            <p className="text-slate-500 text-xs leading-relaxed mb-3">
+              Load 5 years of realistic B2B SaaS data with pre-configured KPI targets. Explore every feature of the platform instantly.
+            </p>
+            <button
+              onClick={seedFullDemo}
+              disabled={fullSeeding}
+              className="flex items-center gap-2 px-4 py-2 bg-[#0055A4] hover:bg-[#003d80] text-white text-sm font-semibold rounded-lg transition-colors disabled:opacity-60 shadow-sm hover:shadow-md"
+            >
+              {fullSeeding
+                ? <><div className="w-3 h-3 rounded-full border-2 border-white/40 border-t-white animate-spin"/>Loading demo data...</>
+                : <><Zap size={14}/> Load Demo Data (5 years)</>
+              }
+            </button>
+          </div>
+        </div>
+      </div>
 
       {/* ══ Section 0: Export / Import KPI Model Data ════════════════════ */}
       <div className="card p-6 border border-emerald-100 bg-emerald-50/30 space-y-4">

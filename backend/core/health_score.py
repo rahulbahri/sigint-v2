@@ -15,6 +15,15 @@ from core.criticality import (
     get_kpi_domain,
     DOMAIN_LABELS,
 )
+from core.kpi_defs import KPI_DEFS, EXTENDED_ONTOLOGY_METRICS
+
+# ── Human-readable KPI name lookup ──────────────────────────────────────────
+_KEY_TO_NAME = {d["key"]: d["name"] for d in KPI_DEFS + EXTENDED_ONTOLOGY_METRICS}
+
+
+def _friendly_name(key: str) -> str:
+    """Return the human-readable name for a KPI key, e.g. 'pricing_power_index' → 'Pricing Power Index'."""
+    return _KEY_TO_NAME.get(key, key.replace("_", " ").title())
 
 
 def _compute_momentum(time_series_by_kpi: dict, directions: dict) -> float:
@@ -322,16 +331,17 @@ def compute_health_score(
             "Your business health is in the critical zone — immediate corrective action is needed across revenue, retention, and efficiency metrics."
         )
 
-    top_drags = [{"key": k, "gap_pct": round((1 - p) * 100, 1)} for k, p in red_kpis[:3]]
-    top_wins  = [{"key": k, "gap_pct": round((p - 1) * 100, 1)} for k, p in green_kpis[:3]]
+    top_drags = [{"key": k, "name": _friendly_name(k), "gap_pct": round((1 - p) * 100, 1)} for k, p in red_kpis[:3]]
+    top_wins  = [{"key": k, "name": _friendly_name(k), "gap_pct": round((p - 1) * 100, 1)} for k, p in green_kpis[:3]]
 
     primary_action = ""
     if red_kpis:
         worst_key = red_kpis[0][0]
+        worst_name = _friendly_name(worst_key)
         worst_gap = round((1 - red_kpis[0][1]) * 100, 1)
         primary_action = (
-            f"Your most critical metric is '{worst_key}' which is {worst_gap}% below target. "
-            f"Investigate root causes for {worst_key} and develop a 30-day recovery plan."
+            f"Your most critical metric is {worst_name} which is {worst_gap}% below target. "
+            f"Investigate root causes and develop a 30-day recovery plan."
         )
 
     narrative_detail = {
