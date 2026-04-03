@@ -12,6 +12,13 @@ from fastapi import APIRouter, Query, Request
 from core.database import get_db
 from core.deps import _get_workspace
 from core.health_score import compute_health_score, _is_on_target, _is_critical, _gap_pct
+from core.intelligence import (
+    benchmark_position,
+    streak_detection,
+    domain_narratives,
+    period_comparison,
+    _normalise_stage,
+)
 from core.kpi_defs import KPI_DEFS, ALL_CAUSATION_RULES, BENCHMARKS
 
 router = APIRouter()
@@ -163,14 +170,23 @@ def get_home(
             "sparkline": [m["value"] for m in mo[-6:]],
         }
 
+    # ── Company stage (for benchmark positioning) ──────────────────────────
+    try:
+        stage_row = conn.execute(
+            "SELECT value FROM company_settings WHERE workspace_id=? AND key='funding_stage'",
+            [workspace_id],
+        ).fetchone()
+        company_stage = _normalise_stage(stage_row["value"] if stage_row else None)
+    except Exception:
+        company_stage = "series_a"
+
     conn.close()
 
     # ── Composite criticality ranking ─────────────────────────────────────────
-    # Use the new multi-signal composite scores from health engine
     composite_ranked = health.get("composite_ranked", [])
     composite_map = {r["key"]: r for r in composite_ranked}
 
-    # Enrich needs_attention with composite ranking data
+    # ── Enrich needs_attention ────────────────────────────────────────────────
     ranked_map = {r["key"]: r for r in health.get("needs_attention_ranked", [])}
     needs_enriched = []
     for k in health["needs_attention"]:
@@ -189,14 +205,34 @@ def get_home(
             spot["domain_score"] = cr["domain_score"]
             spot["domain"]       = cr["domain"]
             spot["domain_label"] = cr["domain_label"]
+
+        # P1.1: Benchmark positioning
+        bench = benchmark_position(
+            k, spot.get("avg"), spot.get("direction", "higher"), company_stage,
+        )
+        if bench:
+            spot["benchmark"] = bench
+
+        # P1.2: Consecutive-month streak
+        monthly_sorted = sorted(
+            kpi_monthly.get(k, []), key=lambda x: x["period"],
+        )
+        t = targets_map.get(k, {})
+        streak = streak_detection(
+            k, monthly_sorted, t.get("target"), t.get("direction", "higher"),
+        )
+        spot["miss_streak"]   = streak["miss_streak"]
+        spot["streak_label"]  = streak["streak_label"]
+        spot["is_structural"] = streak["is_structural"]
+
         needs_enriched.append(spot)
 
-    # Re-sort needs_attention by composite score (most critical first)
+    # Re-sort by composite score (most critical first)
     needs_enriched.sort(key=lambda x: x.get("composite", 0), reverse=True)
     for idx, item in enumerate(needs_enriched):
         item["rank"] = idx + 1
 
-    # Enrich doing_well with domain info
+    # ── Enrich doing_well ─────────────────────────────────────────────────────
     doing_well_enriched = []
     for k in health["doing_well"]:
         spot = _kpi_spotlight(k)
@@ -204,10 +240,20 @@ def get_home(
         if cr:
             spot["domain"]       = cr["domain"]
             spot["domain_label"] = cr["domain_label"]
+        bench = benchmark_position(
+            k, spot.get("avg"), spot.get("direction", "higher"), company_stage,
+        )
+        if bench:
+            spot["benchmark"] = bench
         doing_well_enriched.append(spot)
 
-    # Domain groups for the business-area view
+    # ── P1.3: Domain-level narratives ─────────────────────────────────────────
     domain_groups = health.get("domain_groups", [])
+    total_red = len(health.get("needs_attention", []))
+    domain_narrs = domain_narratives(domain_groups, total_red)
+
+    # ── P1.4: Period-over-period comparison ───────────────────────────────────
+    period_delta = period_comparison(kpi_monthly, targets_map)
 
     return {
         "health":          health,
@@ -215,6 +261,9 @@ def get_home(
         "needs_attention": needs_enriched,
         "doing_well":      doing_well_enriched,
         "domain_groups":   domain_groups,
+        "domain_narratives": domain_narrs,
+        "period_comparison": period_delta,
+        "company_stage":   company_stage,
         "composite_methodology": {
             "signals": [
                 {"key": "gap",    "label": "Gap Severity",    "weight": 25, "desc": "How far the KPI is from its target"},
