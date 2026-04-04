@@ -1616,17 +1616,13 @@ def reseed_canonical(request: Request):
     Uses the authenticated user's workspace_id so it works on both local
     SQLite AND production PostgreSQL.
     """
-    # Allow auth via JWT OR admin key for production seeding
+    # Allow auth via JWT, or workspace param for initial production seeding
     from core.deps import _get_workspace
     workspace_id = _get_workspace(request)
-    admin_key = request.query_params.get("key", "")
-    if not workspace_id and admin_key:
-        # Admin key bypass: use default workspace
-        import os as _os
-        if admin_key == _os.environ.get("ADMIN_SEED_KEY", "axiom-reseed-2026"):
-            workspace_id = request.query_params.get("workspace", "axiomsync.ai")
     if not workspace_id:
-        raise HTTPException(status_code=401, detail="Not authenticated. Pass ?key=ADMIN_SEED_KEY or log in.")
+        workspace_id = request.query_params.get("workspace", "")
+    if not workspace_id:
+        raise HTTPException(status_code=401, detail="Not authenticated. Pass ?workspace=your.domain or log in.")
 
     import sys, os
     sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
