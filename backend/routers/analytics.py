@@ -16,7 +16,11 @@ from pydantic import BaseModel
 
 from core.database import get_db
 from core.deps import _get_workspace, _require_workspace
-from core.kpi_defs import KPI_DEFS, CAUSATION_RULES, ALL_CAUSATION_RULES, BENCHMARKS, compute_gap_status
+from core.kpi_defs import (
+    KPI_DEFS, CAUSATION_RULES, ALL_CAUSATION_RULES, BENCHMARKS,
+    EXTENDED_ONTOLOGY_METRICS, ONTOLOGY_DOMAIN, compute_gap_status,
+)
+from core.criticality import DOMAIN_URGENCY, DEFAULT_WEIGHTS as CRIT_DEFAULT_WEIGHTS
 
 router = APIRouter()
 
@@ -1182,6 +1186,478 @@ def bridge_analysis(request: Request, year: Optional[int] = None):
         },
         "kpis": kpis_out,
     }
+
+
+# ─── KPI Audit Excel Export ─────────────────────────────────────────────────
+
+@router.get("/api/export/kpi-audit.xlsx", tags=["Export"])
+def export_kpi_audit(request: Request):
+    """
+    Generate a comprehensive Excel workbook that shows every KPI tracked by the
+    platform: raw monthly data, formula, computation rationale, health-score
+    component membership, criticality ranking breakdown, benchmarks, causation
+    graph (depends on / feeds into), and which platform tabs use each KPI.
+    """
+    from openpyxl import Workbook
+    from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+    from openpyxl.utils import get_column_letter
+    from core.health_score import compute_health_score
+
+    workspace_id = _require_workspace(request)
+    conn = get_db()
+
+    # ── Gather all data ────────────────────────────────────────────────────
+
+    # 1. Build master KPI lookup
+    ALL_KPIS = {}
+    for d in KPI_DEFS:
+        ALL_KPIS[d["key"]] = {**d, "source": "core"}
+    for d in EXTENDED_ONTOLOGY_METRICS:
+        if d["key"] not in ALL_KPIS:
+            ALL_KPIS[d["key"]] = {**d, "source": "extended", "formula": "—"}
+
+    # 2. Fetch monthly data
+    rows = conn.execute(
+        "SELECT kpi_key, year, month, value FROM monthly_data WHERE workspace_id=? ORDER BY kpi_key, year, month",
+        [workspace_id],
+    ).fetchall()
+    monthly = {}  # key -> [(year, month, value), ...]
+    for r in rows:
+        monthly.setdefault(r[0], []).append((r[1], r[2], r[3]))
+
+    # 3. Fetch targets
+    tgt_rows = conn.execute(
+        "SELECT kpi_key, target_value FROM kpi_targets WHERE workspace_id=?",
+        [workspace_id],
+    ).fetchall()
+    targets = {r[0]: r[1] for r in tgt_rows}
+
+    # 4. Compute health score & criticality
+    hs = compute_health_score(conn, workspace_id)
+    comp_detail = hs.get("component_detail", {})
+    composite_ranked = hs.get("composite_ranked", [])
+
+    conn.close()
+
+    # Build lookup dicts
+    crit_lookup = {c["key"]: c for c in composite_ranked}
+
+    # Momentum / target / risk KPI sets
+    momentum_set = {}
+    for k in comp_detail.get("momentum", {}).get("kpis", []):
+        momentum_set[k["key"]] = k
+    target_set = {}
+    for k in comp_detail.get("target_achievement", {}).get("kpis", []):
+        target_set[k["key"]] = k
+    risk_set = set()
+    for k in comp_detail.get("risk", {}).get("kpis", []):
+        risk_set.add(k["key"])
+
+    # Domain lookup
+    def get_domain(key):
+        d = ALL_KPIS.get(key, {}).get("domain")
+        if d:
+            return d
+        return ONTOLOGY_DOMAIN.get(key, "other")
+
+    # Causation helpers
+    def depends_on(key):
+        rules = ALL_CAUSATION_RULES.get(key, {})
+        return "; ".join(rules.get("root_causes", []))
+
+    def feeds_into(key):
+        return ", ".join(ALL_CAUSATION_RULES.get(key, {}).get("downstream_impact", []))
+
+    # Reverse feeds: which KPIs list this one in their downstream_impact
+    reverse_feeds = {}
+    for k, v in ALL_CAUSATION_RULES.items():
+        for downstream in v.get("downstream_impact", []):
+            reverse_feeds.setdefault(downstream, []).append(k)
+
+    # Tab usage mapping
+    TAB_USAGE = {
+        # Home: all scored KPIs
+        "Home (Health Score)": set(k for k in ALL_KPIS if monthly.get(k)),
+        "Variance Command": set(k for k in ALL_KPIS if k in targets and monthly.get(k)),
+        "Forward Signals": set(k for k in ALL_KPIS if monthly.get(k) and len(monthly[k]) >= 3),
+        "Trend Explorer": set(k for k in ALL_KPIS if monthly.get(k)),
+        "Performance Fingerprint": set(k for k in ALL_KPIS if monthly.get(k)),
+        "Plan vs Actual": set(k for k in ALL_KPIS if k in targets and monthly.get(k)),
+        "Executive Brief": set(k for k in ALL_KPIS if monthly.get(k)),
+        "Board Pack": set(k for k in ALL_KPIS if monthly.get(k)),
+    }
+
+    def tabs_for_kpi(key):
+        tabs = [tab for tab, kset in TAB_USAGE.items() if key in kset]
+        return ", ".join(tabs) if tabs else "—"
+
+    # ── Build workbook ─────────────────────────────────────────────────────
+
+    wb = Workbook()
+    header_font = Font(bold=True, color="FFFFFF", size=10)
+    header_fill = PatternFill(start_color="0055A4", end_color="0055A4", fill_type="solid")
+    alt_fill = PatternFill(start_color="F8FAFC", end_color="F8FAFC", fill_type="solid")
+    thin_border = Border(
+        bottom=Side(style="thin", color="E2E8F0"),
+    )
+    wrap = Alignment(wrap_text=True, vertical="top")
+
+    def style_header(ws, ncols):
+        for c in range(1, ncols + 1):
+            cell = ws.cell(row=1, column=c)
+            cell.font = header_font
+            cell.fill = header_fill
+            cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+        ws.freeze_panes = "A2"
+
+    def auto_width(ws, max_w=45):
+        for col in ws.columns:
+            mx = 0
+            letter = get_column_letter(col[0].column)
+            for cell in col:
+                if cell.value:
+                    mx = max(mx, min(len(str(cell.value)), max_w))
+            ws.column_dimensions[letter].width = max(mx + 3, 12)
+
+    # ── Sheet 1: KPI Master ────────────────────────────────────────────────
+
+    ws1 = wb.active
+    ws1.title = "KPI Master"
+    headers1 = [
+        "KPI Key", "KPI Name", "Unit", "Direction", "Domain",
+        "Formula", "Target", "Latest Value", "Gap %",
+        "Rationale / Root Causes", "Feeds Into (Downstream)",
+        "Fed By (Upstream KPIs)", "Corrective Actions",
+        "Used On Tabs",
+    ]
+    ws1.append(headers1)
+    style_header(ws1, len(headers1))
+
+    sorted_keys = sorted(ALL_KPIS.keys(), key=lambda k: (get_domain(k), ALL_KPIS[k].get("name", k)))
+    for i, key in enumerate(sorted_keys):
+        kpi = ALL_KPIS[key]
+        series = monthly.get(key, [])
+        latest = series[-1][2] if series else None
+        target = targets.get(key)
+        gap = None
+        if latest is not None and target and target != 0:
+            direction = kpi.get("direction", "higher")
+            if direction == "higher":
+                gap = round((latest - target) / abs(target) * 100, 1)
+            else:
+                gap = round((target - latest) / abs(target) * 100, 1)
+
+        fed_by = ", ".join(reverse_feeds.get(key, []))
+        actions = "; ".join(ALL_CAUSATION_RULES.get(key, {}).get("corrective_actions", []))
+
+        row = [
+            key,
+            kpi.get("name", key),
+            kpi.get("unit", "—"),
+            kpi.get("direction", "—"),
+            get_domain(key),
+            kpi.get("formula", "—"),
+            target,
+            round(latest, 4) if latest is not None else None,
+            gap,
+            depends_on(key),
+            feeds_into(key),
+            fed_by,
+            actions,
+            tabs_for_kpi(key),
+        ]
+        ws1.append(row)
+        if i % 2 == 1:
+            for c in range(1, len(headers1) + 1):
+                ws1.cell(row=i + 2, column=c).fill = alt_fill
+
+    auto_width(ws1)
+
+    # ── Sheet 2: Monthly Data ──────────────────────────────────────────────
+
+    ws2 = wb.create_sheet("Monthly Data")
+
+    # Collect all periods
+    all_periods = set()
+    for series in monthly.values():
+        for y, m, _ in series:
+            all_periods.add((y, m))
+    all_periods = sorted(all_periods)
+
+    if all_periods:
+        headers2 = ["KPI Key", "KPI Name", "Unit", "Direction"] + [
+            f"{y}-{m:02d}" for y, m in all_periods
+        ]
+        ws2.append(headers2)
+        style_header(ws2, len(headers2))
+
+        for i, key in enumerate(sorted_keys):
+            kpi = ALL_KPIS[key]
+            series = monthly.get(key, [])
+            val_map = {(y, m): v for y, m, v in series}
+            row = [key, kpi.get("name", key), kpi.get("unit", "—"), kpi.get("direction", "—")]
+            for p in all_periods:
+                v = val_map.get(p)
+                row.append(round(v, 4) if v is not None else None)
+            ws2.append(row)
+            if i % 2 == 1:
+                for c in range(1, len(headers2) + 1):
+                    ws2.cell(row=i + 2, column=c).fill = alt_fill
+        auto_width(ws2, max_w=12)
+    else:
+        ws2.append(["No monthly data available"])
+
+    # ── Sheet 3: Health Score Breakdown ────────────────────────────────────
+
+    ws3 = wb.create_sheet("Health Score")
+
+    # Summary row
+    ws3.append(["Overall Health Score", hs.get("score"), "", "Grade", hs.get("grade"), "", "Label", hs.get("label")])
+    ws3.cell(row=1, column=1).font = Font(bold=True, size=12)
+    ws3.cell(row=1, column=2).font = Font(bold=True, size=14, color="0055A4")
+    ws3.append([])
+
+    weights = hs.get("weights", {})
+    ws3.append(["Component", "Score (0-100)", "Weight", "Weighted Contribution"])
+    style_header(ws3, 4)
+    for comp_name, w_key in [("Momentum", "momentum"), ("Target Achievement", "target"), ("Risk", "risk")]:
+        sc = comp_detail.get(w_key if w_key != "target" else "target_achievement", {}).get("score", 0)
+        w = weights.get(w_key, 0)
+        ws3.append([comp_name, round(sc, 1), f"{w*100:.0f}%", round(sc * w, 1)])
+
+    ws3.append([])
+    ws3.append([])
+
+    # Momentum KPIs
+    ws3.append(["MOMENTUM COMPONENT — Per-KPI Detail"])
+    ws3.cell(row=ws3.max_row, column=1).font = Font(bold=True, size=11, color="0055A4")
+    ws3.append(["KPI Key", "KPI Name", "Status", "Delta %", "Interpretation"])
+    style_header(ws3, 5)
+    for k in comp_detail.get("momentum", {}).get("kpis", []):
+        interp = {
+            "improving": "Trending upward — positive momentum",
+            "declining": "Trending downward — losing momentum",
+            "stable": "No significant change in trend",
+        }.get(k["status"], "")
+        ws3.append([k["key"], k.get("name", k["key"]), k["status"],
+                     round(k.get("delta_pct", 0), 2), interp])
+
+    ws3.append([])
+    ws3.append([])
+
+    # Target Achievement KPIs
+    ws3.append(["TARGET ACHIEVEMENT COMPONENT — Per-KPI Detail"])
+    ws3.cell(row=ws3.max_row, column=1).font = Font(bold=True, size=11, color="0055A4")
+    ws3.append(["KPI Key", "KPI Name", "Avg Value", "Target", "On Target?", "Direction"])
+    style_header(ws3, 6)
+    for k in comp_detail.get("target_achievement", {}).get("kpis", []):
+        ws3.append([k["key"], k.get("name", k["key"]),
+                     round(k.get("avg", 0), 4), round(k.get("target", 0), 4),
+                     "Yes" if k.get("on_target") else "No",
+                     k.get("direction", "—")])
+
+    ws3.append([])
+    ws3.append([])
+
+    # Risk KPIs
+    ws3.append(["RISK COMPONENT — Per-KPI Detail"])
+    ws3.cell(row=ws3.max_row, column=1).font = Font(bold=True, size=11, color="0055A4")
+    ws3.append(["KPI Key", "KPI Name", "Avg Value", "Target", "Direction", "Risk Note"])
+    style_header(ws3, 6)
+    for k in comp_detail.get("risk", {}).get("kpis", []):
+        ws3.append([k["key"], k.get("name", k["key"]),
+                     round(k.get("avg", 0), 4),
+                     round(k.get("target", 0), 4) if k.get("target") else "—",
+                     k.get("direction", "—"),
+                     "Red status — significantly off target"])
+
+    auto_width(ws3)
+
+    # ── Sheet 4: Criticality Ranking ───────────────────────────────────────
+
+    ws4 = wb.create_sheet("Criticality Ranking")
+    headers4 = [
+        "Rank", "KPI Key", "KPI Name", "Composite Score",
+        "Gap Score", "Gap Weight", "Gap Contribution",
+        "Trend Score", "Trend Weight", "Trend Contribution",
+        "Impact Score", "Impact Weight", "Impact Contribution",
+        "Domain Score", "Domain Weight", "Domain Contribution",
+        "Domain", "Direction", "Avg Value", "Target", "Gap %",
+    ]
+    ws4.append(headers4)
+    style_header(ws4, len(headers4))
+
+    for i, c in enumerate(composite_ranked):
+        w = c.get("weights_used", CRIT_DEFAULT_WEIGHTS)
+        row = [
+            c.get("rank", i + 1),
+            c["key"],
+            ALL_KPIS.get(c["key"], {}).get("name", c["key"]),
+            round(c.get("composite", 0), 2),
+            round(c.get("gap_score", 0), 2),
+            f"{w.get('gap', 0.25)*100:.0f}%",
+            round(c.get("gap_score", 0) * w.get("gap", 0.25), 2),
+            round(c.get("trend_score", 0), 2),
+            f"{w.get('trend', 0.25)*100:.0f}%",
+            round(c.get("trend_score", 0) * w.get("trend", 0.25), 2),
+            round(c.get("impact_score", 0), 2),
+            f"{w.get('impact', 0.30)*100:.0f}%",
+            round(c.get("impact_score", 0) * w.get("impact", 0.30), 2),
+            round(c.get("domain_score", 0), 2),
+            f"{w.get('domain', 0.20)*100:.0f}%",
+            round(c.get("domain_score", 0) * w.get("domain", 0.20), 2),
+            c.get("domain_label", c.get("domain", "—")),
+            c.get("direction", "—"),
+            round(c.get("avg", 0), 4) if c.get("avg") else None,
+            round(c.get("target", 0), 4) if c.get("target") else None,
+            round(c.get("gap_pct", 0), 2) if c.get("gap_pct") is not None else None,
+        ]
+        ws4.append(row)
+        if i % 2 == 1:
+            for col in range(1, len(headers4) + 1):
+                ws4.cell(row=i + 2, column=col).fill = alt_fill
+
+    # Formula explanation row
+    ws4.append([])
+    ws4.append(["Formula: Composite = (Gap × Gap_Weight) + (Trend × Trend_Weight) + (Impact × Impact_Weight) + (Domain × Domain_Weight)"])
+    ws4.cell(row=ws4.max_row, column=1).font = Font(italic=True, color="6B7280")
+    auto_width(ws4, max_w=18)
+
+    # ── Sheet 5: Benchmarks ────────────────────────────────────────────────
+
+    ws5 = wb.create_sheet("Benchmarks")
+    stages = ["seed", "series_a", "series_b", "series_c"]
+    stage_labels = {"seed": "Seed", "series_a": "Series A", "series_b": "Series B", "series_c": "Series C+"}
+    headers5 = ["KPI Key", "KPI Name", "Unit"]
+    for s in stages:
+        headers5 += [f"{stage_labels[s]} P25", f"{stage_labels[s]} P50", f"{stage_labels[s]} P75"]
+    ws5.append(headers5)
+    style_header(ws5, len(headers5))
+
+    for i, (key, stage_data) in enumerate(sorted(BENCHMARKS.items())):
+        kpi = ALL_KPIS.get(key, {})
+        row = [key, kpi.get("name", key), kpi.get("unit", "—")]
+        for s in stages:
+            sd = stage_data.get(s, {})
+            row += [sd.get("p25"), sd.get("p50"), sd.get("p75")]
+        ws5.append(row)
+        if i % 2 == 1:
+            for col in range(1, len(headers5) + 1):
+                ws5.cell(row=i + 2, column=col).fill = alt_fill
+    auto_width(ws5, max_w=16)
+
+    # ── Sheet 6: Causation Graph ───────────────────────────────────────────
+
+    ws6 = wb.create_sheet("Causation Graph")
+    headers6 = [
+        "KPI Key", "KPI Name", "Domain",
+        "Root Causes (why it misses)", "Downstream Impact (KPI keys affected)",
+        "Upstream KPIs (that feed into this)", "Corrective Actions",
+    ]
+    ws6.append(headers6)
+    style_header(ws6, len(headers6))
+
+    for i, key in enumerate(sorted(ALL_CAUSATION_RULES.keys())):
+        rules = ALL_CAUSATION_RULES[key]
+        kpi = ALL_KPIS.get(key, {})
+        row = [
+            key,
+            kpi.get("name", key),
+            get_domain(key),
+            "; ".join(rules.get("root_causes", [])),
+            ", ".join(rules.get("downstream_impact", [])),
+            ", ".join(reverse_feeds.get(key, [])),
+            "; ".join(rules.get("corrective_actions", [])),
+        ]
+        ws6.append(row)
+        if i % 2 == 1:
+            for col in range(1, len(headers6) + 1):
+                ws6.cell(row=i + 2, column=col).fill = alt_fill
+    auto_width(ws6)
+
+    # ── Sheet 7: Tab Usage Matrix ──────────────────────────────────────────
+
+    ws7 = wb.create_sheet("Tab Usage")
+    tab_names = sorted(TAB_USAGE.keys())
+    headers7 = ["KPI Key", "KPI Name"] + tab_names + ["Total Tabs"]
+    ws7.append(headers7)
+    style_header(ws7, len(headers7))
+
+    check_fill = PatternFill(start_color="DCFCE7", end_color="DCFCE7", fill_type="solid")
+    for i, key in enumerate(sorted_keys):
+        kpi = ALL_KPIS[key]
+        row = [key, kpi.get("name", key)]
+        count = 0
+        for tab in tab_names:
+            present = key in TAB_USAGE[tab]
+            row.append("✓" if present else "")
+            count += 1 if present else 0
+        row.append(count)
+        ws7.append(row)
+        # Highlight check marks
+        for j, tab in enumerate(tab_names):
+            if key in TAB_USAGE[tab]:
+                ws7.cell(row=i + 2, column=j + 3).fill = check_fill
+        if i % 2 == 1:
+            for col in [1, 2, len(headers7)]:
+                ws7.cell(row=i + 2, column=col).fill = alt_fill
+    auto_width(ws7, max_w=20)
+
+    # ── Sheet 8: Domain Urgency Reference ──────────────────────────────────
+
+    ws8 = wb.create_sheet("Reference")
+    ws8.append(["Domain Urgency Scores"])
+    ws8.cell(row=1, column=1).font = Font(bold=True, size=12, color="0055A4")
+    ws8.append(["Domain", "Urgency Score (0-100)", "Tier"])
+    style_header(ws8, 3)
+    tiers = {100: "Existential", 95: "Existential", 80: "Revenue Engine",
+             75: "Revenue Engine", 70: "Retention", 55: "Profitability", 45: "Efficiency"}
+    for domain, score in sorted(DOMAIN_URGENCY.items(), key=lambda x: -x[1]):
+        ws8.append([domain.title(), score, tiers.get(score, "—")])
+
+    ws8.append([])
+    ws8.append(["Composite Criticality Weights (Default)"])
+    ws8.cell(row=ws8.max_row, column=1).font = Font(bold=True, size=12, color="0055A4")
+    ws8.append(["Component", "Default Weight", "Description"])
+    style_header(ws8, 3)
+    descs = {
+        "gap": "How far from target (normalised distance)",
+        "trend": "Rate of deterioration (OLS slope over 6 months)",
+        "impact": "Downstream causal reach in KPI graph (BFS)",
+        "domain": "Business area survival tier urgency",
+    }
+    for comp, w in CRIT_DEFAULT_WEIGHTS.items():
+        ws8.append([comp.title(), f"{w*100:.0f}%", descs.get(comp, "")])
+
+    ws8.append([])
+    ws8.append(["Health Score Weights (Default)"])
+    ws8.cell(row=ws8.max_row, column=1).font = Font(bold=True, size=12, color="0055A4")
+    ws8.append(["Component", "Default Weight", "Description"])
+    style_header(ws8, 3)
+    ws8.append(["Momentum", "30%", "% of KPIs with improving 6-month OLS trend"])
+    ws8.append(["Target Achievement", "40%", "% of KPIs meeting their target"])
+    ws8.append(["Risk", "30%", "Inverse of % KPIs in red status (>8% miss)"])
+
+    ws8.append([])
+    ws8.append([f"Generated: {datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')}"])
+    ws8.append([f"Workspace: {workspace_id}"])
+    ws8.append([f"Total KPIs Tracked: {len(ALL_KPIS)}"])
+    ws8.append([f"KPIs with Data: {len(monthly)}"])
+
+    auto_width(ws8, max_w=50)
+
+    # ── Write to buffer and return ─────────────────────────────────────────
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+
+    fname = f"axiom-kpi-audit-{datetime.utcnow().strftime('%Y%m%d')}.xlsx"
+    return StreamingResponse(
+        buf,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f"attachment; filename={fname}"},
+    )
 
 
 # ─── KPI Annotations CRUD ───────────────────────────────────────────────────

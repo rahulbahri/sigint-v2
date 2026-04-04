@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import axios from 'axios'
-import { Clock, Upload, Target, User, RefreshCw, Settings, BookMarked, Link2, CreditCard, Zap } from 'lucide-react'
+import { Clock, Upload, Target, User, RefreshCw, Settings, BookMarked, Link2, CreditCard, Zap, FileSpreadsheet } from 'lucide-react'
 
 const EVENT_ICONS = {
   data_upload: Upload,
@@ -48,6 +48,7 @@ export default function AuditLog() {
   const [events, setEvents] = useState([])
   const [loading, setLoading] = useState(true)
   const [filter, setFilter] = useState('all')
+  const [exporting, setExporting] = useState(false)
 
   const load = () => {
     setLoading(true)
@@ -58,6 +59,25 @@ export default function AuditLog() {
   }
 
   useEffect(() => { load() }, [filter])
+
+  async function downloadAudit() {
+    setExporting(true)
+    try {
+      const r = await axios.get('/api/export/kpi-audit.xlsx', { responseType: 'blob' })
+      const url = window.URL.createObjectURL(new Blob([r.data]))
+      const a = document.createElement('a')
+      a.href = url
+      a.download = r.headers['content-disposition']?.match(/filename=(.+)/)?.[1] || 'axiom-kpi-audit.xlsx'
+      document.body.appendChild(a)
+      a.click()
+      a.remove()
+      window.URL.revokeObjectURL(url)
+    } catch (err) {
+      console.error('Export failed', err)
+    } finally {
+      setExporting(false)
+    }
+  }
 
   const fmtDate = (ts) => {
     if (!ts) return ''
@@ -71,9 +91,21 @@ export default function AuditLog() {
           <h2 className="text-[15px] font-bold text-slate-800">Audit Trail</h2>
           <p className="text-[12px] text-slate-500 mt-0.5">Every change, upload, and accountability update — timestamped and traceable.</p>
         </div>
-        <button onClick={load} className="flex items-center gap-1.5 px-3 py-1.5 text-[11px] text-slate-500 border border-slate-200 rounded-lg hover:bg-slate-50">
-          <RefreshCw size={12}/> Refresh
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={downloadAudit}
+            disabled={exporting}
+            className="flex items-center gap-1.5 px-3 py-1.5 text-[11px] font-medium text-white
+                       bg-[#0055A4] hover:bg-[#003d80] rounded-lg transition-all
+                       disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            <FileSpreadsheet size={12}/>
+            {exporting ? 'Generating…' : 'Export KPI Audit (.xlsx)'}
+          </button>
+          <button onClick={load} className="flex items-center gap-1.5 px-3 py-1.5 text-[11px] text-slate-500 border border-slate-200 rounded-lg hover:bg-slate-50">
+            <RefreshCw size={12}/> Refresh
+          </button>
+        </div>
       </div>
 
       <div className="flex gap-2 flex-wrap">
