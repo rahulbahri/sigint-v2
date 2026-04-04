@@ -232,12 +232,19 @@ def compute_health_score(
         directions[r["kpi_key"]] = r["direction"] or "higher"
 
     # Build time series per KPI (ordered by year, month)
+    # Filter NaN/Inf to prevent downstream computation failures
+    import math as _math
     time_series: dict = {}
     for row in rows:
         d = json.loads(row["data_json"])
         for k, v in d.items():
             if v is not None and k not in ("year", "month"):
-                time_series.setdefault(k, []).append(float(v))
+                try:
+                    fv = float(v)
+                    if _math.isfinite(fv):
+                        time_series.setdefault(k, []).append(fv)
+                except (ValueError, TypeError):
+                    pass
 
     # Latest-period averages (last 3 months or all if <3)
     kpi_avgs: dict = {}
@@ -255,8 +262,12 @@ def compute_health_score(
     for key, vals in time_series.items():
         if len(vals) < 6:
             continue
-        recent_avg = sum(vals[-3:]) / 3
-        prior_avg  = sum(vals[-6:-3]) / 3
+        recent_slice = vals[-3:]
+        prior_slice  = vals[-6:-3]
+        if not recent_slice or not prior_slice:
+            continue
+        recent_avg = sum(recent_slice) / len(recent_slice)
+        prior_avg  = sum(prior_slice) / len(prior_slice)
         direction  = directions.get(key, "higher")
         if direction == "higher":
             status = "improving" if recent_avg > prior_avg * 1.005 else ("declining" if recent_avg < prior_avg * 0.995 else "stable")
@@ -393,11 +404,49 @@ def compute_health_score(
             f"Investigate root causes and develop a 30-day recovery plan."
         )
 
+    # ── Data sufficiency assessment ──────────────────────────────────────────
+    total_kpis_expected = len(targets)
+    total_kpis_with_data = len([k for k in targets if kpi_avgs.get(k) is not None])
+    data_coverage_pct = round(total_kpis_with_data / max(total_kpis_expected, 1) * 100)
+    months_available = len(rows)
+
+    if data_coverage_pct >= 90 and months_available >= 12:
+        data_sufficiency = "Complete"
+        data_sufficiency_note = (
+            f"All core metrics are reporting ({total_kpis_with_data} of {total_kpis_expected} KPIs) "
+            f"with {months_available} months of history. Health score is fully reliable."
+        )
+    elif data_coverage_pct >= 70 and months_available >= 6:
+        data_sufficiency = "Adequate"
+        data_sufficiency_note = (
+            f"{total_kpis_with_data} of {total_kpis_expected} KPIs have data ({data_coverage_pct}% coverage) "
+            f"across {months_available} months. Health score is directionally reliable but "
+            f"missing KPIs ({', '.join(grey_kpis[:5])}) may affect completeness."
+        )
+    elif data_coverage_pct >= 40:
+        data_sufficiency = "Partial"
+        data_sufficiency_note = (
+            f"Only {total_kpis_with_data} of {total_kpis_expected} KPIs have data ({data_coverage_pct}% coverage). "
+            f"Health score should be treated as preliminary. Connect additional data sources "
+            f"to improve accuracy."
+        )
+    else:
+        data_sufficiency = "Insufficient"
+        data_sufficiency_note = (
+            f"Only {total_kpis_with_data} of {total_kpis_expected} KPIs have data ({data_coverage_pct}% coverage). "
+            f"Health score is not reliable at this coverage level. Please connect your primary "
+            f"accounting and CRM systems to enable meaningful analysis."
+        )
+
     narrative_detail = {
-        "score_meaning":  score_meaning,
-        "top_drags":      top_drags,
-        "top_wins":       top_wins,
-        "primary_action": primary_action,
+        "score_meaning":        score_meaning,
+        "top_drags":            top_drags,
+        "top_wins":             top_wins,
+        "primary_action":       primary_action,
+        "data_sufficiency":     data_sufficiency,
+        "data_sufficiency_note": data_sufficiency_note,
+        "data_coverage_pct":    data_coverage_pct,
+        "kpis_missing_data":    grey_kpis,
     }
 
     # ── Composite criticality scoring ─────────────────────────────────────────

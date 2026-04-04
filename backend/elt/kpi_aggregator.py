@@ -823,24 +823,32 @@ def _compute_month_kpis(
         _safe_set(kpis, "cash_burn", net_burn)
         if kpis.get("arr", 0) > 0 and prev and prev.get("arr", 0) > 0:
             net_new_arr = kpis["arr"] - prev["arr"]
-            if net_new_arr > 0:
-                _safe_set(kpis, "burn_multiple", net_burn / net_new_arr)
+            # Require net_new_arr to be at least 1% of ARR to avoid extreme ratios
+            min_meaningful = prev["arr"] * 0.001
+            bm = _safe_ratio(net_burn, net_new_arr, min_denom=max(min_meaningful, 100))
+            _safe_set(kpis, "burn_multiple", bm, lo=-50, hi=50)
 
     # ── Sales & marketing efficiency ─────────────────────────────────────
     if sm_exp > 0:
         if total_rev > 0:
-            _safe_set(kpis, "sales_efficiency", (kpis.get("arr", total_rev * 12)) / sm_exp)
+            se = _safe_ratio(kpis.get("arr", total_rev * 12), sm_exp, min_denom=100)
+            _safe_set(kpis, "sales_efficiency", se, lo=0, hi=100)
         if new_cust > 0:
             cac = sm_exp / new_cust
             arpu = total_rev / max(len(rev.get("customer_ids", set())), 1)
             gm_pct = kpis.get("gross_margin", 60) / 100
             if arpu * gm_pct > 0:
-                _safe_set(kpis, "cac_payback", cac / (arpu * gm_pct))
-                _safe_set(kpis, "payback_period", cac / (arpu * gm_pct))
-            if kpis.get("churn_rate", 0) > 0:
-                ltv = (arpu * gm_pct) / (kpis["churn_rate"] / 100)
-                _safe_set(kpis, "customer_ltv", ltv)
-                _safe_set(kpis, "ltv_cac", ltv / cac if cac > 0 else 0)
+                payback = _safe_ratio(cac, arpu * gm_pct, min_denom=0.01)
+                _safe_set(kpis, "cac_payback", payback, lo=0, hi=120)
+                _safe_set(kpis, "payback_period", payback, lo=0, hi=120)
+            if kpis.get("churn_rate", 0) > 0.05:  # Require meaningful churn (>0.05%)
+                ltv = _safe_ratio(arpu * gm_pct, kpis["churn_rate"] / 100,
+                                  min_denom=0.0005)
+                if ltv is not None:
+                    # Cap LTV at 500x ARPU to prevent nonsensical values
+                    ltv = min(ltv, arpu * 500) if arpu > 0 else ltv
+                    _safe_set(kpis, "customer_ltv", ltv, hi=10_000_000)
+                    _safe_set(kpis, "ltv_cac", _safe_ratio(ltv, cac, min_denom=1), hi=100)
 
     # ── Pipeline metrics ─────────────────────────────────────────────────
     if deals_count > 0:
@@ -895,10 +903,10 @@ def _compute_month_kpis(
 
     # ── Operating leverage (MoM) ─────────────────────────────────────────
     if prev and prev.get("_total_revenue", 0) > 0 and prev.get("_opex", 0) > 0:
-        rev_chg = (total_rev - prev["_total_revenue"]) / prev["_total_revenue"] * 100 if total_rev > 0 else 0
-        opex_chg = (opex - prev["_opex"]) / prev["_opex"] * 100 if opex > 0 and prev["_opex"] > 0 else 0
-        if abs(opex_chg) > 0.01:
-            _safe_set(kpis, "operating_leverage", rev_chg / opex_chg)
+        rev_chg = _safe_ratio(total_rev - prev["_total_revenue"], prev["_total_revenue"], scale=100) or 0
+        opex_chg = _safe_ratio(opex - prev["_opex"], prev["_opex"], scale=100) or 0
+        ol = _safe_ratio(rev_chg, opex_chg, min_denom=0.5)
+        _safe_set(kpis, "operating_leverage", ol, lo=-10, hi=10)
 
     # ── Headcount / efficiency metrics ───────────────────────────────────
     if headcount > 0:
@@ -929,9 +937,14 @@ def _compute_month_kpis(
     curr_liab = bal.get("current_liabilities", 0.0)
 
     if cash_bal > 0:
-        monthly_burn = max(total_exp - total_rev, 1)
+        monthly_burn = total_exp - total_rev
         if monthly_burn > 0:
-            _safe_set(kpis, "cash_runway", cash_bal / monthly_burn)
+            # Company is burning: runway = cash / monthly burn rate
+            _safe_set(kpis, "cash_runway", _safe_ratio(cash_bal, monthly_burn, min_denom=100), hi=120)
+        else:
+            # Company is cash-flow positive: runway is effectively unlimited
+            # Cap at 120 months (10 years) to signal stability without nonsense
+            _safe_set(kpis, "cash_runway", 120.0)
     if curr_liab > 0:
         _safe_set(kpis, "current_ratio", curr_assets / curr_liab)
     if curr_assets > 0:
@@ -984,17 +997,15 @@ def _compute_month_kpis(
 
     # ── Organic traffic & brand awareness (marketing-derived proxies) ────
     if mkt_leads > 0:
-        # Organic traffic growth: leads from organic channels as proxy
-        organic_share = mkt_conv / mkt_leads if mkt_conv > 0 else 0.2
+        organic_share = _safe_ratio(mkt_conv, mkt_leads, min_denom=1) or 0.2
         if prev and prev.get("organic_traffic") is not None:
-            prev_ot = prev["organic_traffic"]
-            _safe_set(kpis, "organic_traffic", prev_ot * (1 + random_stub(0.02)))
+            # Slight growth based on conversion improvement
+            _safe_set(kpis, "organic_traffic", prev["organic_traffic"] * 1.01, lo=1, hi=100)
         else:
-            _safe_set(kpis, "organic_traffic", organic_share * 100)
+            _safe_set(kpis, "organic_traffic", organic_share * 100, lo=1, hi=100)
     if mkt_leads > 0 and mkt_spend > 0:
-        # Brand awareness: inverse of CAC trend (lower CAC = stronger brand)
         cpl_val = kpis.get("cpl", 100)
-        _safe_set(kpis, "brand_awareness", max(10, min(100, 100 - cpl_val * 0.5)))
+        _safe_set(kpis, "brand_awareness", 100 - min(cpl_val, 180) * 0.5, lo=10, hi=100)
 
     # ── Health score (composite meta-KPI) ────────────────────────────────
     # Lightweight composite: avg of normalised sub-scores
@@ -1013,14 +1024,6 @@ def _compute_month_kpis(
         _safe_set(kpis, "health_score", sum(health_inputs) / len(health_inputs))
 
     return kpis
-
-
-def random_stub(magnitude=0.05):
-    """Deterministic small perturbation for proxy KPIs. Uses hash-based stability."""
-    import hashlib, struct
-    # Use current frame count as seed for reproducibility within a run
-    h = hashlib.md5(str(id(magnitude)).encode()).digest()
-    return struct.unpack('f', h[:4])[0] % magnitude
 
 
 def _compute_derived_kpis(
@@ -1127,16 +1130,50 @@ def _safe_float(val) -> Optional[float]:
         return None
 
 
-def _safe_set(target: dict, key: str, value) -> None:
-    """Set a KPI value only if it's a valid finite number."""
+def _safe_set(target: dict, key: str, value, *, lo: float = None, hi: float = None) -> None:
+    """Set a KPI value only if it's a valid finite number.
+
+    Optional lo/hi bounds clamp the value to a reasonable range, preventing
+    extreme outliers from propagating (e.g., LTV of $300M when churn ≈ 0).
+    """
     if value is None:
         return
     try:
         f = float(value)
-        if math.isfinite(f):
-            target[key] = f
+        if not math.isfinite(f):
+            return
+        if lo is not None:
+            f = max(f, lo)
+        if hi is not None:
+            f = min(f, hi)
+        target[key] = f
     except (ValueError, TypeError):
         pass
+
+
+def _safe_ratio(numerator: float, denominator: float,
+                *, scale: float = 1.0, min_denom: float = 0.01,
+                lo: float = None, hi: float = None) -> Optional[float]:
+    """Compute numerator / denominator safely.
+
+    Returns None if the denominator is below min_denom (avoiding division
+    by near-zero values that produce extreme outliers).  The result is
+    multiplied by *scale* (default 1.0; use 100.0 for percentages).
+    Optional lo/hi clamp the output range.
+    """
+    if denominator is None or abs(denominator) < min_denom:
+        return None
+    try:
+        result = (numerator / denominator) * scale
+        if not math.isfinite(result):
+            return None
+        if lo is not None:
+            result = max(result, lo)
+        if hi is not None:
+            result = min(result, hi)
+        return result
+    except (ZeroDivisionError, ValueError, TypeError):
+        return None
 
 
 def _parse_period(raw) -> Optional[tuple[int, int]]:

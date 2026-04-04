@@ -135,7 +135,12 @@ def summary(request: Request, year: Optional[int] = None):
 
     status_counts = {"green": 0, "yellow": 0, "red": 0, "grey": 0}
     for key, vals in all_kpis.items():
-        avg  = round(float(np.mean(vals)), 2)
+        # Filter out None/NaN values before computing average
+        clean_vals = [v for v in vals if v is not None and not (isinstance(v, float) and (np.isnan(v) or np.isinf(v)))]
+        if not clean_vals:
+            status_counts["grey"] += 1
+            continue
+        avg  = round(float(np.mean(clean_vals)), 2)
         t    = targets.get(key, {})
         tval = t.get("target")
         dirn = t.get("direction", "higher")
