@@ -2056,5 +2056,27 @@ def export_kpi_audit(request: Request):
     )
 
 
+# ─── Integration Specification Export ──────────────────────────────────────────
+
+@router.get("/api/export/integration-spec.xlsx", tags=["Export"])
+def export_integration_spec():
+    """Download the Integration Specification workbook — field-level data
+    requirements for every supported source system, canonical schema mappings,
+    KPI reference, and ELT pipeline documentation."""
+    from core.integration_spec import generate_integration_spec_workbook
+
+    wb = generate_integration_spec_workbook()
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+
+    fname = f"axiom-integration-spec-{datetime.utcnow().strftime('%Y%m%d')}.xlsx"
+    return StreamingResponse(
+        buf,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f"attachment; filename={fname}"},
+    )
+
+
 # ─── KPI Annotations CRUD ───────────────────────────────────────────────────
 
