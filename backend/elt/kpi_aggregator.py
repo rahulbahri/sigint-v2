@@ -1055,6 +1055,11 @@ def _compute_month_kpis(
             _safe_set(kpis, "revenue_growth", (total_rev - prev_rev) / prev_rev * 100)
             if prev.get("arr", 0) > 0 and kpis.get("arr", 0) > 0:
                 _safe_set(kpis, "arr_growth", (kpis["arr"] - prev["arr"]) / prev["arr"] * 100)
+        elif not prev:
+            _record_diagnostic(kpis, "revenue_growth", None,
+                "First month of data — growth rate requires prior month revenue for comparison.")
+            _record_diagnostic(kpis, "arr_growth", None,
+                "First month of data — ARR growth requires prior month ARR.")
 
         # Revenue concentration
         cust_ids = rev.get("customer_ids", set())
@@ -1094,6 +1099,16 @@ def _compute_month_kpis(
             _safe_set(kpis, "expansion_rate", expansion_rev / prior_total * 100)
             _safe_set(kpis, "contraction_rate", contraction_rev / prior_total * 100)
             _safe_set(kpis, "gross_dollar_ret", retained_rev / prior_total * 100)
+    elif not prev_cust_amts and prev is not None:
+        _record_diagnostic(kpis, "expansion_rate", None,
+            "No per-customer revenue data from prior month — ensure customer_id is linked to revenue transactions.")
+    elif not prev:
+        _record_diagnostic(kpis, "expansion_rate", None,
+            "First month of data — expansion/contraction require prior month per-customer comparison.")
+        _record_diagnostic(kpis, "contraction_rate", None,
+            "First month of data — requires prior month per-customer comparison.")
+        _record_diagnostic(kpis, "gross_dollar_ret", None,
+            "First month of data — gross dollar retention requires prior month revenue by customer.")
 
     # Store for next month's comparison
     kpis["_customer_amounts"] = dict(curr_cust_amts) if curr_cust_amts else {}
@@ -1109,6 +1124,13 @@ def _compute_month_kpis(
             _safe_set(kpis, "logo_retention", (1 - lost / prev_cust) * 100)
             if total_rev > 0 and prev.get("_total_revenue", 0) > 0:
                 _safe_set(kpis, "nrr", total_rev / prev["_total_revenue"] * 100)
+    elif n_active > 0 and not prev:
+        _record_diagnostic(kpis, "churn_rate", None,
+            "First month of data — churn rate requires at least two months to compare customer bases.")
+        _record_diagnostic(kpis, "logo_retention", None,
+            "First month of data — logo retention requires prior month comparison.")
+        _record_diagnostic(kpis, "nrr", None,
+            "First month of data — net revenue retention requires prior month revenue.")
     kpis["_active_customers"] = n_active
 
     # Pricing power index = ARPU change% - customer volume change%
@@ -1119,6 +1141,9 @@ def _compute_month_kpis(
             arpu_chg = (curr_arpu - prev_arpu) / prev_arpu * 100
             vol_chg = (n_active - prev["_active_customers"]) / prev["_active_customers"] * 100
             _safe_set(kpis, "pricing_power_index", arpu_chg - vol_chg)
+    elif not prev and n_active > 0:
+        _record_diagnostic(kpis, "pricing_power_index", None,
+            "First month — pricing power requires prior month ARPU comparison.")
 
     # ── Expense / burn metrics ───────────────────────────────────────────
     if total_exp > 0:
@@ -1129,6 +1154,9 @@ def _compute_month_kpis(
             min_meaningful = prev["arr"] * 0.001
             bm = _safe_ratio(net_burn, net_new_arr, min_denom=max(min_meaningful, 100))
             _safe_set(kpis, "burn_multiple", bm, net_new_arr=net_new_arr)
+        elif not prev:
+            _record_diagnostic(kpis, "burn_multiple", None,
+                "First month — burn multiple requires prior month ARR to compute net new ARR.")
 
     # ── Sales & marketing efficiency ─────────────────────────────────────
     if sm_exp > 0:
@@ -1145,13 +1173,21 @@ def _compute_month_kpis(
                     payback = _safe_ratio(cac, arpu * gm_pct, min_denom=0.01)
                     _safe_set(kpis, "cac_payback", payback, arpu=arpu, gm_pct=gm_pct_raw)
                     _safe_set(kpis, "payback_period", payback, arpu=arpu, gm_pct=gm_pct_raw)
-                if kpis.get("churn_rate", 0) > 0.05:
-                    ltv = _safe_ratio(arpu * gm_pct, kpis["churn_rate"] / 100,
-                                      min_denom=0.0005)
+                churn = kpis.get("churn_rate", 0)
+                if churn > 0.05:
+                    ltv = _safe_ratio(arpu * gm_pct, churn / 100, min_denom=0.0005)
                     if ltv is not None:
-                        _safe_set(kpis, "customer_ltv", ltv, churn_rate=kpis.get("churn_rate", 0))
+                        _safe_set(kpis, "customer_ltv", ltv, churn_rate=churn)
                         ltv_cac_val = _safe_ratio(ltv, cac, min_denom=1)
-                        _safe_set(kpis, "ltv_cac", ltv_cac_val, churn_rate=kpis.get("churn_rate", 0), cac=cac)
+                        _safe_set(kpis, "ltv_cac", ltv_cac_val, churn_rate=churn, cac=cac)
+                elif churn <= 0.05:
+                    _record_diagnostic(kpis, "customer_ltv", None,
+                        f"Churn rate is {churn:.2f}% (near zero) — LTV formula produces "
+                        f"unreliable extreme values when churn approaches zero. "
+                        f"LTV will be reported when churn exceeds 0.05%.")
+                    _record_diagnostic(kpis, "ltv_cac", None,
+                        f"Cannot compute — requires customer LTV which is unavailable "
+                        f"due to near-zero churn rate ({churn:.2f}%).")
             else:
                 _record_diagnostic(kpis, "cac_payback", None,
                     "Cannot compute — gross margin is not available. "
@@ -1170,6 +1206,9 @@ def _compute_month_kpis(
         _safe_set(kpis, "win_rate", deals_won / deals_count * 100)
         if deals_won > 0:
             _safe_set(kpis, "avg_deal_size", won_value / deals_won)
+        else:
+            _record_diagnostic(kpis, "avg_deal_size", None,
+                "No deals won this month — average deal size requires at least one closed-won deal.")
         if total_rev > 0:
             _safe_set(kpis, "pipeline_conversion", won_value / pipe_value * 100 if pipe_value > 0 else 0)
 
@@ -1179,10 +1218,16 @@ def _compute_month_kpis(
         if avg_days > 0 and deals_won > 0:
             velocity = (deals_won * (won_value / deals_won) * (deals_won / deals_count)) / avg_days
             _safe_set(kpis, "pipeline_velocity", velocity)
+        elif deals_won == 0:
+            _record_diagnostic(kpis, "pipeline_velocity", None,
+                "No deals won this month — pipeline velocity requires closed deals with duration data.")
 
         # Quota attainment (using won_value as proxy vs target if available)
         if won_value > 0 and pipe_value > 0:
             _safe_set(kpis, "quota_attainment", won_value / pipe_value * 100)
+        elif won_value == 0:
+            _record_diagnostic(kpis, "quota_attainment", None,
+                "No revenue from won deals this month — quota attainment requires closed-won deal value.")
 
     # ── Invoice / AR metrics ─────────────────────────────────────────────
     if inv_count == 0 and total_rev > 0:
@@ -1199,6 +1244,9 @@ def _compute_month_kpis(
         overdue = inv.get("overdue_count", 0)
         if overdue > 0:
             _safe_set(kpis, "ar_aging_overdue", overdue / inv_count * 100)
+        else:
+            # Zero overdue is a GOOD result — report it as 0%, not missing
+            _safe_set(kpis, "ar_aging_overdue", 0.0)
         _safe_set(kpis, "ar_aging_current", (1 - overdue / inv_count) * 100)
 
         # CEI = (Beg_AR + Revenue - End_AR) / (Beg_AR + Revenue - Current_AR) * 100
@@ -1217,16 +1265,30 @@ def _compute_month_kpis(
         dpo = (total_exp / total_rev * 30) if total_rev > 0 else 30.0
         if dso_val > 0:
             _safe_set(kpis, "cash_conv_cycle", dso_val + dio - dpo)
+        else:
+            _record_diagnostic(kpis, "cash_conv_cycle", None,
+                "DSO is zero or unavailable — cash conversion cycle requires "
+                "meaningful days-sales-outstanding. Verify invoice dates.")
 
     # Store ending AR for next month's CEI
     kpis["_ending_ar"] = inv.get("outstanding_total", 0.0)
 
     # ── Operating leverage (MoM) ─────────────────────────────────────────
-    if prev and prev.get("_total_revenue", 0) > 0 and prev.get("_opex", 0) > 0:
+    if not prev:
+        _record_diagnostic(kpis, "operating_leverage", None,
+            "First month — operating leverage requires MoM revenue and OpEx changes.")
+    elif prev and prev.get("_total_revenue", 0) > 0 and prev.get("_opex", 0) > 0:
         rev_chg = _safe_ratio(total_rev - prev["_total_revenue"], prev["_total_revenue"], scale=100) or 0
         opex_chg = _safe_ratio(opex - prev["_opex"], prev["_opex"], scale=100) or 0
         ol = _safe_ratio(rev_chg, opex_chg, min_denom=0.5)
         _safe_set(kpis, "operating_leverage", ol, opex_chg=opex_chg)
+        # If _safe_set withheld it (bounds) or ol was None (denominator too small), diagnose
+        if "operating_leverage" not in kpis and "operating_leverage" not in kpis.get("_diagnostics", {}):
+            _record_diagnostic(kpis, "operating_leverage", None,
+                f"OpEx change of {opex_chg:.1f}% is too small to produce a meaningful leverage ratio.")
+    elif prev:
+        _record_diagnostic(kpis, "operating_leverage", None,
+            "Prior month revenue or OpEx data insufficient to compute MoM leverage ratio.")
 
     # ── Headcount / efficiency metrics ───────────────────────────────────
     if headcount > 0:
@@ -1368,6 +1430,14 @@ def _compute_derived_kpis(
         bm = kpis.get("burn_multiple")
         if arr_g is not None and bm is not None and abs(bm) > 0.01:
             _safe_set(kpis, "growth_efficiency", arr_g / abs(bm))
+        elif "growth_efficiency" not in kpis:
+            reason_parts = []
+            if arr_g is None: reason_parts.append("ARR growth")
+            if bm is None: reason_parts.append("burn multiple")
+            if bm is not None and abs(bm) <= 0.01: reason_parts.append("meaningful burn multiple (near zero)")
+            _record_diagnostic(kpis, "growth_efficiency", None,
+                f"Cannot compute — requires {' and '.join(reason_parts) if reason_parts else 'upstream KPIs'} "
+                f"which {'is' if len(reason_parts)==1 else 'are'} not available this month.")
 
         # Revenue momentum = current rev growth / rolling avg rev growth
         if i >= 2:
@@ -1378,6 +1448,12 @@ def _compute_derived_kpis(
                 avg_rg = sum(valid) / len(valid)
                 if abs(avg_rg) > 0.01:
                     _safe_set(kpis, "revenue_momentum", kpis["revenue_growth"] / avg_rg)
+                else:
+                    _record_diagnostic(kpis, "revenue_momentum", None,
+                        "Average revenue growth is near zero — momentum ratio is undefined.")
+        elif i < 2:
+            _record_diagnostic(kpis, "revenue_momentum", None,
+                "Requires at least 3 months of data to compute rolling average.")
 
         # Revenue fragility = (concentration x churn) / NRR
         cc = kpis.get("customer_concentration")
@@ -1385,10 +1461,27 @@ def _compute_derived_kpis(
         nrr = kpis.get("nrr")
         if cc is not None and cr is not None and nrr and nrr > 0:
             _safe_set(kpis, "revenue_fragility", (cc * cr) / nrr)
+        elif "revenue_fragility" not in kpis:
+            reason_parts = []
+            if cc is None: reason_parts.append("customer concentration")
+            if cr is None: reason_parts.append("churn rate")
+            if not nrr: reason_parts.append("NRR")
+            _record_diagnostic(kpis, "revenue_fragility", None,
+                f"Cannot compute — requires {', '.join(reason_parts) if reason_parts else 'upstream KPIs'}.")
 
         # Burn convexity = delta burn_multiple MoM
         if prev and bm is not None and prev.get("burn_multiple") is not None:
             _safe_set(kpis, "burn_convexity", bm - prev["burn_multiple"])
+        elif "burn_convexity" not in kpis:
+            if i == 0:
+                _record_diagnostic(kpis, "burn_convexity", None,
+                    "First month of data — requires prior month's burn multiple.")
+            elif bm is None:
+                _record_diagnostic(kpis, "burn_convexity", None,
+                    "Burn multiple not available this month — cannot compute MoM change.")
+            elif prev and prev.get("burn_multiple") is None:
+                _record_diagnostic(kpis, "burn_convexity", None,
+                    "Prior month's burn multiple was unavailable — cannot compute delta.")
 
         # Margin volatility = std dev of last 6 months of gross_margin
         if i >= 2:
@@ -1399,10 +1492,26 @@ def _compute_derived_kpis(
                 mean_gm = sum(valid_gm) / len(valid_gm)
                 variance = sum((x - mean_gm) ** 2 for x in valid_gm) / len(valid_gm)
                 _safe_set(kpis, "margin_volatility", variance ** 0.5)
+            else:
+                _record_diagnostic(kpis, "margin_volatility", None,
+                    f"Insufficient gross margin history ({len(valid_gm)} of 3 required months).")
+        elif i < 2:
+            _record_diagnostic(kpis, "margin_volatility", None,
+                "Requires at least 3 months of data to compute standard deviation.")
 
         # Customer decay slope = delta churn_rate MoM
         if prev and cr is not None and prev.get("churn_rate") is not None:
             _safe_set(kpis, "customer_decay_slope", cr - prev["churn_rate"])
+        elif "customer_decay_slope" not in kpis:
+            if i == 0:
+                _record_diagnostic(kpis, "customer_decay_slope", None,
+                    "First month of data — requires prior month's churn rate.")
+            elif cr is None:
+                _record_diagnostic(kpis, "customer_decay_slope", None,
+                    "Churn rate not available this month — cannot compute MoM change.")
+            elif prev and prev.get("churn_rate") is None:
+                _record_diagnostic(kpis, "customer_decay_slope", None,
+                    "Prior month's churn rate was unavailable — cannot compute delta.")
 
         # Remove internal-only keys before final output
         for internal_key in ("_active_customers", "_total_revenue", "_total_expenses",
