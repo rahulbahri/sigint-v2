@@ -1326,19 +1326,322 @@ def export_kpi_audit(request: Request):
                     mx = max(mx, min(len(str(cell.value)), max_w))
             ws.column_dimensions[letter].width = max(mx + 3, 12)
 
+    # ── Computation map: how each KPI is derived from basis numbers ────────
+    # Each entry: list of (input_label, input_kpi_key_or_None, fallback_desc)
+    # plus an excel_formula template using {A}, {B}, {C} placeholders for input
+    # cell references, and a human-readable explanation.
+
+    COMPUTATION_MAP = {
+        # ── Margin & Profitability ──
+        "gross_margin":        {"inputs": [("Revenue", None, "Total Revenue from data source"),
+                                           ("COGS", None, "Cost of Goods Sold from data source")],
+                                "excel": "=({A}-{B})/{A}*100",
+                                "explain": "(Revenue - COGS) / Revenue x 100"},
+        "operating_margin":    {"inputs": [("Revenue", None, "Total Revenue"),
+                                           ("COGS", None, "Cost of Goods Sold"),
+                                           ("OpEx", None, "Operating Expenses")],
+                                "excel": "=({A}-{B}-{C})/{A}*100",
+                                "explain": "(Revenue - COGS - OpEx) / Revenue x 100"},
+        "ebitda_margin":       {"inputs": [("Revenue", None, "Total Revenue"),
+                                           ("COGS", None, "Cost of Goods Sold"),
+                                           ("OpEx", None, "Operating Expenses")],
+                                "excel": "=(({A}-{B}-{C})*1.15)/{A}*100",
+                                "explain": "((Revenue - COGS - OpEx) x 1.15) / Revenue x 100  [1.15 = D&A add-back proxy]"},
+        "opex_ratio":          {"inputs": [("OpEx", None, "Operating Expenses"),
+                                           ("Revenue", None, "Total Revenue")],
+                                "excel": "={A}/{B}*100",
+                                "explain": "OpEx / Revenue x 100"},
+        "contribution_margin": {"inputs": [("Revenue", None, "Total Revenue"),
+                                           ("COGS", None, "Cost of Goods Sold"),
+                                           ("OpEx", None, "Operating Expenses")],
+                                "excel": "=({A}-{B}-{C}*0.3)/{A}*100",
+                                "explain": "(Revenue - COGS - 30% of OpEx) / Revenue x 100"},
+        "operating_leverage":  {"inputs": [("Operating Margin This Month", "operating_margin", None),
+                                           ("Operating Margin Prev Month", None, "Prior month operating_margin")],
+                                "excel": "=({A}-{B})/{B}",
+                                "explain": "% change in Operating Income / % change in Revenue (approx via margin delta)"},
+        "margin_volatility":   {"inputs": [("Gross Margin (6 months)", "gross_margin", "Rolling 6-month series")],
+                                "excel": "=STDEV of last 6 gross_margin values",
+                                "explain": "Standard deviation of gross_margin over trailing 6 months"},
+        # ── Revenue ──
+        "revenue_growth":      {"inputs": [("Revenue This Month", None, "Current month total revenue"),
+                                           ("Revenue Prev Month", None, "Prior month total revenue")],
+                                "excel": "=({A}-{B})/{B}*100",
+                                "explain": "(Revenue_Month - Revenue_PrevMonth) / Revenue_PrevMonth x 100"},
+        "arr_growth":          {"inputs": [("ARR This Month", None, "Current month ARR (MRR x 12)"),
+                                           ("ARR Prev Month", None, "Prior month ARR")],
+                                "excel": "=({A}-{B})/{B}*100",
+                                "explain": "(ARR_Month - ARR_PrevMonth) / ARR_PrevMonth x 100"},
+        "revenue_quality":     {"inputs": [("Recurring Revenue", None, "Subscription/recurring revenue"),
+                                           ("Total Revenue", None, "Total revenue")],
+                                "excel": "={A}/{B}*100",
+                                "explain": "Recurring_Revenue / Total_Revenue x 100"},
+        "recurring_revenue":   {"inputs": [("Recurring Revenue", None, "Subscription/recurring revenue"),
+                                           ("Total Revenue", None, "Total revenue")],
+                                "excel": "={A}/{B}*100",
+                                "explain": "Recurring_Revenue / Total_Revenue x 100"},
+        "customer_concentration": {"inputs": [("Top Customer Rev", None, "Revenue from largest customer"),
+                                              ("Total Revenue", None, "Total revenue")],
+                                   "excel": "={A}/{B}*100",
+                                   "explain": "Top_Customer_Revenue / Total_Revenue x 100 (or Pareto approx: min(100/N_customers x 2.5, 100))"},
+        "revenue_momentum":    {"inputs": [("Current Rev Growth", "revenue_growth", None),
+                                           ("12M Avg Rev Growth", None, "Average revenue_growth over 12 months")],
+                                "excel": "={A}/{B}",
+                                "explain": "Current_Revenue_Growth / 12M_Avg_Revenue_Growth (>1 = accelerating)"},
+        "revenue_fragility":   {"inputs": [("Customer Concentration", "customer_concentration", None),
+                                           ("Churn Rate", "churn_rate", None),
+                                           ("NRR", "nrr", None)],
+                                "excel": "=({A}*{B})/{C}",
+                                "explain": "(Customer_Concentration x Churn_Rate) / NRR"},
+        "pricing_power_index": {"inputs": [("ARPU Change %", None, "Month-over-month ARPU % change"),
+                                           ("Customer Volume Change %", None, "Month-over-month customer count % change")],
+                                "excel": "={A}-{B}",
+                                "explain": "Delta_ARPU% - Delta_Customer_Volume% (positive = pricing power)"},
+        "avg_deal_size":       {"inputs": [("Won Deal Value", None, "Total value of won deals"),
+                                           ("Deals Won", None, "Count of won deals")],
+                                "excel": "={A}/{B}",
+                                "explain": "Total_Won_Value / Number_of_Deals_Won"},
+        "expansion_rate":      {"inputs": [("Expansion Revenue", None, "Upsell + cross-sell revenue"),
+                                           ("Beginning MRR", None, "MRR at start of period")],
+                                "excel": "={A}/{B}*100",
+                                "explain": "Expansion_Revenue / Beginning_MRR x 100"},
+        "gross_dollar_ret":    {"inputs": [("End MRR excl Expansion", None, "Ending MRR minus expansion"),
+                                           ("Beginning MRR", None, "MRR at start of period")],
+                                "excel": "={A}/{B}*100",
+                                "explain": "(MRR_End - Expansion) / MRR_Start x 100"},
+        "customer_ltv":        {"inputs": [("ARPU", None, "Average Revenue Per User"),
+                                           ("Gross Margin %", "gross_margin", None),
+                                           ("Monthly Churn Rate", "churn_rate", None)],
+                                "excel": "=({A}*{B}/100)/({C}/100)",
+                                "explain": "(ARPU x Gross_Margin%) / Monthly_Churn_Rate"},
+        "ltv_cac":             {"inputs": [("Customer LTV", "customer_ltv", None),
+                                           ("CAC", None, "Customer Acquisition Cost = S&M / New_Customers")],
+                                "excel": "={A}/{B}",
+                                "explain": "LTV / CAC"},
+        # ── Growth & Acquisition ──
+        "cpl":                 {"inputs": [("Marketing Spend", None, "Total marketing spend"),
+                                           ("Leads Generated", None, "Total new leads")],
+                                "excel": "={A}/{B}",
+                                "explain": "Marketing_Spend / Leads_Generated"},
+        "mql_sql_rate":        {"inputs": [("SQLs", None, "Sales Qualified Leads"),
+                                           ("MQLs", None, "Marketing Qualified Leads")],
+                                "excel": "={A}/{B}*100",
+                                "explain": "SQLs / MQLs x 100"},
+        "pipeline_velocity":   {"inputs": [("Opportunities", None, "Number of open opportunities"),
+                                           ("Win Rate", "win_rate", None),
+                                           ("Avg Deal Size", "avg_deal_size", None),
+                                           ("Sales Cycle Days", None, "Average days to close")],
+                                "excel": "={A}*{B}/100*{C}/{D}",
+                                "explain": "Opportunities x Win_Rate x Avg_Deal_Size / Sales_Cycle_Days"},
+        "win_rate":            {"inputs": [("Deals Won", None, "Count of deals won"),
+                                           ("Total Deals", None, "Total deals in period")],
+                                "excel": "={A}/{B}*100",
+                                "explain": "Deals_Won / Total_Deals x 100"},
+        "pipeline_conversion": {"inputs": [("Won Value", None, "Total value of won deals"),
+                                           ("Total Pipeline Value", None, "Total pipeline value")],
+                                "excel": "={A}/{B}*100",
+                                "explain": "Won_Value / Total_Pipeline_Value x 100"},
+        "quota_attainment":    {"inputs": [("Actual Bookings", None, "Total bookings achieved"),
+                                           ("Quota Target", None, "Sales quota for period")],
+                                "excel": "={A}/{B}*100",
+                                "explain": "Actual_Bookings / Quota_Target x 100"},
+        "marketing_roi":       {"inputs": [("Revenue from Marketing", None, "Revenue attributed to marketing"),
+                                           ("Marketing Spend", None, "Total marketing investment")],
+                                "excel": "={A}/{B}",
+                                "explain": "Marketing_Attributed_Revenue / Marketing_Spend"},
+        "growth_efficiency":   {"inputs": [("ARR Growth Rate", "arr_growth", None),
+                                           ("Burn Multiple", "burn_multiple", None)],
+                                "excel": "={A}/{B}",
+                                "explain": "ARR_Growth_Rate / Burn_Multiple"},
+        # ── Retention ──
+        "churn_rate":          {"inputs": [("Lost Customers", None, "Customers lost this month"),
+                                           ("Total Customers (prev)", None, "Total customers at start of month")],
+                                "excel": "={A}/{B}*100",
+                                "explain": "Lost_Customers / Starting_Customers x 100"},
+        "nrr":                 {"inputs": [("Starting MRR", None, "MRR at beginning of period"),
+                                           ("Expansion", None, "Expansion revenue"),
+                                           ("Churn", None, "Churned revenue"),
+                                           ("Contraction", None, "Contraction revenue")],
+                                "excel": "=({A}+{B}-{C}-{D})/{A}*100",
+                                "explain": "(MRR_Start + Expansion - Churn - Contraction) / MRR_Start x 100"},
+        "logo_retention":      {"inputs": [("Retained Customers", None, "Customers still active"),
+                                           ("Total Customers (prev)", None, "Total customers at start of month")],
+                                "excel": "={A}/{B}*100",
+                                "explain": "Retained_Customers / Starting_Customers x 100"},
+        "customer_decay_slope":{"inputs": [("Churn Rate This Month", "churn_rate", None),
+                                           ("Churn Rate Prev Month", None, "Prior month churn_rate")],
+                                "excel": "={A}-{B}",
+                                "explain": "Delta_Churn_Rate month-over-month (positive = worsening)"},
+        # ── Efficiency ──
+        "sales_efficiency":    {"inputs": [("New ARR", None, "New Annual Recurring Revenue added"),
+                                           ("S&M Spend", None, "Sales & Marketing spend")],
+                                "excel": "={A}/{B}",
+                                "explain": "New_ARR / Sales_Marketing_Spend"},
+        "cac_payback":         {"inputs": [("CAC", None, "Customer Acquisition Cost"),
+                                           ("ARPU", None, "Average Revenue Per User per month"),
+                                           ("Gross Margin %", "gross_margin", None)],
+                                "excel": "={A}/({B}*{C}/100)",
+                                "explain": "CAC / (ARPU x Gross_Margin%) — result in months"},
+        "burn_multiple":       {"inputs": [("Net Burn", None, "Total Expenses - Total Revenue"),
+                                           ("Net New ARR", None, "New ARR added in period")],
+                                "excel": "={A}/{B}",
+                                "explain": "Net_Burn / Net_New_ARR (lower is better; <1 = efficient)"},
+        "burn_convexity":      {"inputs": [("Burn Multiple This Month", "burn_multiple", None),
+                                           ("Burn Multiple Prev Month", None, "Prior month burn_multiple")],
+                                "excel": "={A}-{B}",
+                                "explain": "Delta_Burn_Multiple month-over-month (negative = improving)"},
+        "headcount_eff":       {"inputs": [("Revenue", None, "Monthly revenue"),
+                                           ("Headcount", None, "Total employees")],
+                                "excel": "={A}/{B}",
+                                "explain": "Monthly_Revenue / Headcount"},
+        "rev_per_employee":    {"inputs": [("Annual Revenue", None, "Monthly revenue x 12"),
+                                           ("Headcount", None, "Total employees")],
+                                "excel": "={A}/{B}",
+                                "explain": "Annualized_Revenue / Headcount"},
+        "billable_utilization":{"inputs": [("Billable Hours", None, "Hours billed to clients"),
+                                           ("Total Hours", None, "Total available working hours")],
+                                "excel": "={A}/{B}*100",
+                                "explain": "Billable_Hours / Total_Available_Hours x 100"},
+        # ── Cash Flow ──
+        "dso":                 {"inputs": [("Accounts Receivable", None, "Total AR balance"),
+                                           ("Revenue", None, "Monthly revenue")],
+                                "excel": "={A}/{B}*30",
+                                "explain": "(Accounts_Receivable / Revenue) x 30 days"},
+        "ar_turnover":         {"inputs": [("Annual Revenue", None, "Net credit sales (annualized)"),
+                                           ("Average AR", None, "Average Accounts Receivable balance")],
+                                "excel": "={A}/{B}",
+                                "explain": "Net_Credit_Sales / Average_AR"},
+        "avg_collection_period":{"inputs": [("DSO", "dso", None)],
+                                 "excel": "={A}",
+                                 "explain": "365 / AR_Turnover (equivalent to DSO)"},
+        "cash_conv_cycle":     {"inputs": [("DSO", "dso", None),
+                                           ("DIO (est)", None, "Days Inventory Outstanding"),
+                                           ("DPO (est)", None, "Days Payable Outstanding")],
+                                "excel": "={A}+{B}-{C}",
+                                "explain": "DSO + DIO - DPO  [simplified: DSO + 10 day buffer when DIO/DPO unavailable]"},
+        "cei":                 {"inputs": [("Beginning AR", None, "AR at period start"),
+                                           ("Credit Sales", None, "Credit sales in period"),
+                                           ("Ending AR", None, "AR at period end"),
+                                           ("Current AR", None, "AR still within terms")],
+                                "excel": "=({A}+{B}-{C})/({A}+{B}-{D})*100",
+                                "explain": "(Beg_AR + Sales - End_AR) / (Beg_AR + Sales - Current_AR) x 100"},
+        "ar_aging_current":    {"inputs": [("Current Invoices (0-30d)", None, "Invoices within terms"),
+                                           ("Total Invoices", None, "All outstanding invoices")],
+                                "excel": "={A}/{B}*100",
+                                "explain": "Current_AR / Total_AR x 100"},
+        "ar_aging_overdue":    {"inputs": [("Overdue Invoices (30+d)", None, "Invoices past terms"),
+                                           ("Total Invoices", None, "All outstanding invoices")],
+                                "excel": "={A}/{B}*100",
+                                "explain": "Overdue_AR / Total_AR x 100"},
+        "cash_runway":         {"inputs": [("Cash Balance", None, "Current cash on hand"),
+                                           ("Monthly Burn", None, "Net monthly cash outflow")],
+                                "excel": "={A}/{B}",
+                                "explain": "Cash_Balance / Monthly_Burn (result in months)"},
+        "current_ratio":       {"inputs": [("Current Assets", None, "Total current assets"),
+                                           ("Current Liabilities", None, "Total current liabilities")],
+                                "excel": "={A}/{B}",
+                                "explain": "Current_Assets / Current_Liabilities"},
+        "working_capital":     {"inputs": [("Current Assets", None, "Total current assets"),
+                                           ("Current Liabilities", None, "Total current liabilities"),
+                                           ("Total Assets", None, "Total assets")],
+                                "excel": "=({A}-{B})/{C}",
+                                "explain": "(Current_Assets - Current_Liabilities) / Total_Assets"},
+        # ── Risk ──
+        "contraction_rate":    {"inputs": [("Contraction MRR", None, "MRR lost to downgrades"),
+                                           ("Beginning MRR", None, "MRR at start of period")],
+                                "excel": "={A}/{B}*100",
+                                "explain": "Contraction_MRR / Beginning_MRR x 100"},
+        "payback_period":      {"inputs": [("Total Investment", None, "Total capital invested"),
+                                           ("Annual Cash Flow", None, "Annual net cash flow")],
+                                "excel": "={A}/{B}",
+                                "explain": "Total_Investment / Annual_Cash_Flow (result in months)"},
+    }
+
+    # Build a lookup: kpi_key -> latest value (for cross-referencing input KPIs)
+    latest_values = {}
+    for key in ALL_KPIS:
+        series = monthly.get(key, [])
+        if series:
+            latest_values[key] = series[-1][2]
+
+    # Also get prior-month values for delta-based KPIs
+    prior_values = {}
+    for key in ALL_KPIS:
+        series = monthly.get(key, [])
+        if len(series) >= 2:
+            prior_values[key] = series[-2][2]
+
+    # ── Back-calculate implied raw values (normalised to Revenue = 100) ────
+    # This lets the user verify margin/ratio KPIs even when raw accounting
+    # data isn't stored separately.  We label these "implied" so the auditor
+    # knows they are derived, not source-of-truth.
+    lv = latest_values
+    pv = prior_values
+    implied = {}
+
+    rev_norm = 100.0  # normalised revenue base
+    implied["Revenue (norm=100)"] = rev_norm
+    gm = lv.get("gross_margin")
+    if gm is not None:
+        implied["COGS (implied)"] = round(rev_norm * (1 - gm / 100), 4)
+    opr = lv.get("opex_ratio")
+    if opr is not None:
+        implied["OpEx (implied)"] = round(rev_norm * opr / 100, 4)
+    elif lv.get("operating_margin") is not None and gm is not None:
+        implied["OpEx (implied)"] = round(rev_norm * (gm / 100 - lv["operating_margin"] / 100), 4)
+
+    # Prev-month values for growth KPIs
+    rg = lv.get("revenue_growth")
+    if rg is not None:
+        implied["Revenue PrevMonth (implied)"] = round(rev_norm / (1 + rg / 100), 4)
+    ag = lv.get("arr_growth")
+    if ag is not None:
+        arr_now = rev_norm * 12
+        implied["ARR PrevMonth (implied)"] = round(arr_now / (1 + ag / 100), 4)
+        implied["ARR This Month (implied)"] = round(arr_now, 4)
+
+    # DSO -> implied AR
+    dso_val = lv.get("dso")
+    if dso_val is not None:
+        implied["AR (implied)"] = round(rev_norm * dso_val / 30, 4)
+
+    # Map raw-input labels to implied values
+    RAW_IMPLIED = {
+        "Revenue":              rev_norm,
+        "Total Revenue":        rev_norm,
+        "Monthly revenue":      rev_norm,
+        "COGS":                 implied.get("COGS (implied)"),
+        "OpEx":                 implied.get("OpEx (implied)") or implied.get("OpEx from ratio (implied)"),
+        "Operating Expenses":   implied.get("OpEx (implied)") or implied.get("OpEx from ratio (implied)"),
+        "Revenue This Month":   rev_norm,
+        "Revenue Prev Month":   implied.get("Revenue PrevMonth (implied)"),
+        "ARR This Month":       implied.get("ARR This Month (implied)"),
+        "ARR Prev Month":       implied.get("ARR PrevMonth (implied)"),
+        "Accounts Receivable":  implied.get("AR (implied)"),
+        "Annual Revenue":       round(rev_norm * 12, 4),
+    }
+
     # ── Sheet 1: KPI Master ────────────────────────────────────────────────
 
     ws1 = wb.active
     ws1.title = "KPI Master"
+    # Columns A-R (18 columns)
     headers1 = [
         "KPI Key", "KPI Name", "Unit", "Direction", "Domain",
-        "Formula", "Target", "Latest Value", "Gap %",
+        "Computation Formula",
+        "Input A", "Value A", "Input B", "Value B", "Input C", "Value C", "Input D", "Value D",
+        "Latest Value (Platform)", "Verification Formula", "Verified Value",
+        "Target", "Gap %",
         "Rationale / Root Causes", "Feeds Into (Downstream)",
         "Fed By (Upstream KPIs)", "Corrective Actions",
         "Used On Tabs",
     ]
     ws1.append(headers1)
     style_header(ws1, len(headers1))
+
+    formula_font = Font(name="Consolas", size=9, color="6B21A8")
+    input_label_font = Font(size=9, color="0055A4", italic=True)
+    verify_fill = PatternFill(start_color="ECFDF5", end_color="ECFDF5", fill_type="solid")
 
     sorted_keys = sorted(ALL_KPIS.keys(), key=lambda k: (get_domain(k), ALL_KPIS[k].get("name", k)))
     for i, key in enumerate(sorted_keys):
@@ -1357,26 +1660,112 @@ def export_kpi_audit(request: Request):
         fed_by = ", ".join(reverse_feeds.get(key, []))
         actions = "; ".join(ALL_CAUSATION_RULES.get(key, {}).get("corrective_actions", []))
 
+        comp = COMPUTATION_MAP.get(key)
+        row_num = i + 2  # 1-indexed, row 1 is header
+
+        # Input columns: up to 4 inputs (A-D), each with label + value
+        input_labels = ["", "", "", ""]
+        input_vals = [None, None, None, None]
+        explain = kpi.get("formula", "—")
+        excel_formula = None
+
+        if comp:
+            explain = comp["explain"]
+            inputs = comp["inputs"]
+            cell_refs = {}
+            for j, inp in enumerate(inputs[:4]):
+                label, ref_kpi, fallback = inp
+                input_labels[j] = label
+                if ref_kpi and ref_kpi in latest_values:
+                    input_vals[j] = round(latest_values[ref_kpi], 4)
+                elif ref_kpi and ref_kpi in prior_values:
+                    input_vals[j] = round(prior_values[ref_kpi], 4)
+                elif label in RAW_IMPLIED and RAW_IMPLIED[label] is not None:
+                    # Use back-calculated implied value (normalised to Rev=100)
+                    input_vals[j] = RAW_IMPLIED[label]
+                    input_labels[j] = f"{label} *implied, Rev=100"
+                else:
+                    input_vals[j] = fallback or "from data source"
+                # Map {A},{B},{C},{D} to cell refs for the verification formula
+                # Value columns are H, J, L, N (columns 8, 10, 12, 14)
+                val_col = get_column_letter(8 + j * 2)  # H, J, L, N
+                cell_refs[chr(65 + j)] = f"{val_col}{row_num}"
+
+            # Build the Excel verification formula if all numeric inputs are available
+            has_all_numeric = all(
+                isinstance(input_vals[j], (int, float))
+                for j in range(len(inputs[:4]))
+            )
+            if has_all_numeric and comp.get("excel"):
+                excel_formula = comp["excel"]
+                for placeholder, ref in cell_refs.items():
+                    excel_formula = excel_formula.replace("{" + placeholder + "}", ref)
+
         row = [
-            key,
-            kpi.get("name", key),
-            kpi.get("unit", "—"),
-            kpi.get("direction", "—"),
-            get_domain(key),
-            kpi.get("formula", "—"),
-            target,
-            round(latest, 4) if latest is not None else None,
-            gap,
-            depends_on(key),
-            feeds_into(key),
-            fed_by,
-            actions,
-            tabs_for_kpi(key),
+            key,                                        # A: KPI Key
+            kpi.get("name", key),                       # B: KPI Name
+            kpi.get("unit", "—"),                       # C: Unit
+            kpi.get("direction", "—"),                  # D: Direction
+            get_domain(key),                            # E: Domain
+            explain,                                    # F: Computation Formula
+            input_labels[0],                            # G: Input A label
+            input_vals[0],                              # H: Value A
+            input_labels[1],                            # I: Input B label
+            input_vals[1],                              # J: Value B
+            input_labels[2],                            # K: Input C label
+            input_vals[2],                              # L: Value C
+            input_labels[3],                            # M: Input D label
+            input_vals[3],                              # N: Value D
+            round(latest, 4) if latest is not None else None,  # O: Latest Value
+            None,                                       # P: Verification Formula (set below)
+            None,                                       # Q: Verified Value (set below)
+            target,                                     # R: Target
+            gap,                                        # S: Gap %
+            depends_on(key),                            # T: Rationale
+            feeds_into(key),                            # U: Feeds Into
+            fed_by,                                     # V: Fed By
+            actions,                                    # W: Corrective Actions
+            tabs_for_kpi(key),                          # X: Used On Tabs
         ]
         ws1.append(row)
+
+        # Set the verification formula in column Q (17) if we have one
+        if excel_formula:
+            ws1.cell(row=row_num, column=17).value = excel_formula
+            ws1.cell(row=row_num, column=17).font = formula_font
+            ws1.cell(row=row_num, column=17).fill = verify_fill
+        else:
+            ws1.cell(row=row_num, column=17).value = "N/A (raw inputs from data source)"
+            ws1.cell(row=row_num, column=17).font = Font(size=9, color="9CA3AF", italic=True)
+
+        # Show the formula text in column P
+        if comp and comp.get("excel"):
+            ws1.cell(row=row_num, column=16).value = comp["excel"]
+            ws1.cell(row=row_num, column=16).font = formula_font
+
+        # Style input label cells
+        for j in range(4):
+            label_col = 7 + j * 2  # G, I, K, M
+            ws1.cell(row=row_num, column=label_col).font = input_label_font
+            # If value is a string (not numeric), style it differently
+            val_col = 8 + j * 2
+            cell = ws1.cell(row=row_num, column=val_col)
+            if isinstance(cell.value, str):
+                cell.font = Font(size=9, color="9CA3AF", italic=True)
+
         if i % 2 == 1:
             for c in range(1, len(headers1) + 1):
                 ws1.cell(row=i + 2, column=c).fill = alt_fill
+
+    # Add audit legend at bottom
+    ws1.append([])
+    ws1.append([])
+    legend_row = ws1.max_row + 1
+    ws1.cell(row=legend_row, column=1, value="AUDIT NOTES").font = Font(bold=True, size=11, color="0055A4")
+    ws1.cell(row=legend_row + 1, column=1, value="* Values marked 'implied, Rev=100' are back-calculated by normalising Revenue to 100. Replace with your actual accounting values and the Verified Value column will recompute.").font = Font(size=9, color="6B7280", italic=True)
+    ws1.cell(row=legend_row + 2, column=1, value="* Column P shows the formula template. Column Q contains a live Excel formula referencing the input value cells (H, J, L, N). Edit those cells to audit with your own numbers.").font = Font(size=9, color="6B7280", italic=True)
+    ws1.cell(row=legend_row + 3, column=1, value="* KPIs without verification formulas depend on raw accounting data (invoices, headcount, pipeline) not stored as separate KPI values. Their formula is shown in column F for manual verification.").font = Font(size=9, color="6B7280", italic=True)
+    ws1.cell(row=legend_row + 4, column=1, value=f"* Latest period shown. Full monthly history is on the 'Monthly Data' sheet. Generated {datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')}.").font = Font(size=9, color="6B7280", italic=True)
 
     auto_width(ws1)
 
