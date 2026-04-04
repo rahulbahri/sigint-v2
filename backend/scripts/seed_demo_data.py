@@ -29,7 +29,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from core.database import get_db, init_db
 from elt.kpi_aggregator import aggregate_canonical_to_monthly
 
-WORKSPACE = "rahul@axiomsync.ai"
+WORKSPACE = "axiomsync.ai"  # Must match _org_id_for_email("rahul@axiomsync.ai") → domain
 random.seed(42)  # Reproducible
 
 
