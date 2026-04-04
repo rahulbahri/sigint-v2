@@ -281,7 +281,7 @@ def compute_health_score(
             status = "improving" if recent_avg > prior_avg * 1.005 else ("declining" if recent_avg < prior_avg * 0.995 else "stable")
         else:
             status = "improving" if recent_avg < prior_avg * 0.995 else ("declining" if recent_avg > prior_avg * 1.005 else "stable")
-        delta_pct = round(((recent_avg - prior_avg) / abs(prior_avg)) * 100, 1) if prior_avg != 0 else 0.0
+        delta_pct = round(((recent_avg - prior_avg) / abs(prior_avg)) * 100, 1) if abs(prior_avg) > 0.01 else 0.0
         momentum_kpis.append({"key": key, "name": _friendly_name(key), "status": status, "delta_pct": delta_pct})
     momentum_kpis.sort(key=lambda x: x["delta_pct"])
 
@@ -322,7 +322,15 @@ def compute_health_score(
     score = round(raw_score)
 
     # ── Grade and label ────────────────────────────────────────────────────────
-    if score >= 85:
+    # Check total scored KPIs first for all-grey override
+    _pre_green = len([k for k in kpi_avgs if targets.get(k) is not None and _is_on_target(kpi_avgs[k], targets[k], directions.get(k, "higher"))])
+    _pre_total_scored = len([k for k in kpi_avgs if targets.get(k) is not None])
+
+    if _pre_total_scored == 0:
+        # All grey: no KPIs could be scored — override to honest state
+        score = 0
+        grade, label, color = "N/A", "No Data", "grey"
+    elif score >= 85:
         grade, label, color = "A", "Excellent",  "green"
     elif score >= 70:
         grade, label, color = "B", "Good",       "green"
@@ -373,7 +381,12 @@ def compute_health_score(
 
     # ── Narrative detail ─────────────────────────────────────────────────────
     # Score meaning
-    if score >= 85:
+    if _pre_total_scored == 0:
+        score_meaning = (
+            "Health score cannot be computed. No KPIs have both data and target values. "
+            "Connect your data sources and set KPI targets in Settings to enable health scoring."
+        )
+    elif score >= 85:
         score_meaning = (
             f"A score of {score}/100 means the vast majority of your tracked KPIs are on or above target. "
             "Your business health is excellent — maintain current strategies and look for expansion opportunities."
@@ -446,6 +459,31 @@ def compute_health_score(
             f"accounting and CRM systems to enable meaningful analysis."
         )
 
+    # Prepend data sufficiency warning if not complete
+    if data_sufficiency != "Complete" and _pre_total_scored > 0:
+        score_meaning = (
+            f"NOTE: This score is based on {data_coverage_pct}% data coverage "
+            f"({data_sufficiency.lower()} quality). " + score_meaning
+        )
+
+    # Grey KPI explanation
+    grey_explanation = None
+    if grey_kpis:
+        no_target = [k for k in grey_kpis if kpi_avgs.get(k) is not None and targets.get(k) is None]
+        no_data = [k for k in grey_kpis if kpi_avgs.get(k) is None]
+        withheld = [k for k in grey_kpis if k in kpi_diagnostics]
+        parts = []
+        if no_target:
+            parts.append(f"{len(no_target)} lack target values ({', '.join(sorted(no_target)[:3])}{'...' if len(no_target) > 3 else ''})")
+        if no_data:
+            parts.append(f"{len(no_data)} have no data ({', '.join(sorted(no_data)[:3])}{'...' if len(no_data) > 3 else ''})")
+        if withheld:
+            parts.append(f"{len(withheld)} withheld for data quality ({', '.join(sorted(withheld)[:3])}{'...' if len(withheld) > 3 else ''})")
+        grey_explanation = (
+            f"{len(grey_kpis)} KPI{'s' if len(grey_kpis) != 1 else ''} could not be scored: "
+            + "; ".join(parts) + ". Set targets and verify data sources to include them."
+        )
+
     narrative_detail = {
         "score_meaning":        score_meaning,
         "top_drags":            top_drags,
@@ -455,6 +493,7 @@ def compute_health_score(
         "data_sufficiency_note": data_sufficiency_note,
         "data_coverage_pct":    data_coverage_pct,
         "kpis_missing_data":    grey_kpis,
+        "grey_explanation":     grey_explanation,
     }
 
     # ── Composite criticality scoring ─────────────────────────────────────────

@@ -116,8 +116,12 @@ def _mrk_monthly_history(workspace_id: str = ""):
         except Exception:
             continue
         for k, v in d.items():
-            if v is not None:
+            if k.startswith("_") or v is None:
+                continue
+            try:
                 result.setdefault(k, []).append(float(v))
+            except (ValueError, TypeError):
+                pass
     return result
 
 
@@ -159,7 +163,8 @@ def _mrk_monthly_history_dated(workspace_id: str = ""):
         except Exception:
             continue
         result[(int(r["year"]), int(r["month"]))] = {
-            k: float(v) for k, v in d.items() if v is not None
+            k: float(v) for k, v in d.items()
+            if v is not None and not k.startswith("_") and isinstance(v, (int, float))
         }
     return result
 

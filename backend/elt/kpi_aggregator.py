@@ -183,19 +183,23 @@ def _score_month_data_quality(
     table_scores = []
 
     # Check each canonical data source
-    def _check_table(name, data, required_fields):
+    def _check_table(name, data, key_field):
         if not data:
             issues.append(f"No {name} data — KPIs depending on {name} will be unavailable.")
             return 0
         tables_present.append(name)
+        val = data.get(key_field, 0)
+        if isinstance(val, (int, float)) and val <= 0:
+            issues.append(f"{name} present but {key_field} is zero — dependent KPIs may be empty or inaccurate.")
+            return 40
         return 100
 
-    table_scores.append(_check_table("revenue", rev, ["total_revenue"]))
-    table_scores.append(_check_table("expenses", exp, ["total_expenses"]))
-    table_scores.append(_check_table("customers", cust, ["new_customers"]))
-    table_scores.append(_check_table("pipeline", pipe, ["deals_count"]))
-    table_scores.append(_check_table("invoices", inv, ["invoice_count"]))
-    table_scores.append(_check_table("employees", emp, ["headcount"]))
+    table_scores.append(_check_table("revenue", rev, "total_revenue"))
+    table_scores.append(_check_table("expenses", exp, "total_expenses"))
+    table_scores.append(_check_table("customers", cust, "new_customers"))
+    table_scores.append(_check_table("pipeline", pipe, "deals_count"))
+    table_scores.append(_check_table("invoices", inv, "invoice_count"))
+    table_scores.append(_check_table("employees", emp, "headcount"))
 
     # Revenue sanity checks
     if rev:
@@ -317,7 +321,16 @@ def aggregate_canonical_to_monthly(conn, workspace_id: str) -> dict:
                 summary,
             )
             monthly_kpis[ym] = kpis
-            prev_kpis = kpis
+            # Build clean prev for next month — only numeric values + required internals.
+            # Prevents _diagnostics, _data_quality, and other metadata from leaking forward.
+            _INTERNAL_STATE_KEYS = {"_active_customers", "_total_revenue", "_total_expenses",
+                                    "_opex", "_cogs", "_customer_amounts", "_ending_ar"}
+            prev_kpis = {}
+            for _pk, _pv in kpis.items():
+                if _pk in _INTERNAL_STATE_KEYS:
+                    prev_kpis[_pk] = _pv
+                elif isinstance(_pv, (int, float)):
+                    prev_kpis[_pk] = _pv
 
         # ── Step 4: Second pass — derived KPIs that need history ──
         _compute_derived_kpis(sorted_months, monthly_kpis, summary)
@@ -375,12 +388,18 @@ def aggregate_canonical_to_monthly(conn, workspace_id: str) -> dict:
             if not kpis:
                 continue
 
-            # Merge: CSV values take precedence
+            # Merge: CSV values take precedence (only if numeric and finite)
             csv_existing = existing_csv.get(ym, {})
             merged = {**kpis}
             for k, v in csv_existing.items():
-                if v is not None:
+                if v is None or k.startswith("_"):
+                    continue
+                if isinstance(v, (int, float)) and not (isinstance(v, float) and (math.isnan(v) or math.isinf(v))):
                     merged[k] = v
+                else:
+                    _record_diagnostic(merged, k, None,
+                        f"CSV value for {k} is non-numeric ('{v}'). "
+                        f"Only numeric values accepted. Fix the source CSV.")
 
             # Clean: separate diagnostics/quality metadata from numeric KPIs
             clean = {}
@@ -480,7 +499,7 @@ def _extract_monthly_revenue(conn, workspace_id: str, summary: dict) -> dict:
 
     except Exception as exc:
         summary["errors"].append(f"Revenue extraction: {exc}")
-    return dict(out)
+    return _clean_empty_buckets(out, "total_revenue")
 
 
 def _extract_monthly_expenses(conn, workspace_id: str, summary: dict) -> dict:
@@ -523,7 +542,7 @@ def _extract_monthly_expenses(conn, workspace_id: str, summary: dict) -> dict:
 
     except Exception as exc:
         summary["errors"].append(f"Expense extraction: {exc}")
-    return dict(out)
+    return _clean_empty_buckets(out, "total_expenses")
 
 
 def _extract_monthly_customers(conn, workspace_id: str, summary: dict) -> dict:
@@ -556,7 +575,7 @@ def _extract_monthly_customers(conn, workspace_id: str, summary: dict) -> dict:
 
     except Exception as exc:
         summary["errors"].append(f"Customer extraction: {exc}")
-    return dict(out)
+    return _clean_empty_buckets(out, "new_customers")
 
 
 def _extract_monthly_pipeline(conn, workspace_id: str, summary: dict) -> dict:
@@ -607,7 +626,7 @@ def _extract_monthly_pipeline(conn, workspace_id: str, summary: dict) -> dict:
 
     except Exception as exc:
         summary["errors"].append(f"Pipeline extraction: {exc}")
-    return dict(out)
+    return _clean_empty_buckets(out, "deals_count")
 
 
 def _extract_monthly_invoices(conn, workspace_id: str, summary: dict) -> dict:
@@ -667,7 +686,7 @@ def _extract_monthly_invoices(conn, workspace_id: str, summary: dict) -> dict:
 
     except Exception as exc:
         summary["errors"].append(f"Invoice extraction: {exc}")
-    return dict(out)
+    return _clean_empty_buckets(out, "invoice_count")
 
 
 def _extract_monthly_employees(conn, workspace_id: str, summary: dict) -> dict:
@@ -701,7 +720,7 @@ def _extract_monthly_employees(conn, workspace_id: str, summary: dict) -> dict:
 
     except Exception as exc:
         summary["errors"].append(f"Employee extraction: {exc}")
-    return dict(out)
+    return _clean_empty_buckets(out, "headcount")
 
 
 # ── New extractors for expanded canonical tables ─────────────────────────────
@@ -742,7 +761,7 @@ def _extract_monthly_marketing(conn, workspace_id: str, summary: dict) -> dict:
 
     except Exception as exc:
         summary["errors"].append(f"Marketing extraction: {exc}")
-    return dict(out)
+    return _clean_empty_buckets(out, "total_spend")
 
 
 def _extract_monthly_balance_sheet(conn, workspace_id: str, summary: dict) -> dict:
@@ -810,7 +829,7 @@ def _extract_monthly_time_tracking(conn, workspace_id: str, summary: dict) -> di
 
     except Exception as exc:
         summary["errors"].append(f"Time tracking extraction: {exc}")
-    return dict(out)
+    return _clean_empty_buckets(out, "total_hours")
 
 
 def _extract_monthly_surveys(conn, workspace_id: str, summary: dict) -> dict:
@@ -847,7 +866,7 @@ def _extract_monthly_surveys(conn, workspace_id: str, summary: dict) -> dict:
 
     except Exception as exc:
         summary["errors"].append(f"Survey extraction: {exc}")
-    return dict(out)
+    return _clean_empty_buckets(out, "nps_scores")
 
 
 def _extract_monthly_support(conn, workspace_id: str, summary: dict) -> dict:
@@ -882,7 +901,7 @@ def _extract_monthly_support(conn, workspace_id: str, summary: dict) -> dict:
 
     except Exception as exc:
         summary["errors"].append(f"Support extraction: {exc}")
-    return dict(out)
+    return _clean_empty_buckets(out, "ticket_count")
 
 
 def _extract_monthly_product_usage(conn, workspace_id: str, summary: dict) -> dict:
@@ -932,7 +951,7 @@ def _extract_monthly_product_usage(conn, workspace_id: str, summary: dict) -> di
 
     except Exception as exc:
         summary["errors"].append(f"Product usage extraction: {exc}")
-    return dict(out)
+    return _clean_empty_buckets(out, "active_users")
 
 
 # ── KPI computation ──────────────────────────────────────────────────────────
@@ -1080,18 +1099,27 @@ def _compute_month_kpis(
         if new_cust > 0:
             cac = sm_exp / new_cust
             arpu = total_rev / max(len(rev.get("customer_ids", set())), 1)
-            gm_pct = kpis.get("gross_margin", 60) / 100
-            if arpu * gm_pct > 0:
-                payback = _safe_ratio(cac, arpu * gm_pct, min_denom=0.01)
-                _safe_set(kpis, "cac_payback", payback, arpu=arpu, gm_pct=gm_pct*100)
-                _safe_set(kpis, "payback_period", payback, arpu=arpu, gm_pct=gm_pct*100)
-            if kpis.get("churn_rate", 0) > 0.05:
-                ltv = _safe_ratio(arpu * gm_pct, kpis["churn_rate"] / 100,
-                                  min_denom=0.0005)
-                if ltv is not None:
-                    _safe_set(kpis, "customer_ltv", ltv, churn_rate=kpis.get("churn_rate", 0))
-                    ltv_cac_val = _safe_ratio(ltv, cac, min_denom=1)
-                    _safe_set(kpis, "ltv_cac", ltv_cac_val, churn_rate=kpis.get("churn_rate", 0), cac=cac)
+            gm_pct_raw = kpis.get("gross_margin")
+            if gm_pct_raw is not None:
+                gm_pct = gm_pct_raw / 100
+                if arpu * gm_pct > 0:
+                    payback = _safe_ratio(cac, arpu * gm_pct, min_denom=0.01)
+                    _safe_set(kpis, "cac_payback", payback, arpu=arpu, gm_pct=gm_pct_raw)
+                    _safe_set(kpis, "payback_period", payback, arpu=arpu, gm_pct=gm_pct_raw)
+                if kpis.get("churn_rate", 0) > 0.05:
+                    ltv = _safe_ratio(arpu * gm_pct, kpis["churn_rate"] / 100,
+                                      min_denom=0.0005)
+                    if ltv is not None:
+                        _safe_set(kpis, "customer_ltv", ltv, churn_rate=kpis.get("churn_rate", 0))
+                        ltv_cac_val = _safe_ratio(ltv, cac, min_denom=1)
+                        _safe_set(kpis, "ltv_cac", ltv_cac_val, churn_rate=kpis.get("churn_rate", 0), cac=cac)
+            else:
+                _record_diagnostic(kpis, "cac_payback", None,
+                    "Cannot compute — gross margin is not available. "
+                    "Ensure expenses include COGS-categorised entries (hosting, infrastructure, direct cost).")
+                _record_diagnostic(kpis, "customer_ltv", None,
+                    "Cannot compute — gross margin is required but not available. "
+                    "Tag COGS expenses in your accounting system to enable margin calculation.")
 
     # ── Pipeline metrics ─────────────────────────────────────────────────
     if deals_count > 0:
@@ -1352,6 +1380,15 @@ def _load_existing_csv_kpis(conn, workspace_id: str) -> dict:
 
 
 # ── Safe utility helpers ──────────────────────────────────────────────────────
+
+def _clean_empty_buckets(out: dict, key_field: str, min_value=0) -> dict:
+    """Remove defaultdict-created empty buckets where the key metric has no real data.
+    Prevents months with zero activity from appearing as processed."""
+    return {ym: b for ym, b in out.items()
+            if (isinstance(b.get(key_field), (int, float)) and b.get(key_field, 0) > min_value)
+            or (isinstance(b.get(key_field), set) and len(b.get(key_field, set())) > 0)
+            or (isinstance(b.get(key_field), list) and len(b.get(key_field, [])) > 0)}
+
 
 def _safe_query(conn, sql: str, params: list) -> list:
     """Execute a query, returning empty list if the table doesn't exist yet."""

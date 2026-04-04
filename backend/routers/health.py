@@ -170,8 +170,9 @@ def get_home(
         d = json.loads(row["data_json"])
         period = f"{row['year']}-{row['month']:02d}"
         for k, v in d.items():
-            if v is not None and k not in ("year", "month"):
-                kpi_monthly.setdefault(k, []).append({"period": period, "value": v})
+            if k.startswith("_") or k in ("year", "month") or v is None:
+                continue
+            kpi_monthly.setdefault(k, []).append({"period": period, "value": v})
 
     def _kpi_spotlight(key: str) -> dict:
         t  = targets_map.get(key, {})
@@ -486,8 +487,9 @@ def get_kpi_detail(kpi_key: str, request: Request):
         d = json.loads(row["data_json"])
         period = f"{row['year']}-{row['month']:02d}"
         for k, v in d.items():
-            if v is not None and k not in ("year", "month"):
-                kpi_monthly_all.setdefault(k, []).append({"period": period, "value": v})
+            if k.startswith("_") or k in ("year", "month") or v is None:
+                continue
+            kpi_monthly_all.setdefault(k, []).append({"period": period, "value": v})
 
     correlations = compute_kpi_correlations(kpi_monthly_all, kpi_key)
 

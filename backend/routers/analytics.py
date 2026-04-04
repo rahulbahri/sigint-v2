@@ -65,7 +65,7 @@ def fingerprint(request: Request, year: Optional[int] = None):
         mo_key = f"{row['year']}-{row['month']:02d}"
         data   = json.loads(row["data_json"])
         for kpi_key, val in data.items():
-            if kpi_key in ("year", "month"):
+            if kpi_key in ("year", "month") or kpi_key.startswith("_"):
                 continue
             kpi_monthly.setdefault(kpi_key, {})[mo_key] = val
 
@@ -130,8 +130,9 @@ def summary(request: Request, year: Optional[int] = None):
     all_kpis: dict = {}
     for row in monthly_rows:
         for k, v in json.loads(row["data_json"]).items():
-            if k not in ("year", "month"):
-                all_kpis.setdefault(k, []).append(v)
+            if k.startswith("_") or k in ("year", "month"):
+                continue
+            all_kpis.setdefault(k, []).append(v)
 
     status_counts = {"green": 0, "yellow": 0, "red": 0, "grey": 0}
     for key, vals in all_kpis.items():
@@ -208,8 +209,9 @@ async def query_kpi(request: Request, payload: dict):
     for row in rows:
         mo_key = f"{row['year']}-{row['month']:02d}"
         for kpi_key, val in json.loads(row["data_json"]).items():
-            if kpi_key not in ("year", "month"):
-                kpi_monthly.setdefault(kpi_key, {})[mo_key] = val
+            if kpi_key.startswith("_") or kpi_key in ("year", "month"):
+                continue
+            kpi_monthly.setdefault(kpi_key, {})[mo_key] = val
 
     def _status(val, target, direction):
         if val is None or target is None:
@@ -359,7 +361,7 @@ def _compute_fingerprint_data(targets_override=None, workspace_id: str = ""):
         mo_key = f"{row['year']}-{row['month']:02d}"
         data = json.loads(row["data_json"])
         for kpi_key, val in data.items():
-            if kpi_key in ("year", "month"):
+            if kpi_key in ("year", "month") or kpi_key.startswith("_"):
                 continue
             kpi_monthly.setdefault(kpi_key, {})[mo_key] = val
 
@@ -942,8 +944,12 @@ def weekly_briefing(request: Request, stage: Optional[str] = "series_b"):
     kpi_vals: dict = {}
     for row in rows:
         for k, v in json.loads(row["data_json"]).items():
-            if v is not None:
+            if k.startswith("_") or v is None:
+                continue
+            try:
                 kpi_vals.setdefault(k, []).append(float(v))
+            except (ValueError, TypeError):
+                pass
     kpi_avgs = {k: round(sum(v)/len(v), 2) for k, v in kpi_vals.items() if v}
 
     # Classify KPIs
@@ -1234,6 +1240,8 @@ def export_kpi_audit(request: Request):
         except (json.JSONDecodeError, TypeError):
             continue
         for kpi_key, value in data.items():
+            if kpi_key.startswith("_"):
+                continue
             if value is not None:
                 monthly.setdefault(kpi_key, []).append((year, month, value))
 
