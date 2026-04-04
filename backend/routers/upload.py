@@ -1604,3 +1604,111 @@ def seed_multiyear(request: Request):
         ]
     }
 
+
+# ── Full Canonical Reseed (runs against whatever DB the server is connected to) ──
+
+@router.get("/api/reseed-canonical", tags=["System"])
+def reseed_canonical(request: Request):
+    """
+    Wipe all existing data and reseed all 12 canonical tables + monthly_data
+    + projections + targets + company settings.
+
+    Uses the authenticated user's workspace_id so it works on both local
+    SQLite AND production PostgreSQL.
+    """
+    workspace_id = _get_workspace(request)
+    if not workspace_id:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+
+    import sys, os
+    sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+    from scripts.seed_demo_data import (
+        _ensure_canonical_tables, _mrr_trajectory,
+        seed_revenue, seed_customers, seed_expenses, seed_pipeline,
+        seed_invoices, seed_employees, seed_marketing, seed_balance_sheet,
+        seed_time_tracking, seed_surveys, seed_support, seed_product_usage,
+        seed_targets, seed_company_settings, seed_projections,
+    )
+    from scripts import seed_demo_data
+    from elt.kpi_aggregator import aggregate_canonical_to_monthly
+
+    # Override the workspace in the seed module
+    seed_demo_data.WORKSPACE = workspace_id
+
+    conn = get_db()
+    try:
+        # Ensure tables exist
+        _ensure_canonical_tables(conn)
+
+        # Wipe everything for this workspace
+        for table in ["monthly_data", "projection_monthly_data", "kpi_targets",
+                      "company_settings",
+                      "canonical_revenue", "canonical_expenses", "canonical_customers",
+                      "canonical_pipeline", "canonical_invoices", "canonical_employees",
+                      "canonical_marketing", "canonical_balance_sheet",
+                      "canonical_time_tracking", "canonical_surveys",
+                      "canonical_support", "canonical_product_usage"]:
+            try:
+                conn.execute(f"DELETE FROM {table} WHERE workspace_id=?", [workspace_id])
+            except Exception:
+                pass
+        conn.commit()
+
+        # Generate MRR trajectory and seed all tables
+        import random as _r
+        _r.seed(42)
+        mrr = _mrr_trajectory()
+
+        seed_revenue(conn, mrr); conn.commit()
+        seed_customers(conn, mrr); conn.commit()
+        seed_expenses(conn, mrr); conn.commit()
+        seed_pipeline(conn, mrr); conn.commit()
+        seed_invoices(conn, mrr); conn.commit()
+        seed_employees(conn, mrr); conn.commit()
+        seed_marketing(conn, mrr); conn.commit()
+        seed_balance_sheet(conn, mrr); conn.commit()
+        seed_time_tracking(conn, mrr); conn.commit()
+        seed_surveys(conn, mrr); conn.commit()
+        seed_support(conn, mrr); conn.commit()
+        seed_product_usage(conn, mrr); conn.commit()
+
+        # Run KPI aggregator
+        agg_result = aggregate_canonical_to_monthly(conn, workspace_id)
+
+        # Seed targets, settings, projections
+        seed_targets(conn); conn.commit()
+        seed_company_settings(conn); conn.commit()
+        seed_projections(conn, mrr); conn.commit()
+
+        # Count results
+        counts = {}
+        for table in ["monthly_data", "kpi_targets", "canonical_revenue",
+                      "canonical_expenses", "canonical_customers"]:
+            try:
+                n = conn.execute(f"SELECT COUNT(*) FROM {table} WHERE workspace_id=?",
+                                 [workspace_id]).fetchone()[0]
+                counts[table] = n
+            except Exception:
+                counts[table] = -1
+
+        _audit(workspace_id, "reseed_canonical", f"Reseeded {agg_result['months_written']} months, "
+               f"{len(agg_result['kpis_computed'])} KPIs", workspace_id=workspace_id)
+
+        return {
+            "status": "ok",
+            "workspace_id": workspace_id,
+            "months_written": agg_result["months_written"],
+            "kpis_computed": len(agg_result["kpis_computed"]),
+            "errors": agg_result.get("errors", []),
+            "table_counts": counts,
+        }
+
+    except Exception as exc:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        raise HTTPException(status_code=500, detail=str(exc))
+    finally:
+        conn.close()
+
