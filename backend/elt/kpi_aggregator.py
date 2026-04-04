@@ -58,24 +58,200 @@ CONNECTOR_UPLOAD_SENTINEL = -999
 # ── KPI Reasonableness Bounds ────────────────────────────────────────────────
 # When a computed value falls outside these bounds, the value is WITHHELD and
 # a diagnostic is recorded explaining why and what needs fixing.
-# Format: kpi_key -> (min, max, diagnostic_message)
-# None means no bound in that direction.
-KPI_BOUNDS: dict[str, tuple[Optional[float], Optional[float], str]] = {
-    "customer_ltv":        (0, 5_000_000, "LTV exceeds $5M — likely caused by near-zero churn rate ({churn_rate:.2f}%). Verify churn data: ensure churned customers are not appearing in revenue transactions."),
-    "ltv_cac":             (0, 80,        "LTV:CAC ratio exceeds 80x — unrealistic. Check that churn_rate ({churn_rate:.2f}%) and CAC (${cac:.0f}) inputs are accurate. Near-zero churn inflates LTV."),
-    "burn_multiple":       (-50, 50,      "Burn multiple of {value:.1f}x is extreme — likely caused by near-zero net new ARR (${net_new_arr:,.0f}). Verify that ARR is changing meaningfully month-over-month."),
-    "cac_payback":         (0, 120,       "CAC payback of {value:.0f} months exceeds 10 years — likely caused by very low ARPU (${arpu:.0f}) or near-zero gross margin ({gm_pct:.0f}%). Verify revenue per customer and margin inputs."),
-    "payback_period":      (0, 120,       "Payback period of {value:.0f} months exceeds 10 years — same root cause as CAC payback. Check ARPU and gross margin data."),
-    "sales_efficiency":    (0, 50,        "Sales efficiency of {value:.1f}x is extreme — likely caused by very low S&M spend (${sm_exp:,.0f}) relative to ARR. Verify that all sales and marketing expenses are categorised."),
-    "operating_leverage":  (-10, 10,      "Operating leverage of {value:.1f}x is extreme — caused by near-zero change in OpEx ({opex_chg:.1f}%). This metric requires meaningful MoM expense variation to be useful."),
-    "cash_runway":         (0, 240,       "Cash runway of {value:.0f} months exceeds 20 years — the company appears cash-flow positive. This metric is most meaningful when the company is burning cash."),
-    "growth_efficiency":   (-200, 200,    "Growth efficiency of {value:.1f}x is extreme — caused by a very small burn multiple ({bm:.2f}x). Verify that expense data is complete."),
-    "rev_per_employee":    (0, 2_000_000, "Revenue per employee of ${value:,.0f} exceeds $2M — verify headcount data is complete. Missing employees in canonical_employees will inflate this metric."),
-    "headcount_eff":       (0, 500_000,   "Headcount efficiency of ${value:,.0f}/mo exceeds $500K — same root cause as revenue per employee. Verify canonical_employees has all active staff."),
-    "ar_turnover":         (0, 365,       "AR turnover of {value:.0f}x exceeds 365 — DSO is below 1 day which is unusual. Verify invoice issue_date and due_date fields are populated correctly."),
-    "activation_rate":     (0, 100,       "Activation rate of {value:.0f}% exceeds 100% — likely caused by counting multiple feature activations per user. Ensure canonical_product_usage has one activation record per user, not per feature."),
-    "pipeline_velocity":   (0, 50_000,    "Pipeline velocity of ${value:,.0f}/day is extreme — check that deal amounts and pipeline duration data are realistic."),
+#
+# UNIVERSAL COVERAGE: every KPI has bounds derived from its unit type.
+# Specific KPIs have custom messages; all others get a generic diagnostic.
+# Format: kpi_key -> (min, max, diagnostic_message_template)
+
+# --- Unit-based default bounds (catches every KPI, even new ones) ---
+_UNIT_BOUNDS = {
+    "pct":    (-100, 500,    "{key} of {value:.1f}% is outside the reasonable range for a percentage metric. Verify that the numerator and denominator are in the same units."),
+    "ratio":  (-100, 500,    "{key} ratio of {value:.2f} is extreme. This usually indicates a near-zero denominator. Check that both inputs have sufficient magnitude."),
+    "usd":    (-1e9, 1e9,    "{key} of ${value:,.0f} exceeds $1B — verify that currency amounts are in the correct unit (dollars vs cents) and that no data duplication exists."),
+    "days":   (-365, 730,    "{key} of {value:.0f} days is outside the reasonable range. Verify that date fields (issue_date, due_date, created_at) are populated correctly."),
+    "months": (-12, 240,     "{key} of {value:.0f} months is outside the reasonable range. Verify that the underlying rate or duration inputs are correct."),
+    "score":  (-100, 100,    "{key} score of {value:.1f} is outside the expected range. Verify that survey or scoring data is using the correct scale."),
+    "count":  (0, 1e7,       "{key} of {value:,.0f} exceeds 10M — verify that there is no data duplication in the source."),
 }
+
+# --- KPI-specific overrides with actionable diagnostic messages ---
+_KPI_SPECIFIC_BOUNDS: dict[str, tuple[Optional[float], Optional[float], str]] = {
+    "customer_ltv":        (0, 5_000_000,  "LTV of ${value:,.0f} exceeds $5M — likely caused by near-zero churn rate. Verify churn data: ensure churned customers are not appearing in revenue."),
+    "ltv_cac":             (0, 80,         "LTV:CAC of {value:.1f}x exceeds 80 — near-zero churn inflates LTV. Verify churn and CAC inputs."),
+    "burn_multiple":       (-50, 50,       "Burn multiple of {value:.1f}x is extreme — near-zero net new ARR as denominator. Verify ARR is changing meaningfully MoM."),
+    "cac_payback":         (0, 120,        "CAC payback of {value:.0f} months exceeds 10 years — very low ARPU or near-zero gross margin. Verify revenue per customer."),
+    "payback_period":      (0, 120,        "Payback period of {value:.0f} months exceeds 10 years — same root cause as CAC payback."),
+    "sales_efficiency":    (0, 50,         "Sales efficiency of {value:.1f}x is extreme — very low S&M spend relative to ARR. Verify expense categorisation."),
+    "operating_leverage":  (-10, 10,       "Operating leverage of {value:.1f}x — near-zero OpEx change as denominator. Requires meaningful MoM expense variation."),
+    "cash_runway":         (0, 240,        "Cash runway of {value:.0f} months exceeds 20 years — verify burn rate calculation."),
+    "growth_efficiency":   (-200, 200,     "Growth efficiency of {value:.1f}x — very small burn multiple as denominator. Verify expense data completeness."),
+    "rev_per_employee":    (0, 2_000_000,  "Rev/employee of ${value:,.0f} exceeds $2M — verify headcount data is complete in canonical_employees."),
+    "headcount_eff":       (0, 500_000,    "Headcount efficiency of ${value:,.0f}/mo — verify canonical_employees has all active staff."),
+    "ar_turnover":         (0, 365,        "AR turnover of {value:.0f}x — DSO below 1 day is unusual. Verify invoice issue_date and due_date fields."),
+    "activation_rate":     (0, 100,        "Activation rate of {value:.0f}% exceeds 100% — multiple activations per user counted. Use one record per user."),
+    "pipeline_velocity":   (0, 50_000,     "Pipeline velocity of ${value:,.0f}/day — verify deal amounts and duration data."),
+    "feature_adoption":    (0, 100,        "Feature adoption of {value:.0f}% exceeds 100% — more features used than defined. Verify _TOTAL_FEATURES constant."),
+    "billable_utilization":(0, 100,        "Billable utilization of {value:.0f}% exceeds 100% — billable hours exceed total hours. Verify time tracking data."),
+    "logo_retention":      (0, 100,        "Logo retention of {value:.0f}% — verify customer churn data. Value should be 0-100%."),
+    "recurring_revenue":   (0, 100,        "Recurring revenue ratio of {value:.0f}% exceeds 100% — recurring revenue exceeds total. Check subscription_type tagging."),
+    "revenue_quality":     (0, 100,        "Revenue quality of {value:.0f}% exceeds 100% — same root cause as recurring_revenue. Check subscription_type."),
+    "gross_margin":        (-100, 100,     "Gross margin of {value:.1f}% is outside -100 to 100%. Verify that COGS is not double-counted or in wrong units."),
+    "operating_margin":    (-200, 100,     "Operating margin of {value:.1f}% is extreme. Verify expense categorisation — COGS and OpEx should not overlap."),
+    "ebitda_margin":       (-200, 100,     "EBITDA margin of {value:.1f}% is extreme. Verify that expense data is complete and correctly categorised."),
+    "customer_concentration": (0, 100,     "Customer concentration of {value:.1f}% — verify customer_id is correctly linked in revenue transactions."),
+}
+
+# --- KPI unit map (for universal fallback bounds) ---
+from core.kpi_defs import KPI_DEFS, EXTENDED_ONTOLOGY_METRICS as _EXT
+_KPI_UNITS = {}
+for _d in KPI_DEFS + _EXT:
+    _KPI_UNITS[_d["key"]] = _d.get("unit", "ratio")
+# Aggregator-computed KPIs that aren't in KPI_DEFS but need correct unit types
+_KPI_UNITS["mrr"] = "usd"
+_KPI_UNITS["arr"] = "usd"
+_KPI_UNITS["cash_burn"] = "usd"
+
+
+def _get_bounds(key: str) -> Optional[tuple[float, float, str]]:
+    """Return (min, max, message_template) for any KPI key.
+    Checks specific overrides first, then falls back to unit-based defaults."""
+    if key in _KPI_SPECIFIC_BOUNDS:
+        return _KPI_SPECIFIC_BOUNDS[key]
+    unit = _KPI_UNITS.get(key, "ratio")
+    if unit in _UNIT_BOUNDS:
+        return _UNIT_BOUNDS[unit]
+    # Absolute fallback: any value between -1B and +1B
+    return (-1e9, 1e9, "{key} of {value} is outside the absolute bounds. Review computation inputs.")
+
+
+# ── Cross-KPI consistency rules ──────────────────────────────────────────────
+# Each rule: (condition_fn, diagnostic_message)
+# condition_fn takes the kpis dict and returns True if inconsistent.
+
+def _check_cross_kpi_consistency(kpis: dict) -> list[dict]:
+    """Detect contradictory KPI relationships. Returns list of diagnostics."""
+    issues = []
+
+    def _chk(condition: bool, msg: str):
+        if condition:
+            issues.append({"type": "consistency", "message": msg})
+
+    gm = kpis.get("gross_margin")
+    om = kpis.get("operating_margin")
+    em = kpis.get("ebitda_margin")
+    rq = kpis.get("revenue_quality")
+    rr = kpis.get("recurring_revenue")
+
+    if gm is not None and om is not None and om > gm + 1:
+        _chk(True, f"Operating margin ({om:.1f}%) exceeds gross margin ({gm:.1f}%) — this is mathematically impossible since OpEx is always >= 0. Check expense categorisation: COGS may be understated or OpEx may include negative adjustments.")
+
+    if gm is not None and em is not None and em > gm * 1.5 + 5:
+        _chk(True, f"EBITDA margin ({em:.1f}%) is disproportionately higher than gross margin ({gm:.1f}%) — verify the EBITDA approximation factor and D&A assumptions.")
+
+    if rq is not None and rr is not None and abs(rq - rr) > 1:
+        _chk(True, f"Revenue quality ({rq:.1f}%) and recurring revenue ({rr:.1f}%) should be identical but differ — this indicates a computation inconsistency.")
+
+    cr = kpis.get("churn_rate")
+    lr = kpis.get("logo_retention")
+    if cr is not None and lr is not None and abs((100 - cr) - lr) > 1:
+        _chk(True, f"Churn rate ({cr:.1f}%) and logo retention ({lr:.1f}%) are inconsistent — (100 - churn) should equal retention.")
+
+    dso = kpis.get("dso")
+    acp = kpis.get("avg_collection_period")
+    if dso is not None and acp is not None and abs(dso - acp) > 1:
+        _chk(True, f"DSO ({dso:.0f} days) and Avg Collection Period ({acp:.0f} days) should be identical but differ.")
+
+    return issues
+
+
+# ── Data Quality Scoring ─────────────────────────────────────────────────────
+
+def _score_month_data_quality(
+    rev: dict, exp: dict, cust: dict, pipe: dict,
+    inv: dict, emp: dict, computed_kpis: dict,
+) -> dict:
+    """Score the data quality and completeness for a single month.
+
+    Returns:
+      quality_score: 0-100 (100 = complete, reliable data)
+      quality_label: "high" / "moderate" / "low" / "insufficient"
+      issues: list of specific data quality concerns
+      tables_present: which canonical tables had data
+    """
+    issues = []
+    tables_present = []
+    table_scores = []
+
+    # Check each canonical data source
+    def _check_table(name, data, required_fields):
+        if not data:
+            issues.append(f"No {name} data — KPIs depending on {name} will be unavailable.")
+            return 0
+        tables_present.append(name)
+        return 100
+
+    table_scores.append(_check_table("revenue", rev, ["total_revenue"]))
+    table_scores.append(_check_table("expenses", exp, ["total_expenses"]))
+    table_scores.append(_check_table("customers", cust, ["new_customers"]))
+    table_scores.append(_check_table("pipeline", pipe, ["deals_count"]))
+    table_scores.append(_check_table("invoices", inv, ["invoice_count"]))
+    table_scores.append(_check_table("employees", emp, ["headcount"]))
+
+    # Revenue sanity checks
+    if rev:
+        if rev.get("total_revenue", 0) <= 0:
+            issues.append("Total revenue is zero or negative — all margin and growth KPIs will be unavailable.")
+            table_scores[0] = 20
+        if not rev.get("customer_ids"):
+            issues.append("No customer_id linked to revenue transactions — churn, concentration, and per-customer KPIs will be unavailable.")
+            table_scores[0] = max(table_scores[0] - 30, 10)
+
+    # Expense categorisation check
+    if exp:
+        total = exp.get("total_expenses", 0)
+        cogs = exp.get("cogs", 0)
+        sm = exp.get("sm_expenses", 0)
+        if total > 0 and (cogs + sm) / total < 0.1:
+            issues.append("Less than 10% of expenses are categorised as COGS or S&M — margin and efficiency KPIs may be inaccurate. Tag expenses with categories like 'cogs', 'hosting', 'marketing', 'sales'.")
+            table_scores[1] = 50
+
+    # Headcount check
+    if emp:
+        hc = emp.get("headcount", 0)
+        if hc < 3:
+            issues.append(f"Headcount of {hc} is very low — rev_per_employee and headcount_eff will appear inflated. Ensure all active employees are in canonical_employees.")
+
+    # Compute quality score
+    n_kpis = len([k for k in computed_kpis if not k.startswith("_")])
+    n_diags = len(computed_kpis.get("_diagnostics", {}))
+
+    # Weighted: 60% table coverage, 20% KPI yield, 20% no diagnostics
+    table_avg = sum(table_scores) / max(len(table_scores), 1)
+    kpi_yield = min(n_kpis / 40 * 100, 100)  # 40 KPIs = 100%
+    diag_penalty = max(0, 100 - n_diags * 15)
+
+    quality_score = round(table_avg * 0.6 + kpi_yield * 0.2 + diag_penalty * 0.2)
+    quality_score = max(0, min(100, quality_score))
+
+    if quality_score >= 80:
+        quality_label = "high"
+    elif quality_score >= 50:
+        quality_label = "moderate"
+    elif quality_score >= 25:
+        quality_label = "low"
+    else:
+        quality_label = "insufficient"
+
+    return {
+        "quality_score": quality_score,
+        "quality_label": quality_label,
+        "tables_present": tables_present,
+        "tables_missing": [t for t in ["revenue", "expenses", "customers", "pipeline", "invoices", "employees"]
+                           if t not in tables_present],
+        "issues": issues,
+        "kpis_computed": n_kpis,
+        "kpis_withheld": n_diags,
+    }
 
 
 # ── Public API ────────────────────────────────────────────────────────────────
@@ -146,6 +322,42 @@ def aggregate_canonical_to_monthly(conn, workspace_id: str) -> dict:
         # ── Step 4: Second pass — derived KPIs that need history ──
         _compute_derived_kpis(sorted_months, monthly_kpis, summary)
 
+        # ── Step 4b: Cross-KPI consistency checks ──
+        for ym in sorted_months:
+            kpis = monthly_kpis[ym]
+            consistency_issues = _check_cross_kpi_consistency(kpis)
+            if consistency_issues:
+                diags = kpis.setdefault("_diagnostics", {})
+                diags["_consistency"] = consistency_issues
+
+        # ── Step 4c: Data quality scoring per month ──
+        for ym in sorted_months:
+            quality = _score_month_data_quality(
+                revenue_by_month.get(ym, {}),
+                expense_by_month.get(ym, {}),
+                customer_by_month.get(ym, {}),
+                pipeline_by_month.get(ym, {}),
+                invoice_by_month.get(ym, {}),
+                employee_by_month.get(ym, {}),
+                monthly_kpis[ym],
+            )
+            monthly_kpis[ym]["_data_quality"] = quality
+
+            # Circuit breaker: if quality is insufficient, flag entire month
+            if quality["quality_label"] == "insufficient":
+                diags = monthly_kpis[ym].setdefault("_diagnostics", {})
+                diags["_circuit_breaker"] = {
+                    "withheld": True,
+                    "reason": (
+                        f"Data quality score of {quality['quality_score']}/100 is below "
+                        f"the minimum threshold. Missing tables: {', '.join(quality['tables_missing'])}. "
+                        f"KPIs for this month should not be relied upon for decision-making. "
+                        f"Connect additional data sources to improve reliability."
+                    ),
+                    "quality_score": quality["quality_score"],
+                    "issues": quality["issues"],
+                }
+
         # ── Step 5: Load existing CSV-uploaded data (to merge, not overwrite) ──
         existing_csv = _load_existing_csv_kpis(conn, workspace_id)
 
@@ -170,17 +382,20 @@ def aggregate_canonical_to_monthly(conn, workspace_id: str) -> dict:
                 if v is not None:
                     merged[k] = v
 
-            # Clean: remove None/NaN/internal values before JSON serialization
-            # Preserve _diagnostics dict for downstream consumption
+            # Clean: separate diagnostics/quality metadata from numeric KPIs
             clean = {}
             diagnostics = merged.pop("_diagnostics", {})
+            data_quality = merged.pop("_data_quality", {})
             for k, v in merged.items():
                 if k.startswith("_"):
-                    continue  # Skip internal keys
+                    continue
                 if v is not None and not (isinstance(v, float) and (math.isnan(v) or math.isinf(v))):
                     clean[k] = round(v, 4) if isinstance(v, float) else v
+            # Attach metadata
             if diagnostics:
                 clean["_diagnostics"] = diagnostics
+            if data_quality:
+                clean["_data_quality"] = data_quality
 
             if not clean:
                 continue
@@ -1160,14 +1375,14 @@ def _safe_float(val) -> Optional[float]:
 
 
 def _safe_set(target: dict, key: str, value, **context) -> None:
-    """Set a KPI value only if it is a valid, finite, reasonable number.
+    """Set a KPI value only if it is a valid, finite, and reasonable number.
 
-    If the value is outside the bounds defined in KPI_BOUNDS for this key,
-    the value is WITHHELD (not stored) and a diagnostic explanation is
-    recorded in target["_diagnostics"] describing why and what to fix.
+    Every KPI is validated against bounds — either a KPI-specific bound with
+    a tailored diagnostic, or a universal bound derived from the KPI's unit
+    type (pct, ratio, usd, days, months, score).  No KPI escapes validation.
 
-    Extra **context kwargs (e.g., churn_rate=0.01, cac=500) are used to
-    populate the diagnostic message template with actual values.
+    If the value is outside bounds, it is WITHHELD and a diagnostic is
+    recorded explaining exactly why and what input data to fix.
     """
     if value is None:
         return
@@ -1175,21 +1390,22 @@ def _safe_set(target: dict, key: str, value, **context) -> None:
         f = float(value)
         if not math.isfinite(f):
             _record_diagnostic(target, key, value,
-                               f"{key} computed as {'NaN' if math.isnan(value) else 'Infinity'} "
+                               f"{key} computed as {'NaN' if math.isnan(f) else 'Infinity'} "
                                f"— one or more input values are missing or zero. "
-                               f"Check upstream data sources.")
+                               f"Check upstream data sources for this metric.")
             return
 
-        # Check reasonableness bounds
-        bounds = KPI_BOUNDS.get(key)
+        # Universal bounds check — every KPI, no exceptions
+        bounds = _get_bounds(key)
         if bounds:
             lo, hi, msg_template = bounds
             if (lo is not None and f < lo) or (hi is not None and f > hi):
                 try:
-                    msg = msg_template.format(value=f, **context)
+                    msg = msg_template.format(key=key, value=f, **context)
                 except (KeyError, ValueError, TypeError):
-                    msg = (f"{key} computed as {f:.4f} which is outside the "
-                           f"reasonable range [{lo}, {hi}]. Review input data.")
+                    msg = (f"{key} computed as {f:,.4f} which is outside the "
+                           f"reasonable range [{lo}, {hi}]. Review input data for "
+                           f"this metric and its upstream dependencies.")
                 _record_diagnostic(target, key, f, msg)
                 return
 
