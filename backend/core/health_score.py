@@ -235,9 +235,17 @@ def compute_health_score(
     # Filter NaN/Inf to prevent downstream computation failures
     import math as _math
     time_series: dict = {}
+    kpi_diagnostics: dict = {}  # Collect diagnostic messages from aggregator
+
     for row in rows:
         d = json.loads(row["data_json"])
+        # Extract diagnostics if present (recorded by kpi_aggregator)
+        if "_diagnostics" in d and isinstance(d["_diagnostics"], dict):
+            for kpi_key, diag in d["_diagnostics"].items():
+                kpi_diagnostics[kpi_key] = diag  # Latest month's diagnostic wins
         for k, v in d.items():
+            if k.startswith("_"):
+                continue  # Skip internal keys
             if v is not None and k not in ("year", "month"):
                 try:
                     fv = float(v)
@@ -505,4 +513,5 @@ def compute_health_score(
         "narrative_detail":   narrative_detail,
         "composite_ranked":   composite_ranked,
         "domain_groups":      domain_groups,
+        "kpi_diagnostics":    kpi_diagnostics,
     }

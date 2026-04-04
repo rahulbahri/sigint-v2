@@ -55,6 +55,28 @@ logger = logging.getLogger(__name__)
 # ── Sentinel value ────────────────────────────────────────────────────────────
 CONNECTOR_UPLOAD_SENTINEL = -999
 
+# ── KPI Reasonableness Bounds ────────────────────────────────────────────────
+# When a computed value falls outside these bounds, the value is WITHHELD and
+# a diagnostic is recorded explaining why and what needs fixing.
+# Format: kpi_key -> (min, max, diagnostic_message)
+# None means no bound in that direction.
+KPI_BOUNDS: dict[str, tuple[Optional[float], Optional[float], str]] = {
+    "customer_ltv":        (0, 5_000_000, "LTV exceeds $5M — likely caused by near-zero churn rate ({churn_rate:.2f}%). Verify churn data: ensure churned customers are not appearing in revenue transactions."),
+    "ltv_cac":             (0, 80,        "LTV:CAC ratio exceeds 80x — unrealistic. Check that churn_rate ({churn_rate:.2f}%) and CAC (${cac:.0f}) inputs are accurate. Near-zero churn inflates LTV."),
+    "burn_multiple":       (-50, 50,      "Burn multiple of {value:.1f}x is extreme — likely caused by near-zero net new ARR (${net_new_arr:,.0f}). Verify that ARR is changing meaningfully month-over-month."),
+    "cac_payback":         (0, 120,       "CAC payback of {value:.0f} months exceeds 10 years — likely caused by very low ARPU (${arpu:.0f}) or near-zero gross margin ({gm_pct:.0f}%). Verify revenue per customer and margin inputs."),
+    "payback_period":      (0, 120,       "Payback period of {value:.0f} months exceeds 10 years — same root cause as CAC payback. Check ARPU and gross margin data."),
+    "sales_efficiency":    (0, 50,        "Sales efficiency of {value:.1f}x is extreme — likely caused by very low S&M spend (${sm_exp:,.0f}) relative to ARR. Verify that all sales and marketing expenses are categorised."),
+    "operating_leverage":  (-10, 10,      "Operating leverage of {value:.1f}x is extreme — caused by near-zero change in OpEx ({opex_chg:.1f}%). This metric requires meaningful MoM expense variation to be useful."),
+    "cash_runway":         (0, 240,       "Cash runway of {value:.0f} months exceeds 20 years — the company appears cash-flow positive. This metric is most meaningful when the company is burning cash."),
+    "growth_efficiency":   (-200, 200,    "Growth efficiency of {value:.1f}x is extreme — caused by a very small burn multiple ({bm:.2f}x). Verify that expense data is complete."),
+    "rev_per_employee":    (0, 2_000_000, "Revenue per employee of ${value:,.0f} exceeds $2M — verify headcount data is complete. Missing employees in canonical_employees will inflate this metric."),
+    "headcount_eff":       (0, 500_000,   "Headcount efficiency of ${value:,.0f}/mo exceeds $500K — same root cause as revenue per employee. Verify canonical_employees has all active staff."),
+    "ar_turnover":         (0, 365,       "AR turnover of {value:.0f}x exceeds 365 — DSO is below 1 day which is unusual. Verify invoice issue_date and due_date fields are populated correctly."),
+    "activation_rate":     (0, 100,       "Activation rate of {value:.0f}% exceeds 100% — likely caused by counting multiple feature activations per user. Ensure canonical_product_usage has one activation record per user, not per feature."),
+    "pipeline_velocity":   (0, 50_000,    "Pipeline velocity of ${value:,.0f}/day is extreme — check that deal amounts and pipeline duration data are realistic."),
+}
+
 
 # ── Public API ────────────────────────────────────────────────────────────────
 
@@ -148,11 +170,17 @@ def aggregate_canonical_to_monthly(conn, workspace_id: str) -> dict:
                 if v is not None:
                     merged[k] = v
 
-            # Clean: remove None/NaN values before JSON serialization
+            # Clean: remove None/NaN/internal values before JSON serialization
+            # Preserve _diagnostics dict for downstream consumption
             clean = {}
+            diagnostics = merged.pop("_diagnostics", {})
             for k, v in merged.items():
+                if k.startswith("_"):
+                    continue  # Skip internal keys
                 if v is not None and not (isinstance(v, float) and (math.isnan(v) or math.isinf(v))):
                     clean[k] = round(v, 4) if isinstance(v, float) else v
+            if diagnostics:
+                clean["_diagnostics"] = diagnostics
 
             if not clean:
                 continue
@@ -163,7 +191,9 @@ def aggregate_canonical_to_monthly(conn, workspace_id: str) -> dict:
                 [CONNECTOR_UPLOAD_SENTINEL, yr, mo, json.dumps(clean), workspace_id],
             )
             months_written += 1
-            summary["kpis_computed"].update(clean.keys())
+            summary["kpis_computed"].update(k for k in clean.keys() if not k.startswith("_"))
+            if diagnostics:
+                summary.setdefault("diagnostics", {}).update(diagnostics)
 
         conn.commit()
         summary["months_written"] = months_written
@@ -823,32 +853,30 @@ def _compute_month_kpis(
         _safe_set(kpis, "cash_burn", net_burn)
         if kpis.get("arr", 0) > 0 and prev and prev.get("arr", 0) > 0:
             net_new_arr = kpis["arr"] - prev["arr"]
-            # Require net_new_arr to be at least 1% of ARR to avoid extreme ratios
             min_meaningful = prev["arr"] * 0.001
             bm = _safe_ratio(net_burn, net_new_arr, min_denom=max(min_meaningful, 100))
-            _safe_set(kpis, "burn_multiple", bm, lo=-50, hi=50)
+            _safe_set(kpis, "burn_multiple", bm, net_new_arr=net_new_arr)
 
     # ── Sales & marketing efficiency ─────────────────────────────────────
     if sm_exp > 0:
         if total_rev > 0:
             se = _safe_ratio(kpis.get("arr", total_rev * 12), sm_exp, min_denom=100)
-            _safe_set(kpis, "sales_efficiency", se, lo=0, hi=100)
+            _safe_set(kpis, "sales_efficiency", se, sm_exp=sm_exp)
         if new_cust > 0:
             cac = sm_exp / new_cust
             arpu = total_rev / max(len(rev.get("customer_ids", set())), 1)
             gm_pct = kpis.get("gross_margin", 60) / 100
             if arpu * gm_pct > 0:
                 payback = _safe_ratio(cac, arpu * gm_pct, min_denom=0.01)
-                _safe_set(kpis, "cac_payback", payback, lo=0, hi=120)
-                _safe_set(kpis, "payback_period", payback, lo=0, hi=120)
-            if kpis.get("churn_rate", 0) > 0.05:  # Require meaningful churn (>0.05%)
+                _safe_set(kpis, "cac_payback", payback, arpu=arpu, gm_pct=gm_pct*100)
+                _safe_set(kpis, "payback_period", payback, arpu=arpu, gm_pct=gm_pct*100)
+            if kpis.get("churn_rate", 0) > 0.05:
                 ltv = _safe_ratio(arpu * gm_pct, kpis["churn_rate"] / 100,
                                   min_denom=0.0005)
                 if ltv is not None:
-                    # Cap LTV at 500x ARPU to prevent nonsensical values
-                    ltv = min(ltv, arpu * 500) if arpu > 0 else ltv
-                    _safe_set(kpis, "customer_ltv", ltv, hi=10_000_000)
-                    _safe_set(kpis, "ltv_cac", _safe_ratio(ltv, cac, min_denom=1), hi=100)
+                    _safe_set(kpis, "customer_ltv", ltv, churn_rate=kpis.get("churn_rate", 0))
+                    ltv_cac_val = _safe_ratio(ltv, cac, min_denom=1)
+                    _safe_set(kpis, "ltv_cac", ltv_cac_val, churn_rate=kpis.get("churn_rate", 0), cac=cac)
 
     # ── Pipeline metrics ─────────────────────────────────────────────────
     if deals_count > 0:
@@ -906,7 +934,7 @@ def _compute_month_kpis(
         rev_chg = _safe_ratio(total_rev - prev["_total_revenue"], prev["_total_revenue"], scale=100) or 0
         opex_chg = _safe_ratio(opex - prev["_opex"], prev["_opex"], scale=100) or 0
         ol = _safe_ratio(rev_chg, opex_chg, min_denom=0.5)
-        _safe_set(kpis, "operating_leverage", ol, lo=-10, hi=10)
+        _safe_set(kpis, "operating_leverage", ol, opex_chg=opex_chg)
 
     # ── Headcount / efficiency metrics ───────────────────────────────────
     if headcount > 0:
@@ -939,12 +967,14 @@ def _compute_month_kpis(
     if cash_bal > 0:
         monthly_burn = total_exp - total_rev
         if monthly_burn > 0:
-            # Company is burning: runway = cash / monthly burn rate
-            _safe_set(kpis, "cash_runway", _safe_ratio(cash_bal, monthly_burn, min_denom=100), hi=120)
+            runway = _safe_ratio(cash_bal, monthly_burn, min_denom=100)
+            _safe_set(kpis, "cash_runway", runway)
         else:
-            # Company is cash-flow positive: runway is effectively unlimited
-            # Cap at 120 months (10 years) to signal stability without nonsense
-            _safe_set(kpis, "cash_runway", 120.0)
+            # Cash-flow positive: no burn → record diagnostic explaining
+            _record_diagnostic(kpis, "cash_runway", None,
+                               "Company is cash-flow positive this month (revenue exceeds expenses). "
+                               "Cash runway is not applicable when there is no net burn. "
+                               "This is a positive signal — no corrective action required.")
     if curr_liab > 0:
         _safe_set(kpis, "current_ratio", curr_assets / curr_liab)
     if curr_assets > 0:
@@ -999,13 +1029,12 @@ def _compute_month_kpis(
     if mkt_leads > 0:
         organic_share = _safe_ratio(mkt_conv, mkt_leads, min_denom=1) or 0.2
         if prev and prev.get("organic_traffic") is not None:
-            # Slight growth based on conversion improvement
-            _safe_set(kpis, "organic_traffic", prev["organic_traffic"] * 1.01, lo=1, hi=100)
+            _safe_set(kpis, "organic_traffic", prev["organic_traffic"] * 1.01)
         else:
-            _safe_set(kpis, "organic_traffic", organic_share * 100, lo=1, hi=100)
+            _safe_set(kpis, "organic_traffic", organic_share * 100)
     if mkt_leads > 0 and mkt_spend > 0:
         cpl_val = kpis.get("cpl", 100)
-        _safe_set(kpis, "brand_awareness", 100 - min(cpl_val, 180) * 0.5, lo=10, hi=100)
+        _safe_set(kpis, "brand_awareness", 100 - min(cpl_val, 180) * 0.5)
 
     # ── Health score (composite meta-KPI) ────────────────────────────────
     # Lightweight composite: avg of normalised sub-scores
@@ -1130,36 +1159,62 @@ def _safe_float(val) -> Optional[float]:
         return None
 
 
-def _safe_set(target: dict, key: str, value, *, lo: float = None, hi: float = None) -> None:
-    """Set a KPI value only if it's a valid finite number.
+def _safe_set(target: dict, key: str, value, **context) -> None:
+    """Set a KPI value only if it is a valid, finite, reasonable number.
 
-    Optional lo/hi bounds clamp the value to a reasonable range, preventing
-    extreme outliers from propagating (e.g., LTV of $300M when churn ≈ 0).
+    If the value is outside the bounds defined in KPI_BOUNDS for this key,
+    the value is WITHHELD (not stored) and a diagnostic explanation is
+    recorded in target["_diagnostics"] describing why and what to fix.
+
+    Extra **context kwargs (e.g., churn_rate=0.01, cac=500) are used to
+    populate the diagnostic message template with actual values.
     """
     if value is None:
         return
     try:
         f = float(value)
         if not math.isfinite(f):
+            _record_diagnostic(target, key, value,
+                               f"{key} computed as {'NaN' if math.isnan(value) else 'Infinity'} "
+                               f"— one or more input values are missing or zero. "
+                               f"Check upstream data sources.")
             return
-        if lo is not None:
-            f = max(f, lo)
-        if hi is not None:
-            f = min(f, hi)
+
+        # Check reasonableness bounds
+        bounds = KPI_BOUNDS.get(key)
+        if bounds:
+            lo, hi, msg_template = bounds
+            if (lo is not None and f < lo) or (hi is not None and f > hi):
+                try:
+                    msg = msg_template.format(value=f, **context)
+                except (KeyError, ValueError, TypeError):
+                    msg = (f"{key} computed as {f:.4f} which is outside the "
+                           f"reasonable range [{lo}, {hi}]. Review input data.")
+                _record_diagnostic(target, key, f, msg)
+                return
+
         target[key] = f
     except (ValueError, TypeError):
         pass
 
 
+def _record_diagnostic(target: dict, key: str, raw_value, message: str) -> None:
+    """Record a diagnostic for a KPI value that was withheld."""
+    diags = target.setdefault("_diagnostics", {})
+    diags[key] = {
+        "computed_value": raw_value if isinstance(raw_value, (int, float)) and math.isfinite(raw_value) else None,
+        "withheld": True,
+        "reason": message,
+    }
+
+
 def _safe_ratio(numerator: float, denominator: float,
-                *, scale: float = 1.0, min_denom: float = 0.01,
-                lo: float = None, hi: float = None) -> Optional[float]:
+                *, scale: float = 1.0, min_denom: float = 0.01) -> Optional[float]:
     """Compute numerator / denominator safely.
 
     Returns None if the denominator is below min_denom (avoiding division
     by near-zero values that produce extreme outliers).  The result is
     multiplied by *scale* (default 1.0; use 100.0 for percentages).
-    Optional lo/hi clamp the output range.
     """
     if denominator is None or abs(denominator) < min_denom:
         return None
@@ -1167,10 +1222,6 @@ def _safe_ratio(numerator: float, denominator: float,
         result = (numerator / denominator) * scale
         if not math.isfinite(result):
             return None
-        if lo is not None:
-            result = max(result, lo)
-        if hi is not None:
-            result = min(result, hi)
         return result
     except (ZeroDivisionError, ValueError, TypeError):
         return None
