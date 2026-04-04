@@ -1216,21 +1216,28 @@ def export_kpi_audit(request: Request):
         if d["key"] not in ALL_KPIS:
             ALL_KPIS[d["key"]] = {**d, "source": "extended", "formula": "—"}
 
-    # 2. Fetch monthly data
+    # 2. Fetch monthly data (stored as JSON blobs per month)
     rows = conn.execute(
-        "SELECT kpi_key, year, month, value FROM monthly_data WHERE workspace_id=? ORDER BY kpi_key, year, month",
+        "SELECT year, month, data_json FROM monthly_data WHERE workspace_id=? ORDER BY year, month",
         [workspace_id],
     ).fetchall()
     monthly = {}  # key -> [(year, month, value), ...]
     for r in rows:
-        monthly.setdefault(r[0], []).append((r[1], r[2], r[3]))
+        year, month = r["year"], r["month"]
+        try:
+            data = json.loads(r["data_json"]) if isinstance(r["data_json"], str) else {}
+        except (json.JSONDecodeError, TypeError):
+            continue
+        for kpi_key, value in data.items():
+            if value is not None:
+                monthly.setdefault(kpi_key, []).append((year, month, value))
 
     # 3. Fetch targets
     tgt_rows = conn.execute(
         "SELECT kpi_key, target_value FROM kpi_targets WHERE workspace_id=?",
         [workspace_id],
     ).fetchall()
-    targets = {r[0]: r[1] for r in tgt_rows}
+    targets = {r["kpi_key"]: r["target_value"] for r in tgt_rows}
 
     # 4. Compute health score & criticality
     hs = compute_health_score(conn, workspace_id)
