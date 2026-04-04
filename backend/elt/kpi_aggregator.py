@@ -1122,6 +1122,11 @@ def _compute_month_kpis(
                     "Tag COGS expenses in your accounting system to enable margin calculation.")
 
     # ── Pipeline metrics ─────────────────────────────────────────────────
+    if deals_count == 0 and total_rev > 0:
+        _record_diagnostic(kpis, "win_rate", None,
+            "No pipeline deals data for this month. Connect your CRM (Salesforce/HubSpot) to enable pipeline KPIs.")
+        _record_diagnostic(kpis, "pipeline_conversion", None,
+            "No pipeline data — connect CRM to compute pipeline conversion rate.")
     if deals_count > 0:
         _safe_set(kpis, "win_rate", deals_won / deals_count * 100)
         if deals_won > 0:
@@ -1141,6 +1146,11 @@ def _compute_month_kpis(
             _safe_set(kpis, "quota_attainment", won_value / pipe_value * 100)
 
     # ── Invoice / AR metrics ─────────────────────────────────────────────
+    if inv_count == 0 and total_rev > 0:
+        _record_diagnostic(kpis, "dso", None,
+            "No invoice data for this month. Connect accounting system to compute AR metrics.")
+        _record_diagnostic(kpis, "cash_conv_cycle", None,
+            "No invoice data — cash conversion cycle requires DSO from invoices.")
     if inv_count > 0 and inv_total > 0:
         avg_dso = inv.get("days_outstanding_sum", 0) / inv_count
         _safe_set(kpis, "dso", avg_dso)
@@ -1184,6 +1194,12 @@ def _compute_month_kpis(
         if total_rev > 0:
             _safe_set(kpis, "rev_per_employee", total_rev * 12 / headcount)
             _safe_set(kpis, "headcount_eff", total_rev / headcount)
+    elif total_rev > 0:
+        _record_diagnostic(kpis, "rev_per_employee", None,
+            "Cannot compute — no employee headcount data for this month. "
+            "Ensure canonical_employees has hire_date and active status for all staff.")
+        _record_diagnostic(kpis, "headcount_eff", None,
+            "Cannot compute — no employee headcount data for this month.")
 
     # Ramp time: avg deal duration for pipeline entries can proxy
     if pipe.get("deals_with_duration", 0) > 0:
@@ -1371,7 +1387,16 @@ def _load_existing_csv_kpis(conn, workspace_id: str) -> dict:
             mo = int(r["month"] if isinstance(r, dict) else r[1])
             raw = r["data_json"] if isinstance(r, dict) else r[2]
             try:
-                existing[(yr, mo)] = json.loads(raw)
+                parsed = json.loads(raw)
+                # Filter non-numeric values at load time to prevent type corruption
+                clean = {}
+                for k, v in parsed.items():
+                    if k.startswith("_"):
+                        continue  # Skip metadata
+                    if isinstance(v, (int, float)) and not (isinstance(v, float) and (math.isnan(v) or math.isinf(v))):
+                        clean[k] = v
+                    # Non-numeric values (strings like "N/A", "#DIV/0!") are silently dropped
+                existing[(yr, mo)] = clean
             except (json.JSONDecodeError, TypeError):
                 pass
     except Exception:
