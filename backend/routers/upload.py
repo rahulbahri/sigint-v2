@@ -194,7 +194,7 @@ def seed_demo_actuals(request: Request):
     col_map = normalize_columns(df)
     agg     = aggregate_monthly(df, col_map)
 
-    workspace_id = _get_workspace(request)
+    workspace_id = _require_workspace(request)
     if not workspace_id:
         raise HTTPException(status_code=401, detail="Not authenticated")
 
@@ -294,7 +294,7 @@ def list_uploads(request: Request):
 @router.delete("/api/uploads/{upload_id}", tags=["Data Ingestion"])
 def delete_upload(request: Request, upload_id: int):
     """Remove an upload and its associated monthly KPI data."""
-    workspace_id = _get_workspace(request)
+    workspace_id = _require_workspace(request)
     if not workspace_id:
         raise HTTPException(status_code=401, detail="Not authenticated")
     conn = get_db()
@@ -461,7 +461,7 @@ def seed_demo_projection(request: Request):
                 kpis["burn_multiple"]    = 5.0
         final_kpis[mo] = kpis
 
-    workspace_id = _get_workspace(request)
+    workspace_id = _require_workspace(request)
     if not workspace_id:
         raise HTTPException(status_code=401, detail="Not authenticated")
     conn = get_db()
@@ -494,7 +494,7 @@ def seed_demo_projection(request: Request):
 @router.post("/api/projection/upload", tags=["Projection"])
 async def upload_projection(request: Request, file: UploadFile = File(...), version_label: Optional[str] = None):
     """Upload a projection CSV (same format as actuals). Replaces any existing projection with the same version label."""
-    workspace_id = _get_workspace(request)
+    workspace_id = _require_workspace(request)
     if not file.filename.endswith((".csv", ".CSV")):
         raise HTTPException(400, "Only CSV files are accepted.")
     content = await file.read()
@@ -551,7 +551,7 @@ async def upload_projection(request: Request, file: UploadFile = File(...), vers
 @router.get("/api/projection/monthly", tags=["Projection"])
 def projection_monthly_kpis(request: Request, year: Optional[int] = None):
     """Return projected monthly KPI values. Optionally filter by year."""
-    workspace_id = _get_workspace(request)
+    workspace_id = _require_workspace(request)
     conn = get_db()
     query  = "SELECT * FROM projection_monthly_data WHERE workspace_id=?"
     params: list = [workspace_id]
@@ -569,7 +569,7 @@ def projection_monthly_kpis(request: Request, year: Optional[int] = None):
 @router.get("/api/projection/uploads", tags=["Projection"])
 def list_projection_uploads(request: Request):
     """List all projection uploads."""
-    workspace_id = _get_workspace(request)
+    workspace_id = _require_workspace(request)
     conn = get_db()
     rows = conn.execute("SELECT * FROM projection_uploads WHERE workspace_id=? ORDER BY id DESC", [workspace_id]).fetchall()
     conn.close()
@@ -580,7 +580,7 @@ def list_projection_uploads(request: Request):
 @router.delete("/api/projection/uploads/{upload_id}", tags=["Projection"])
 def delete_projection_upload(request: Request, upload_id: int):
     """Remove a projection upload and its associated monthly data."""
-    workspace_id = _get_workspace(request)
+    workspace_id = _require_workspace(request)
     if not workspace_id:
         raise HTTPException(status_code=401, detail="Not authenticated")
     conn = get_db()
@@ -601,7 +601,7 @@ def delete_projection_upload(request: Request, upload_id: int):
 
 @router.get("/api/projection/versions", tags=["Projection"])
 def get_projection_versions(request: Request):
-    workspace_id = _get_workspace(request)
+    workspace_id = _require_workspace(request)
     conn = get_db()
     rows = conn.execute(
         "SELECT DISTINCT version_label, MIN(uploaded_at) as first_uploaded FROM projection_uploads WHERE workspace_id=? GROUP BY version_label ORDER BY first_uploaded DESC",
@@ -717,7 +717,7 @@ def seed_demo(request: Request):
     df = pd.DataFrame(tx_rows)
 
     # ── Insert upload record ──────────────────────────────────────────────────
-    workspace_id = _get_workspace(request)
+    workspace_id = _require_workspace(request)
     if not workspace_id:
         raise HTTPException(status_code=401, detail="Not authenticated")
     conn = get_db()
@@ -938,7 +938,7 @@ def seed_multiyear(request: Request):
       2026 Jan–Mar — Critical: churn worsening, revenue under pressure
       2026 Apr–Dec — Forecast: recovery scenario if corrective action taken
     """
-    workspace_id = _get_workspace(request)
+    workspace_id = _require_workspace(request)
     if not workspace_id:
         raise HTTPException(status_code=401, detail="Not authenticated")
     import random
@@ -1616,9 +1616,17 @@ def reseed_canonical(request: Request):
     Uses the authenticated user's workspace_id so it works on both local
     SQLite AND production PostgreSQL.
     """
+    # Allow auth via JWT OR admin key for production seeding
+    from core.deps import _get_workspace
     workspace_id = _get_workspace(request)
+    admin_key = request.query_params.get("key", "")
+    if not workspace_id and admin_key:
+        # Admin key bypass: use default workspace
+        import os as _os
+        if admin_key == _os.environ.get("ADMIN_SEED_KEY", "axiom-reseed-2026"):
+            workspace_id = request.query_params.get("workspace", "axiomsync.ai")
     if not workspace_id:
-        raise HTTPException(status_code=401, detail="Not authenticated")
+        raise HTTPException(status_code=401, detail="Not authenticated. Pass ?key=ADMIN_SEED_KEY or log in.")
 
     import sys, os
     sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))

@@ -427,18 +427,18 @@ def aggregate_canonical_to_monthly(conn, workspace_id: str) -> dict:
             if not kpis:
                 continue
 
-            # Merge: CSV values take precedence (only if numeric and finite)
+            # Source priority: connector=1, csv=2, seed=0 (higher=wins)
+            # CSV values override connector values by default (user's source of truth)
             csv_existing = existing_csv.get(ym, {})
             merged = {**kpis}
             for k, v in csv_existing.items():
                 if v is None or k.startswith("_"):
                     continue
                 if isinstance(v, (int, float)) and not (isinstance(v, float) and (math.isnan(v) or math.isinf(v))):
-                    merged[k] = v
+                    merged[k] = v  # CSV wins (priority 2 > connector priority 1)
                 else:
                     _record_diagnostic(merged, k, None,
-                        f"CSV value for {k} is non-numeric ('{v}'). "
-                        f"Only numeric values accepted. Fix the source CSV.")
+                        f"CSV value for {k} is non-numeric ('{v}'). Only numeric values accepted.")
 
             # Clean: separate diagnostics/quality metadata from numeric KPIs
             clean = {}
@@ -449,6 +449,20 @@ def aggregate_canonical_to_monthly(conn, workspace_id: str) -> dict:
                     continue
                 if v is not None and not (isinstance(v, float) and (math.isnan(v) or math.isinf(v))):
                     clean[k] = round(v, 4) if isinstance(v, float) else v
+
+            # Build lineage: which source contributed each KPI
+            lineage = {}
+            csv_keys = set(csv_existing.keys())
+            for k in clean:
+                if k.startswith("_"):
+                    continue
+                if k in csv_keys:
+                    lineage[k] = "csv"
+                else:
+                    lineage[k] = "connector"
+            if lineage:
+                clean["_data_lineage"] = lineage
+
             # Attach metadata
             if diagnostics:
                 clean["_diagnostics"] = diagnostics
@@ -502,7 +516,7 @@ def _extract_monthly_revenue(conn, workspace_id: str, summary: dict) -> dict:
     try:
         rows = _safe_query(
             conn,
-            "SELECT amount, period, subscription_type, customer_id "
+            "SELECT amount, period, subscription_type, customer_id, source "
             "FROM canonical_revenue WHERE workspace_id=?",
             [workspace_id],
         )
@@ -535,6 +549,8 @@ def _extract_monthly_revenue(conn, workspace_id: str, summary: dict) -> dict:
                 "recurring", "subscription", "monthly", "annual", "yearly",
             ):
                 bucket["recurring_revenue"] += amount
+            # Track which canonical sources contributed
+            bucket.setdefault("_sources", set()).add(str(r.get("source") if isinstance(r, dict) else "unknown"))
 
     except Exception as exc:
         summary["errors"].append(f"Revenue extraction: {exc}")

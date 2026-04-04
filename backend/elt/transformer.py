@@ -16,6 +16,28 @@ from typing import Any
 _logger = logging.getLogger(__name__)
 
 
+# ── Per-connector unit conventions ───────────────────────────────────────────
+# Stripe and Brex send amounts in cents; all others in standard currency units.
+CONNECTOR_UNIT_CONFIG = {
+    "stripe":        {"amount_divisor": 100},
+    "brex":          {"amount_divisor": 100},
+    "quickbooks":    {"amount_divisor": 1},
+    "xero":          {"amount_divisor": 1},
+    "hubspot":       {"amount_divisor": 1},
+    "salesforce":    {"amount_divisor": 1},
+    "shopify":       {"amount_divisor": 1},
+    "ramp":          {"amount_divisor": 1},
+    "netsuite":      {"amount_divisor": 1},
+    "sage_intacct":  {"amount_divisor": 1},
+    "snowflake":     {"amount_divisor": 1},
+    "google_sheets": {"amount_divisor": 1},
+    "seed":          {"amount_divisor": 1},
+}
+
+# Mappings below this confidence require human confirmation before use.
+CONFIDENCE_THRESHOLD = 0.80
+
+
 # ── Field name heuristics for auto-mapping ────────────────────────────────────
 
 _AMOUNT_HINTS    = {"amount", "total", "net", "gross", "value", "price", "revenue",
@@ -190,8 +212,32 @@ class Transformer:
             return 0
         table = f"canonical_{entity_type}"
         self._ensure_canonical_table(entity_type)
+        self._ensure_change_log_table()
         count = 0
         for row in rows:
+            # ── Change detection: log field-level diffs before overwriting ──
+            try:
+                existing = self._conn.execute(
+                    f"SELECT * FROM canonical_{entity_type} WHERE workspace_id=? AND source=? AND source_id=?",
+                    [self._workspace_id, row.get("source", self._source), row.get("source_id")]
+                ).fetchone()
+                if existing:
+                    existing_dict = dict(existing) if hasattr(existing, 'keys') else {}
+                    for col, new_val in row.items():
+                        if col in ("source", "source_id", "workspace_id", "raw_id", "created_at", "updated_at"):
+                            continue
+                        old_val = existing_dict.get(col)
+                        if old_val is not None and new_val is not None and str(old_val) != str(new_val):
+                            self._conn.execute(
+                                "INSERT INTO canonical_change_log "
+                                "(workspace_id, table_name, source, source_id, field_name, old_value, new_value) "
+                                "VALUES (?,?,?,?,?,?,?)",
+                                [self._workspace_id, f"canonical_{entity_type}",
+                                 row.get("source", self._source), row.get("source_id"),
+                                 col, str(old_val), str(new_val)]
+                            )
+            except Exception:
+                pass  # Change detection is non-blocking
             cols   = list(row.keys()) + ["workspace_id"]
             vals   = list(row.values()) + [self._workspace_id]
             ph     = ",".join(["?"] * len(cols))
@@ -287,11 +333,16 @@ class Transformer:
         except Exception:
             pass
 
-        # Fill gaps with heuristics
+        # Fill gaps with heuristics (only if confidence meets threshold)
         for k in sample.keys():
             if k not in mapping:
-                cf, _ = _guess_canonical_field(k, entity_type)
-                mapping[k] = cf
+                cf, confidence = _guess_canonical_field(k, entity_type)
+                if confidence >= CONFIDENCE_THRESHOLD:
+                    mapping[k] = cf
+                else:
+                    mapping[k] = "unmapped"
+                    _logger.info("[Field Mapping] Low confidence %.2f for %s.%s -> %s (needs review)",
+                                 confidence, entity_type, k, cf)
 
         # User-supplied overrides win
         if confirmed:
@@ -323,7 +374,10 @@ class Transformer:
             return None
         if canonical_field in ("amount", "salary", "price", "spend"):
             try:
-                return float(str(value).replace(",", "").replace("$", ""))
+                val = float(str(value).replace(",", "").replace("$", ""))
+                # Apply connector-specific unit conversion (e.g., Stripe cents → dollars)
+                divisor = CONNECTOR_UNIT_CONFIG.get(self._source, {}).get("amount_divisor", 1)
+                return val / divisor
             except (ValueError, TypeError):
                 return None
         if canonical_field in ("period", "recognized_at", "created_at",
@@ -400,6 +454,23 @@ class Transformer:
         except Exception as exc:
             _logger.warning("[Schema Migration] Could not migrate canonical_%s: %s",
                             entity_type, exc)
+
+    def _ensure_change_log_table(self):
+        self._conn.execute("""
+            CREATE TABLE IF NOT EXISTS canonical_change_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                workspace_id TEXT NOT NULL,
+                table_name TEXT NOT NULL,
+                source TEXT,
+                source_id TEXT NOT NULL,
+                field_name TEXT NOT NULL,
+                old_value TEXT,
+                new_value TEXT,
+                changed_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                sync_id TEXT
+            )
+        """)
+        self._conn.commit()
 
     def _ensure_mappings_table(self) -> None:
         self._conn.execute("""

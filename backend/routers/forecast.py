@@ -13,7 +13,7 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel as _BaseModel
 
 from core.database import get_db
-from core.deps import _get_workspace
+from core.deps import _require_workspace
 from core.state import _FORECAST_BUILDING, _FORECAST_ERROR, _FORECAST_LOCK
 
 router = APIRouter()
@@ -698,7 +698,7 @@ class _ProjectRequest(_BaseModel):
 
 @router.post("/api/forecast/build")
 def forecast_build(request: Request):
-    workspace_id = _get_workspace(request)
+    workspace_id = _require_workspace(request)
     with _LOCK:
         if _BUILDING.get(workspace_id):
             return {"status": "building", "message": "Training already in progress"}
@@ -728,14 +728,14 @@ def forecast_build(request: Request):
 
 @router.post("/api/forecast/project")
 def forecast_project(request: Request, req: _ProjectRequest):
-    workspace_id = _get_workspace(request)
+    workspace_id = _require_workspace(request)
     result = _project_scenario(req.horizon_days, req.overrides, req.n_samples, workspace_id)
     return result
 
 
 @router.get("/api/forecast/model")
 def forecast_model(request: Request):
-    workspace_id = _get_workspace(request)
+    workspace_id = _require_workspace(request)
 
     # Check DB-persisted status first (cross-worker safe)
     db_status, db_msg = _get_build_status(workspace_id)

@@ -114,7 +114,7 @@ def fingerprint(request: Request, year: Optional[int] = None):
 @router.get("/api/summary", tags=["Analytics"])
 def summary(request: Request, year: Optional[int] = None):
     """High-level dashboard summary: upload count, KPI coverage, status breakdown."""
-    workspace_id = _get_workspace(request)
+    workspace_id = _require_workspace(request)
     conn = get_db()
     uploads = conn.execute("SELECT COUNT(*) as c FROM uploads WHERE workspace_id=?", [workspace_id]).fetchone()["c"]
     # Filter by year when provided so status counts match the fingerprint tab
@@ -168,7 +168,7 @@ def summary(request: Request, year: Optional[int] = None):
 @router.get("/api/available-years", tags=["Analytics"])
 def available_years(request: Request):
     """Return distinct years that have monthly KPI data."""
-    workspace_id = _get_workspace(request)
+    workspace_id = _require_workspace(request)
     conn = get_db()
     rows = conn.execute("SELECT DISTINCT year FROM monthly_data WHERE workspace_id=? ORDER BY year", [workspace_id]).fetchall()
     conn.close()
@@ -183,7 +183,7 @@ async def query_kpi(request: Request, payload: dict):
     Accepts { "question": "...", "years": [2024] } and returns { "answer": "...", "kpis_referenced": [...] }.
     Builds full context from the live DB fingerprint on every call, filtered to requested years.
     """
-    workspace_id = _get_workspace(request)
+    workspace_id = _require_workspace(request)
     question = payload.get("question", "").strip()
     if not question:
         raise HTTPException(status_code=400, detail="question is required")
@@ -423,7 +423,7 @@ def _compute_fingerprint_data(targets_override=None, workspace_id: str = ""):
 @router.get("/api/export/board-deck.pptx", tags=["Board Deck"])
 def export_board_deck(request: Request, stage: str = "series_b"):
     """Generate a narrative-driven PPTX board deck with charts, executive summary, and data-backed actions."""
-    workspace_id = _get_workspace(request)
+    workspace_id = _require_workspace(request)
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
@@ -872,7 +872,7 @@ def export_board_deck(request: Request, stage: str = "series_b"):
 async def update_target(request: Request, kpi_key: str):
     """Upsert the target value (and optionally unit/direction) for a KPI."""
     import re as _re
-    workspace_id = _get_workspace(request)
+    workspace_id = _require_workspace(request)
     if not workspace_id:
         raise HTTPException(status_code=401, detail="Not authenticated")
     if not _re.match(r'^[a-z_]+$', kpi_key):
@@ -918,7 +918,7 @@ def weekly_briefing(request: Request, stage: Optional[str] = "series_b"):
     Generate and return a self-contained HTML weekly briefing document.
     Opens directly in the browser — no download needed.
     """
-    workspace_id = _get_workspace(request)
+    workspace_id = _require_workspace(request)
     conn = get_db()
     try:
         rows = conn.execute(
@@ -1090,7 +1090,7 @@ def bridge_analysis(request: Request, year: Optional[int] = None):
     Compare projected vs actual KPIs month-by-month.
     Returns gap analysis, status (green/yellow/red), and causation rules for each KPI.
     """
-    workspace_id = _get_workspace(request)
+    workspace_id = _require_workspace(request)
     conn = get_db()
     try:
         if year:
@@ -1214,7 +1214,7 @@ def export_kpi_audit(request: Request):
     from openpyxl.utils import get_column_letter
     from core.health_score import compute_health_score
 
-    workspace_id = _get_workspace(request)
+    workspace_id = _require_workspace(request)
     conn = get_db()
 
     # ── Gather all data ────────────────────────────────────────────────────
