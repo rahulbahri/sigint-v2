@@ -18,8 +18,8 @@ def test_system_count():
 
 
 def test_canonical_table_count():
-    """6 canonical tables defined."""
-    assert len(CANONICAL_SCHEMAS) == 6
+    """12 canonical tables defined."""
+    assert len(CANONICAL_SCHEMAS) == 12
 
 
 def test_all_systems_have_fields():

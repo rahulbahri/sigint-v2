@@ -4,7 +4,7 @@ generator for customer engineering teams.
 
 Contains:
   - SYSTEM_REGISTRY: all 15 source systems with field-level specs
-  - CANONICAL_SCHEMAS: 6 canonical table definitions
+  - CANONICAL_SCHEMAS: 11 canonical table definitions
   - generate_integration_spec_workbook(): builds the multi-tab .xlsx
 """
 
@@ -96,6 +96,83 @@ CANONICAL_SCHEMAS = {
             ("period",      "date",     "Invoice period in YYYY-MM format"),
         ],
     },
+    "canonical_marketing": {
+        "description": "Marketing spend, lead generation, and conversion data by channel",
+        "fields": [
+            ("source",      "string",   "Source system identifier"),
+            ("source_id",   "string",   "Unique marketing record ID"),
+            ("channel",     "string",   "Marketing channel: paid_search, content, events, social, organic, referral"),
+            ("spend",       "currency", "Marketing spend amount in decimal USD"),
+            ("currency",    "string",   "ISO 4217 currency code (default: USD)"),
+            ("period",      "date",     "Campaign period in YYYY-MM format"),
+            ("leads",       "number",   "Number of leads generated"),
+            ("conversions", "number",   "Number of leads converted to qualified"),
+        ],
+    },
+    "canonical_balance_sheet": {
+        "description": "Monthly balance sheet snapshots from accounting and ERP systems",
+        "fields": [
+            ("source",              "string",   "Source system identifier"),
+            ("source_id",           "string",   "Unique snapshot ID from the source system"),
+            ("period",              "date",     "Reporting period in YYYY-MM format"),
+            ("cash_balance",        "currency", "Cash and cash equivalents balance"),
+            ("current_assets",      "currency", "Total current assets"),
+            ("current_liabilities", "currency", "Total current liabilities"),
+            ("total_assets",        "currency", "Total assets (optional)"),
+            ("total_liabilities",   "currency", "Total liabilities (optional)"),
+            ("currency",            "string",   "ISO 4217 currency code (default: USD)"),
+        ],
+    },
+    "canonical_time_tracking": {
+        "description": "Billable and total hours tracked from HRIS and time-tracking systems",
+        "fields": [
+            ("source",         "string", "Source system identifier"),
+            ("source_id",      "string", "Unique time entry ID"),
+            ("worker_id",      "string", "Employee or worker reference ID"),
+            ("period",         "date",   "Time period in YYYY-MM format"),
+            ("billable_hours", "number", "Hours billed to clients or projects"),
+            ("total_hours",    "number", "Total hours worked including non-billable"),
+            ("time_type",      "string", "Time type: regular, overtime, pto"),
+        ],
+    },
+    "canonical_product_usage": {
+        "description": "Product feature adoption and activation data",
+        "fields": [
+            ("source",         "string", "Source system identifier"),
+            ("source_id",      "string", "Unique usage record ID"),
+            ("user_id",        "string", "User or customer identifier"),
+            ("period",         "date",   "Usage period in YYYY-MM format"),
+            ("feature_id",     "string", "Feature identifier"),
+            ("usage_count",    "number", "Number of times feature was used"),
+            ("activated_at",   "date",   "Date user first activated (ISO 8601)"),
+            ("first_value_at", "date",   "Date user first achieved value (ISO 8601)"),
+        ],
+    },
+    "canonical_surveys": {
+        "description": "Customer satisfaction and NPS survey responses",
+        "fields": [
+            ("source",        "string", "Source system identifier"),
+            ("source_id",     "string", "Unique survey response ID"),
+            ("respondent_id", "string", "Customer or user identifier"),
+            ("period",        "date",   "Survey period in YYYY-MM format"),
+            ("nps_score",     "number", "Net Promoter Score (-100 to 100)"),
+            ("csat_score",    "number", "Customer satisfaction score (1-5)"),
+            ("survey_type",   "string", "Survey type: nps, csat, quarterly"),
+        ],
+    },
+    "canonical_support": {
+        "description": "Customer support ticket data from helpdesk systems",
+        "fields": [
+            ("source",           "string", "Source system identifier"),
+            ("source_id",        "string", "Unique ticket ID"),
+            ("ticket_id",        "string", "Human-readable ticket number"),
+            ("period",           "date",   "Ticket period in YYYY-MM format"),
+            ("resolution_hours", "number", "Hours to resolve the ticket"),
+            ("effort_score",     "number", "Customer effort score (1-5)"),
+            ("status",           "string", "Ticket status: open, resolved, closed"),
+            ("customer_id",      "string", "Customer reference linking to canonical_customers"),
+        ],
+    },
 }
 
 # ─── KPI-to-Canonical Field Dependencies ───────────────────────────────────
@@ -129,7 +206,7 @@ KPI_FIELD_DEPS = {
     "sales_efficiency":      ["canonical_revenue.amount", "canonical_revenue.subscription_type", "canonical_expenses.amount", "canonical_expenses.category"],
     "headcount_eff":         ["canonical_revenue.amount", "canonical_employees.source_id", "canonical_employees.status"],
     "rev_per_employee":      ["canonical_revenue.amount", "canonical_employees.source_id", "canonical_employees.status"],
-    "billable_utilization":  ["canonical_employees.source_id", "canonical_employees.status"],
+    "billable_utilization":  ["canonical_time_tracking.billable_hours", "canonical_time_tracking.total_hours"],
     "dso":                   ["canonical_invoices.amount", "canonical_invoices.issue_date", "canonical_invoices.due_date", "canonical_invoices.status"],
     "ar_turnover":           ["canonical_invoices.amount", "canonical_invoices.issue_date", "canonical_revenue.amount"],
     "avg_collection_period": ["canonical_invoices.amount", "canonical_invoices.issue_date", "canonical_invoices.due_date"],
@@ -148,22 +225,22 @@ KPI_FIELD_DEPS = {
     "pipeline_velocity":     ["canonical_pipeline.amount", "canonical_pipeline.stage", "canonical_pipeline.close_date", "canonical_pipeline.created_at"],
     "quota_attainment":      ["canonical_pipeline.amount", "canonical_pipeline.stage", "canonical_pipeline.owner"],
     "marketing_roi":         ["canonical_revenue.amount", "canonical_expenses.amount", "canonical_expenses.category"],
-    "product_nps":           [],
-    "feature_adoption":      [],
-    "activation_rate":       ["canonical_customers.created_at", "canonical_customers.lifecycle_stage"],
-    "time_to_value":         ["canonical_customers.created_at"],
-    "health_score":          ["canonical_customers.source_id", "canonical_revenue.customer_id"],
-    "csat":                  [],
-    "ramp_time":             ["canonical_employees.hire_date", "canonical_pipeline.owner", "canonical_pipeline.amount"],
-    "support_volume":        [],
-    "automation_rate":       [],
-    "cash_runway":           ["canonical_revenue.amount", "canonical_expenses.amount"],
-    "current_ratio":         ["canonical_invoices.amount", "canonical_expenses.amount"],
-    "working_capital":       ["canonical_invoices.amount", "canonical_expenses.amount"],
+    "product_nps":           ["canonical_surveys.nps_score"],
+    "feature_adoption":      ["canonical_product_usage.feature_id", "canonical_product_usage.user_id"],
+    "activation_rate":       ["canonical_product_usage.user_id", "canonical_product_usage.activated_at"],
+    "time_to_value":         ["canonical_product_usage.activated_at", "canonical_product_usage.first_value_at"],
+    "health_score":          ["canonical_revenue.amount", "canonical_customers.source_id"],
+    "csat":                  ["canonical_surveys.csat_score"],
+    "ramp_time":             ["canonical_pipeline.close_date", "canonical_pipeline.created_at"],
+    "support_volume":        ["canonical_support.ticket_id", "canonical_revenue.customer_id"],
+    "automation_rate":       ["canonical_support.ticket_id", "canonical_revenue.customer_id"],
+    "cash_runway":           ["canonical_balance_sheet.cash_balance", "canonical_expenses.amount", "canonical_revenue.amount"],
+    "current_ratio":         ["canonical_balance_sheet.current_assets", "canonical_balance_sheet.current_liabilities"],
+    "working_capital":       ["canonical_balance_sheet.current_assets", "canonical_balance_sheet.current_liabilities"],
     "contraction_rate":      ["canonical_revenue.amount", "canonical_revenue.customer_id", "canonical_revenue.period"],
     "payback_period":        ["canonical_revenue.amount", "canonical_expenses.amount"],
-    "organic_traffic":       [],
-    "brand_awareness":       [],
+    "organic_traffic":       ["canonical_marketing.leads", "canonical_marketing.conversions"],
+    "brand_awareness":       ["canonical_marketing.spend", "canonical_marketing.leads"],
 }
 
 
@@ -676,6 +753,28 @@ ELT_PIPELINE_RULES = [
     {"canonical_table": "canonical_employees", "canonical_field": "salary",          "aggregation": "SUM by month",                    "output_kpis": "headcount_eff"},
     {"canonical_table": "canonical_employees", "canonical_field": "hire_date",       "aggregation": "Parse to year-month",             "output_kpis": "ramp_time"},
     {"canonical_table": "canonical_employees", "canonical_field": "status",          "aggregation": "Filter active/employed",          "output_kpis": "headcount_eff, rev_per_employee, billable_utilization"},
+    # canonical_marketing consumption
+    {"canonical_table": "canonical_marketing", "canonical_field": "spend",       "aggregation": "SUM by month",              "output_kpis": "cpl, marketing_roi"},
+    {"canonical_table": "canonical_marketing", "canonical_field": "leads",       "aggregation": "SUM by month",              "output_kpis": "cpl, mql_sql_rate, organic_traffic"},
+    {"canonical_table": "canonical_marketing", "canonical_field": "conversions", "aggregation": "SUM by month",              "output_kpis": "mql_sql_rate"},
+    # canonical_balance_sheet consumption
+    {"canonical_table": "canonical_balance_sheet", "canonical_field": "cash_balance",        "aggregation": "Latest snapshot per month", "output_kpis": "cash_runway"},
+    {"canonical_table": "canonical_balance_sheet", "canonical_field": "current_assets",      "aggregation": "Latest snapshot per month", "output_kpis": "current_ratio, working_capital"},
+    {"canonical_table": "canonical_balance_sheet", "canonical_field": "current_liabilities", "aggregation": "Latest snapshot per month", "output_kpis": "current_ratio, working_capital"},
+    # canonical_time_tracking consumption
+    {"canonical_table": "canonical_time_tracking", "canonical_field": "billable_hours", "aggregation": "SUM by month",      "output_kpis": "billable_utilization"},
+    {"canonical_table": "canonical_time_tracking", "canonical_field": "total_hours",    "aggregation": "SUM by month",      "output_kpis": "billable_utilization"},
+    # canonical_surveys consumption
+    {"canonical_table": "canonical_surveys", "canonical_field": "nps_score",  "aggregation": "AVG by month",         "output_kpis": "product_nps"},
+    {"canonical_table": "canonical_surveys", "canonical_field": "csat_score", "aggregation": "AVG by month",         "output_kpis": "csat"},
+    # canonical_support consumption
+    {"canonical_table": "canonical_support", "canonical_field": "ticket_id",        "aggregation": "COUNT by month",       "output_kpis": "support_volume"},
+    {"canonical_table": "canonical_support", "canonical_field": "resolution_hours", "aggregation": "AVG by month",         "output_kpis": "support_volume"},
+    # canonical_product_usage consumption
+    {"canonical_table": "canonical_product_usage", "canonical_field": "user_id",        "aggregation": "COUNT DISTINCT by month", "output_kpis": "activation_rate, feature_adoption"},
+    {"canonical_table": "canonical_product_usage", "canonical_field": "feature_id",     "aggregation": "COUNT DISTINCT by month", "output_kpis": "feature_adoption"},
+    {"canonical_table": "canonical_product_usage", "canonical_field": "activated_at",   "aggregation": "COUNT by month",          "output_kpis": "activation_rate"},
+    {"canonical_table": "canonical_product_usage", "canonical_field": "first_value_at", "aggregation": "AVG days from activated_at", "output_kpis": "time_to_value"},
 ]
 
 

@@ -106,6 +106,32 @@ _CANONICAL_SCHEMAS = {
         "source": None, "source_id": None, "channel": None, "spend": None,
         "currency": "USD", "period": None, "leads": None, "conversions": None,
     },
+    "balance_sheet": {
+        "source": None, "source_id": None, "period": None,
+        "cash_balance": None, "current_assets": None,
+        "current_liabilities": None, "total_assets": None,
+        "total_liabilities": None, "currency": "USD",
+    },
+    "time_tracking": {
+        "source": None, "source_id": None, "worker_id": None,
+        "period": None, "billable_hours": None, "total_hours": None,
+        "time_type": None,
+    },
+    "product_usage": {
+        "source": None, "source_id": None, "user_id": None,
+        "period": None, "feature_id": None, "usage_count": None,
+        "activated_at": None, "first_value_at": None,
+    },
+    "surveys": {
+        "source": None, "source_id": None, "respondent_id": None,
+        "period": None, "nps_score": None, "csat_score": None,
+        "survey_type": None,
+    },
+    "support": {
+        "source": None, "source_id": None, "ticket_id": None,
+        "period": None, "resolution_hours": None, "effort_score": None,
+        "status": None, "customer_id": None,
+    },
 }
 
 
