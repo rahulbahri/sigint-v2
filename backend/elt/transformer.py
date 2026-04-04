@@ -8,9 +8,12 @@ User-confirmed mappings always take precedence over auto-detection.
 from __future__ import annotations
 
 import json
+import logging
 import re
 from datetime import datetime, timezone
 from typing import Any
+
+_logger = logging.getLogger(__name__)
 
 
 # ── Field name heuristics for auto-mapping ────────────────────────────────────
@@ -359,6 +362,44 @@ class Transformer:
             )
         """)
         self._conn.commit()
+
+        # ── Schema migration: detect and add missing columns ──────────────
+        _real_cols = ("amount", "salary", "price", "spend", "probability",
+                      "leads", "conversions", "cash_balance", "current_assets",
+                      "current_liabilities", "total_assets", "total_liabilities",
+                      "billable_hours", "total_hours", "usage_count",
+                      "nps_score", "csat_score", "resolution_hours", "effort_score")
+        try:
+            existing_cols = set()
+            try:
+                # SQLite
+                for row in self._conn.execute(
+                    f"PRAGMA table_info(canonical_{entity_type})"
+                ).fetchall():
+                    existing_cols.add(row[1])
+            except Exception:
+                # PostgreSQL fallback
+                for row in self._conn.execute(
+                    "SELECT column_name FROM information_schema.columns "
+                    "WHERE table_name = %s", [f"canonical_{entity_type}"]
+                ).fetchall():
+                    existing_cols.add(row[0])
+
+            migrated = 0
+            for col in schema.keys():
+                if col not in existing_cols:
+                    col_type = "REAL" if col in _real_cols else "TEXT"
+                    self._conn.execute(
+                        f"ALTER TABLE canonical_{entity_type} ADD COLUMN {col} {col_type}"
+                    )
+                    migrated += 1
+                    _logger.info("[Schema Migration] Added column %s (%s) to canonical_%s",
+                                 col, col_type, entity_type)
+            if migrated:
+                self._conn.commit()
+        except Exception as exc:
+            _logger.warning("[Schema Migration] Could not migrate canonical_%s: %s",
+                            entity_type, exc)
 
     def _ensure_mappings_table(self) -> None:
         self._conn.execute("""

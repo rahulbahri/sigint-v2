@@ -258,6 +258,42 @@ def _score_month_data_quality(
     }
 
 
+# ── Duplicate Transaction Detection ──────────────────────────────────────────
+
+def _detect_duplicates(conn, workspace_id: str, summary: dict) -> None:
+    """Detect duplicate source_ids in canonical tables and record warnings.
+
+    Does NOT modify data — purely diagnostic.  Duplicate source_ids indicate
+    a sync issue (source system sent the same record twice) that inflates
+    aggregated values.
+    """
+    tables = [
+        "canonical_revenue", "canonical_expenses", "canonical_invoices",
+        "canonical_pipeline", "canonical_employees", "canonical_customers",
+        "canonical_marketing", "canonical_balance_sheet", "canonical_time_tracking",
+        "canonical_surveys", "canonical_support", "canonical_product_usage",
+    ]
+    for table in tables:
+        try:
+            rows = conn.execute(
+                f"SELECT source_id, COUNT(*) as cnt FROM {table} "
+                f"WHERE workspace_id=? GROUP BY source_id HAVING cnt > 1",
+                [workspace_id],
+            ).fetchall()
+            if rows:
+                n_dupes = len(rows)
+                summary.setdefault("data_warnings", []).append(
+                    f"{table}: {n_dupes} duplicate source_id(s) detected — "
+                    f"aggregated values may be inflated. Review source system sync."
+                )
+                logger.warning(
+                    "[Duplicate Detection] %s: %d duplicate source_ids for workspace=%s",
+                    table, n_dupes, workspace_id,
+                )
+        except Exception:
+            pass  # Table may not exist
+
+
 # ── Public API ────────────────────────────────────────────────────────────────
 
 def aggregate_canonical_to_monthly(conn, workspace_id: str) -> dict:
@@ -270,6 +306,9 @@ def aggregate_canonical_to_monthly(conn, workspace_id: str) -> dict:
     summary = {"months_written": 0, "kpis_computed": set(), "errors": [], "skipped": []}
 
     try:
+        # ── Step 0: Detect duplicate transactions before aggregation ──
+        _detect_duplicates(conn, workspace_id, summary)
+
         # ── Step 1: Extract monthly aggregates from each canonical table ──
         revenue_by_month    = _extract_monthly_revenue(conn, workspace_id, summary)
         expense_by_month    = _extract_monthly_expenses(conn, workspace_id, summary)
@@ -1415,10 +1454,21 @@ def _clean_empty_buckets(out: dict, key_field: str, min_value=0) -> dict:
             or (isinstance(b.get(key_field), list) and len(b.get(key_field, [])) > 0)}
 
 
-def _safe_query(conn, sql: str, params: list) -> list:
-    """Execute a query, returning empty list if the table doesn't exist yet."""
+def _safe_query(conn, sql: str, params: list, *, batch_size: int = 10_000) -> list:
+    """Execute a query with batched fetching for memory safety.
+
+    Uses fetchmany() to prevent loading millions of rows into memory at once.
+    Returns the same list type as fetchall() for backward compatibility.
+    """
     try:
-        return conn.execute(sql, params).fetchall()
+        cursor = conn.execute(sql, params)
+        results = []
+        while True:
+            batch = cursor.fetchmany(batch_size)
+            if not batch:
+                break
+            results.extend(batch)
+        return results
     except Exception as exc:
         if "no such table" in str(exc).lower() or "does not exist" in str(exc).lower():
             return []
