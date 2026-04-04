@@ -1203,7 +1203,7 @@ def export_kpi_audit(request: Request):
     from openpyxl.utils import get_column_letter
     from core.health_score import compute_health_score
 
-    workspace_id = _require_workspace(request)
+    workspace_id = _get_workspace(request)
     conn = get_db()
 
     # ── Gather all data ────────────────────────────────────────────────────
