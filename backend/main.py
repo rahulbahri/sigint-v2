@@ -274,6 +274,99 @@ def health():
 
 # ── Database diagnostic endpoint ─────────────────────────────────────────────
 
+@app.get("/api/seed-step", tags=["System"])
+def seed_step(request: Request, step: str = "test", workspace: str = "axiomsync.ai"):
+    """Run a single seed step synchronously and return the result or error.
+    Steps: test, wipe, revenue, customers, expenses, pipeline, invoices,
+           employees, marketing, balance, time, surveys, support, usage,
+           aggregate, targets, settings, projections
+    """
+    import traceback, random, sys
+    sys.path.insert(0, os.path.join(os.path.dirname(__file__)))
+    from scripts.seed_demo_data import (
+        _ensure_canonical_tables, _mrr_trajectory,
+        seed_revenue, seed_customers, seed_expenses, seed_pipeline,
+        seed_invoices, seed_employees, seed_marketing, seed_balance_sheet,
+        seed_time_tracking, seed_surveys, seed_support, seed_product_usage,
+        seed_targets, seed_company_settings, seed_projections,
+    )
+    from scripts import seed_demo_data
+    from elt.kpi_aggregator import aggregate_canonical_to_monthly
+
+    seed_demo_data.WORKSPACE = workspace
+    random.seed(42)
+
+    conn = get_db()
+    try:
+        if step == "test":
+            conn.execute("SELECT 1")
+            return {"step": "test", "status": "ok", "db": "connected"}
+
+        if step == "tables":
+            _ensure_canonical_tables(conn)
+            return {"step": "tables", "status": "ok"}
+
+        if step == "wipe":
+            for t in ["monthly_data", "projection_monthly_data", "kpi_targets",
+                      "company_settings",
+                      "canonical_revenue", "canonical_expenses", "canonical_customers",
+                      "canonical_pipeline", "canonical_invoices", "canonical_employees",
+                      "canonical_marketing", "canonical_balance_sheet",
+                      "canonical_time_tracking", "canonical_surveys",
+                      "canonical_support", "canonical_product_usage"]:
+                try:
+                    conn.execute(f"DELETE FROM {t} WHERE workspace_id=?", [workspace])
+                except Exception as e:
+                    return {"step": "wipe", "status": "error", "table": t, "error": str(e)}
+            conn.commit()
+            return {"step": "wipe", "status": "ok"}
+
+        mrr = _mrr_trajectory()
+        step_map = {
+            "revenue": seed_revenue, "customers": seed_customers,
+            "expenses": seed_expenses, "pipeline": seed_pipeline,
+            "invoices": seed_invoices, "employees": seed_employees,
+            "marketing": seed_marketing, "balance": seed_balance_sheet,
+            "time": seed_time_tracking, "surveys": seed_surveys,
+            "support": seed_support, "usage": seed_product_usage,
+        }
+
+        if step in step_map:
+            step_map[step](conn, mrr)
+            conn.commit()
+            return {"step": step, "status": "ok"}
+
+        if step == "aggregate":
+            r = aggregate_canonical_to_monthly(conn, workspace)
+            return {"step": "aggregate", "status": "ok",
+                    "months": r["months_written"], "kpis": len(r["kpis_computed"]),
+                    "errors": r.get("errors", [])}
+
+        if step == "targets":
+            seed_targets(conn); conn.commit()
+            return {"step": "targets", "status": "ok"}
+
+        if step == "settings":
+            seed_company_settings(conn); conn.commit()
+            return {"step": "settings", "status": "ok"}
+
+        if step == "projections":
+            seed_projections(conn, _mrr_trajectory()); conn.commit()
+            return {"step": "projections", "status": "ok"}
+
+        return {"step": step, "status": "error", "error": f"Unknown step: {step}"}
+
+    except Exception as e:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        return {"step": step, "status": "error", "error": str(e),
+                "traceback": traceback.format_exc()}
+    finally:
+        conn.close()
+
+
 @app.get("/api/db-status", tags=["System"])
 def db_status(request: Request):
     """Shows what data exists in the production database. No auth required."""
