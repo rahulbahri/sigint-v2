@@ -545,7 +545,54 @@ def get_kpi_detail(kpi_key: str, request: Request):
     # Data requirements
     data_requirements = DATA_REQUIREMENTS.get(kpi_key)
 
+    # Data-driven root cause analysis (replaces static templates)
+    from core.narrative_engine import analyze_root_causes as _analyze_rca
+
+    # Build time_series dict for narrative engine
+    _ts_for_rca = {}
+    _dirs_for_rca = {}
+    for k, entries in kpi_monthly_all.items():
+        sorted_entries = sorted(entries, key=lambda x: x["period"])
+        _ts_for_rca[k] = [e["value"] for e in sorted_entries if isinstance(e.get("value"), (int, float))]
+    # Load directions from targets
+    try:
+        for trow in conn.execute("SELECT kpi_key, direction FROM kpi_targets WHERE workspace_id=?", [workspace_id]).fetchall():
+            _dirs_for_rca[trow["kpi_key"] if isinstance(trow, dict) else trow[0]] = (trow["direction"] if isinstance(trow, dict) else trow[1]) or "higher"
+    except Exception:
+        pass
+
+    # Load ontology edges
+    _edges_for_rca = {}
+    try:
+        for er in conn.execute("SELECT source, target, granger_pval, confidence_tier FROM ontology_edges").fetchall():
+            ek = f"{er['source']}->{er['target']}" if isinstance(er, dict) else f"{er[0]}->{er[1]}"
+            _edges_for_rca[ek] = {
+                "granger_pval": er["granger_pval"] if isinstance(er, dict) else er[2],
+                "confidence_tier": er["confidence_tier"] if isinstance(er, dict) else er[3],
+            }
+    except Exception:
+        pass
+
     conn.close()
+
+    rca = _analyze_rca(kpi_key, {}, _ts_for_rca, {}, _dirs_for_rca, _edges_for_rca)
+
+    # Use data-driven root causes if available, fall back to static templates
+    if rca.get("data_grounded") and rca.get("confirmed_causes"):
+        driven_causes = [
+            f"{c['name']} deteriorated {abs(c['delta_pct']):.1f}% "
+            f"({'statistically confirmed' if c['confidence'] == 'granger_confirmed' else 'directionally supported'})"
+            for c in rca["confirmed_causes"]
+        ]
+        # Prepend data-driven causes, append static as fallback context
+        final_root_causes = driven_causes + [f"[Template] {c}" for c in causation.get("root_causes", [])[:1]]
+    else:
+        final_root_causes = causation.get("root_causes", [])
+
+    if rca.get("contextual_action"):
+        final_actions = [rca["contextual_action"]] + actions[:2]
+    else:
+        final_actions = actions
 
     return {
         "kpi_key":        kpi_key,
@@ -559,9 +606,10 @@ def get_kpi_detail(kpi_key: str, request: Request):
         "pct_of_target":  pct_of_target,
         "status":         status,
         "time_series":    time_series,
-        "root_causes":       causation.get("root_causes", []),
+        "root_causes":       final_root_causes,
         "downstream_impact": causation.get("downstream_impact", []),
-        "corrective_actions": actions,
+        "corrective_actions": final_actions,
+        "root_cause_analysis": rca,
         "benchmarks":        benchmark,
         "benchmark_position": bench_pos,
         "causal_chain":      causal_chain,
