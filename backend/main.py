@@ -103,6 +103,122 @@ for _router_mod in [
 ]:
     app.include_router(_router_mod.router)
 
+# ── Auto-seed on startup if database is empty ────────────────────────────────
+# Runs at boot time (not in an HTTP request), so no timeout constraint.
+# Self-heals after deploys, DB wipes, or fresh PostgreSQL instances.
+
+import threading as _threading  # noqa: E402
+
+def _auto_seed_if_empty():
+    """Check if the default workspace has data. If not, seed it."""
+    import logging, random, traceback
+    log = logging.getLogger("auto_seed")
+
+    _DEFAULT_WS = os.environ.get("DEFAULT_WORKSPACE", "axiomsync.ai")
+    conn = None
+    try:
+        conn = get_db()
+        # Check if monthly_data has any rows for the default workspace
+        try:
+            row = conn.execute(
+                "SELECT COUNT(*) FROM monthly_data WHERE workspace_id=?", [_DEFAULT_WS]
+            ).fetchone()
+            count = row[0] if not isinstance(row, dict) else list(row.values())[0]
+        except Exception:
+            count = 0  # Table may not exist yet
+
+        if count > 10:
+            log.info("[AUTO_SEED] Database has %d months for %s — skipping seed.", count, _DEFAULT_WS)
+            return
+
+        log.info("[AUTO_SEED] Database empty for %s — starting seed...", _DEFAULT_WS)
+
+        import sys
+        sys.path.insert(0, os.path.join(os.path.dirname(__file__)))
+        from scripts.seed_demo_data import (
+            _ensure_canonical_tables, _mrr_trajectory,
+            seed_revenue, seed_customers, seed_expenses, seed_pipeline,
+            seed_invoices, seed_employees, seed_marketing, seed_balance_sheet,
+            seed_time_tracking, seed_surveys, seed_support, seed_product_usage,
+            seed_targets, seed_company_settings, seed_projections,
+        )
+        from scripts import seed_demo_data
+        from elt.kpi_aggregator import aggregate_canonical_to_monthly
+
+        seed_demo_data.WORKSPACE = _DEFAULT_WS
+        random.seed(42)
+
+        _ensure_canonical_tables(conn)
+
+        # Wipe any partial data
+        for table in ["monthly_data", "projection_monthly_data", "kpi_targets",
+                      "company_settings",
+                      "canonical_revenue", "canonical_expenses", "canonical_customers",
+                      "canonical_pipeline", "canonical_invoices", "canonical_employees",
+                      "canonical_marketing", "canonical_balance_sheet",
+                      "canonical_time_tracking", "canonical_surveys",
+                      "canonical_support", "canonical_product_usage"]:
+            try:
+                conn.execute(f"DELETE FROM {table} WHERE workspace_id=?", [_DEFAULT_WS])
+            except Exception:
+                pass
+        conn.commit()
+
+        mrr = _mrr_trajectory()
+        seed_fns = [
+            ("revenue", seed_revenue), ("customers", seed_customers),
+            ("expenses", seed_expenses), ("pipeline", seed_pipeline),
+            ("invoices", seed_invoices), ("employees", seed_employees),
+            ("marketing", seed_marketing), ("balance_sheet", seed_balance_sheet),
+            ("time_tracking", seed_time_tracking), ("surveys", seed_surveys),
+            ("support", seed_support), ("product_usage", seed_product_usage),
+        ]
+        for name, fn in seed_fns:
+            log.info("[AUTO_SEED] Seeding %s...", name)
+            try:
+                fn(conn, mrr)
+                conn.commit()
+            except Exception as e:
+                log.error("[AUTO_SEED] FAILED on %s: %s", name, e)
+                traceback.print_exc()
+                try:
+                    conn.rollback()
+                except Exception:
+                    pass
+                return  # Stop on first failure
+
+        log.info("[AUTO_SEED] Running KPI aggregator...")
+        agg = aggregate_canonical_to_monthly(conn, _DEFAULT_WS)
+        log.info("[AUTO_SEED] Aggregator: %d months, %d KPIs", agg["months_written"], len(agg["kpis_computed"]))
+
+        seed_targets(conn); conn.commit()
+        seed_company_settings(conn); conn.commit()
+        seed_projections(conn, mrr); conn.commit()
+
+        log.info("[AUTO_SEED] COMPLETE — %d months, %d KPIs for %s",
+                 agg["months_written"], len(agg["kpis_computed"]), _DEFAULT_WS)
+
+    except Exception as e:
+        print(f"[AUTO_SEED] FAILED: {e}")
+        traceback.print_exc()
+        if conn:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+    finally:
+        if conn:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+
+# Run auto-seed in a background thread at startup (non-blocking)
+_seed_thread = _threading.Thread(target=_auto_seed_if_empty, daemon=True)
+_seed_thread.start()
+
+
 # ── Health endpoint ───────────────────────────────────────────────────────────
 
 from datetime import datetime  # noqa: E402
@@ -114,6 +230,49 @@ def health():
         "timestamp": datetime.utcnow().isoformat(),
         "sentry": "enabled" if _SENTRY_DSN else "disabled",
     }
+
+
+# ── Database diagnostic endpoint ─────────────────────────────────────────────
+
+@app.get("/api/db-status", tags=["System"])
+def db_status():
+    """Shows what data exists in the production database. No auth required."""
+    conn = get_db()
+    try:
+        counts = {}
+        for table in ["monthly_data", "kpi_targets", "company_settings",
+                      "canonical_revenue", "canonical_expenses", "canonical_customers",
+                      "canonical_pipeline", "canonical_invoices", "canonical_employees"]:
+            try:
+                r = conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()
+                counts[table] = r[0] if not isinstance(r, dict) else list(r.values())[0]
+            except Exception as e:
+                counts[table] = f"error: {e}"
+
+        # Latest month
+        try:
+            r = conn.execute("SELECT year, month FROM monthly_data ORDER BY year DESC, month DESC LIMIT 1").fetchone()
+            latest = f"{r[0]}-{r[1]:02d}" if r else "none"
+        except Exception:
+            latest = "error"
+
+        # Workspace breakdown
+        try:
+            rows = conn.execute("SELECT workspace_id, COUNT(*) as c FROM monthly_data GROUP BY workspace_id").fetchall()
+            workspaces = {str(r[0]): r[1] for r in rows}
+        except Exception:
+            workspaces = {}
+
+        from core.database import _USE_PG, DATABASE_URL
+        return {
+            "db_type": "postgresql" if _USE_PG else "sqlite",
+            "db_url": DATABASE_URL[:30] + "..." if _USE_PG and DATABASE_URL else "local",
+            "latest_month": latest,
+            "workspaces": workspaces,
+            "table_counts": counts,
+        }
+    finally:
+        conn.close()
 
 
 # ── Global error handler ──────────────────────────────────────────────────────
