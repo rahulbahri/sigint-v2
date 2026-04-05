@@ -1624,7 +1624,8 @@ def reseed_canonical(request: Request):
     import threading
 
     def _run_seed(ws_id):
-        import sys, os, random as _r
+        import sys, os, logging, random as _r, traceback
+        _log = logging.getLogger("reseed")
         sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
         from scripts.seed_demo_data import (
             _ensure_canonical_tables, _mrr_trajectory,
@@ -1639,10 +1640,13 @@ def reseed_canonical(request: Request):
         seed_demo_data.WORKSPACE = ws_id
         _r.seed(42)
 
+        _log.info("[RESEED] Starting for workspace=%s", ws_id)
         conn = get_db()
         try:
+            _log.info("[RESEED] Ensuring canonical tables...")
             _ensure_canonical_tables(conn)
 
+            _log.info("[RESEED] Wiping old data...")
             for table in ["monthly_data", "projection_monthly_data", "kpi_targets",
                           "company_settings",
                           "canonical_revenue", "canonical_expenses", "canonical_customers",
@@ -1652,29 +1656,50 @@ def reseed_canonical(request: Request):
                           "canonical_support", "canonical_product_usage"]:
                 try:
                     conn.execute(f"DELETE FROM {table} WHERE workspace_id=?", [ws_id])
-                except Exception:
-                    pass
+                except Exception as e:
+                    _log.warning("[RESEED] Skip delete %s: %s", table, e)
             conn.commit()
 
+            _log.info("[RESEED] Generating MRR trajectory...")
             mrr = _mrr_trajectory()
-            for fn in [seed_revenue, seed_customers, seed_expenses, seed_pipeline,
-                       seed_invoices, seed_employees, seed_marketing, seed_balance_sheet,
-                       seed_time_tracking, seed_surveys, seed_support, seed_product_usage]:
+
+            seed_fns = [
+                ("revenue", seed_revenue), ("customers", seed_customers),
+                ("expenses", seed_expenses), ("pipeline", seed_pipeline),
+                ("invoices", seed_invoices), ("employees", seed_employees),
+                ("marketing", seed_marketing), ("balance_sheet", seed_balance_sheet),
+                ("time_tracking", seed_time_tracking), ("surveys", seed_surveys),
+                ("support", seed_support), ("product_usage", seed_product_usage),
+            ]
+            for name, fn in seed_fns:
+                _log.info("[RESEED] Seeding %s...", name)
                 fn(conn, mrr)
                 conn.commit()
 
-            aggregate_canonical_to_monthly(conn, ws_id)
+            _log.info("[RESEED] Running KPI aggregator...")
+            agg = aggregate_canonical_to_monthly(conn, ws_id)
+            _log.info("[RESEED] Aggregator: %d months, %d KPIs", agg["months_written"], len(agg["kpis_computed"]))
+
+            _log.info("[RESEED] Seeding targets, settings, projections...")
             seed_targets(conn); conn.commit()
             seed_company_settings(conn); conn.commit()
             seed_projections(conn, mrr); conn.commit()
 
-            _audit(ws_id, "reseed_canonical", "Background reseed complete", workspace_id=ws_id)
+            _log.info("[RESEED] COMPLETE for workspace=%s: %d months, %d KPIs",
+                       ws_id, agg["months_written"], len(agg["kpis_computed"]))
+            _audit(ws_id, "reseed_canonical",
+                   f"Reseeded {agg['months_written']} months, {len(agg['kpis_computed'])} KPIs",
+                   workspace_id=ws_id)
         except Exception as exc:
+            _log.error("[RESEED] FAILED for workspace=%s: %s\n%s", ws_id, exc, traceback.format_exc())
             try:
                 conn.rollback()
             except Exception:
                 pass
-            _audit(ws_id, "reseed_error", str(exc)[:200], workspace_id=ws_id)
+            try:
+                _audit(ws_id, "reseed_error", str(exc)[:200], workspace_id=ws_id)
+            except Exception:
+                pass
         finally:
             try:
                 conn.close()

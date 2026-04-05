@@ -34,14 +34,14 @@ random.seed(42)  # Reproducible
 
 
 def _ensure_canonical_tables(conn):
-    """Create all canonical tables using the transformer schema definitions."""
+    """Create all canonical tables using the transformer schema definitions.
+    Works on both SQLite and PostgreSQL — the conn wrapper handles DDL translation."""
     from elt.transformer import _CANONICAL_SCHEMAS
 
     real_cols = {"amount", "salary", "price", "spend", "probability", "leads",
                  "conversions", "cash_balance", "current_assets", "current_liabilities",
                  "total_assets", "total_liabilities", "billable_hours", "total_hours",
                  "usage_count", "nps_score", "csat_score", "resolution_hours", "effort_score"}
-    # These are added as template columns, so exclude from schema cols
     template_cols = {"id", "workspace_id", "raw_id", "created_at", "updated_at"}
 
     for entity_type, schema in _CANONICAL_SCHEMAS.items():
@@ -50,16 +50,21 @@ def _ensure_canonical_tables(conn):
             f"{col} REAL" if col in real_cols else f"{col} TEXT"
             for col in schema_cols
         )
-        conn.execute(f"""
-            CREATE TABLE IF NOT EXISTS canonical_{entity_type} (
-                id           INTEGER PRIMARY KEY AUTOINCREMENT,
-                workspace_id TEXT NOT NULL,
-                {cols_sql},
-                raw_id       TEXT,
-                created_at   TEXT DEFAULT CURRENT_TIMESTAMP,
-                updated_at   TEXT DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
+        # Write as SQLite DDL — the _PGConn.execute() wrapper auto-translates
+        # AUTOINCREMENT → SERIAL, CURRENT_TIMESTAMP → NOW() for PostgreSQL
+        try:
+            conn.execute(f"""
+                CREATE TABLE IF NOT EXISTS canonical_{entity_type} (
+                    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                    workspace_id TEXT NOT NULL,
+                    {cols_sql},
+                    raw_id       TEXT,
+                    created_at   TEXT DEFAULT CURRENT_TIMESTAMP,
+                    updated_at   TEXT DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+        except Exception as e:
+            print(f"  [WARN] Table canonical_{entity_type}: {e}")
     conn.commit()
 
 # ── Monthly growth model ─────────────────────────────────────────────────────
@@ -519,12 +524,11 @@ def seed_targets(conn):
     for key, (val, direction, unit) in targets.items():
         try:
             conn.execute(
-                "INSERT OR REPLACE INTO kpi_targets (kpi_key, target_value, direction, unit, workspace_id) "
+                "INSERT INTO kpi_targets (kpi_key, target_value, direction, unit, workspace_id) "
                 "VALUES (?,?,?,?,?)",
                 [key, val, direction, unit, WORKSPACE],
             )
         except Exception:
-            # Fallback: update if exists
             conn.execute(
                 "UPDATE kpi_targets SET target_value=?, direction=?, unit=? "
                 "WHERE kpi_key=? AND workspace_id=?",
