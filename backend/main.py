@@ -250,8 +250,11 @@ def health():
 # ── Database diagnostic endpoint ─────────────────────────────────────────────
 
 @app.get("/api/db-status", tags=["System"])
-def db_status():
+def db_status(request: Request):
     """Shows what data exists in the production database. No auth required."""
+    # Show what workspace the current user resolves to
+    from core.deps import _get_workspace
+    user_workspace = _get_workspace(request)
     conn = get_db()
     try:
         counts = {}
@@ -278,10 +281,21 @@ def db_status():
         except Exception:
             workspaces = {}
 
+        # Check what workspace the user would get from their JWT
+        user_count = 0
+        if user_workspace:
+            try:
+                r = conn.execute("SELECT COUNT(*) FROM monthly_data WHERE workspace_id=?", [user_workspace]).fetchone()
+                user_count = r[0] if not isinstance(r, dict) else list(r.values())[0]
+            except Exception:
+                pass
+
         from core.database import _USE_PG, DATABASE_URL
         return {
             "db_type": "postgresql" if _USE_PG else "sqlite",
             "db_url": DATABASE_URL[:30] + "..." if _USE_PG and DATABASE_URL else "local",
+            "user_workspace": user_workspace or "(not authenticated)",
+            "user_workspace_months": user_count,
             "latest_month": latest,
             "workspaces": workspaces,
             "table_counts": counts,

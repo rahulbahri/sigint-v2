@@ -114,7 +114,7 @@ def fingerprint(request: Request, year: Optional[int] = None):
 @router.get("/api/summary", tags=["Analytics"])
 def summary(request: Request, year: Optional[int] = None):
     """High-level dashboard summary: upload count, KPI coverage, status breakdown."""
-    workspace_id = _require_workspace(request)
+    workspace_id = _get_workspace(request)
     conn = get_db()
     uploads = conn.execute("SELECT COUNT(*) as c FROM uploads WHERE workspace_id=?", [workspace_id]).fetchone()["c"]
     # Filter by year when provided so status counts match the fingerprint tab
