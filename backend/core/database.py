@@ -232,14 +232,10 @@ class _PGConn:
         self._r.rollback()
 
     def close(self):
-        if self._pool:
-            try:
-                self._r.reset()  # Roll back uncommitted work
-            except Exception:
-                pass
-            self._pool.putconn(self._r)
-        else:
+        try:
             self._r.close()
+        except Exception:
+            pass
 
     def __enter__(self):
         return self
@@ -259,38 +255,15 @@ class _PGConn:
         return None
 
 
-# ── Connection Pooling ────────────────────────────────────────────────────────
-
-import threading as _threading
-
-_pg_pool = None
-_pg_pool_lock = _threading.Lock()
-
-
-def _get_pg_pool():
-    """Lazy-init a thread-safe PostgreSQL connection pool."""
-    global _pg_pool
-    if _pg_pool is None:
-        with _pg_pool_lock:
-            if _pg_pool is None and _USE_PG:
-                from psycopg2.pool import ThreadedConnectionPool
-                _pg_pool = ThreadedConnectionPool(
-                    minconn=2, maxconn=20,
-                    dsn=DATABASE_URL, connect_timeout=10,
-                )
-    return _pg_pool
-
-
 # ── Public DB factory ─────────────────────────────────────────────────────────
+# Direct connections (no pool). Neon PostgreSQL is serverless and closes idle
+# connections, making traditional connection pools unreliable. Each get_db()
+# creates a fresh connection. Neon's built-in connection pooler (pgbouncer)
+# handles multiplexing at the infrastructure level.
 
 def get_db():
     if _USE_PG:
         try:
-            pool = _get_pg_pool()
-            if pool:
-                raw_conn = pool.getconn()
-                return _PGConn(raw_conn, pool=pool)
-            # Fallback: direct connection if pool failed
             conn = psycopg2.connect(DATABASE_URL, connect_timeout=10)
             return _PGConn(conn)
         except Exception as _pg_err:
