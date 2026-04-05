@@ -290,6 +290,26 @@ def db_status(request: Request):
             except Exception:
                 pass
 
+        # Sample a recent month's data_json to see what KPIs exist
+        sample_kpis = []
+        sample_raw = ""
+        try:
+            r = conn.execute(
+                "SELECT data_json FROM monthly_data WHERE workspace_id=? ORDER BY year DESC, month DESC LIMIT 1",
+                [user_workspace or list(workspaces.keys())[0] if workspaces else ""]
+            ).fetchone()
+            if r:
+                raw = r[0] if not isinstance(r, dict) else r["data_json"]
+                sample_raw = str(raw)[:500]
+                import json as _j
+                try:
+                    d = _j.loads(raw) if isinstance(raw, str) else {}
+                    sample_kpis = list(d.keys())[:20]
+                except Exception:
+                    sample_kpis = [f"PARSE_ERROR: type={type(raw).__name__}"]
+        except Exception as e:
+            sample_kpis = [f"QUERY_ERROR: {e}"]
+
         from core.database import _USE_PG, DATABASE_URL
         return {
             "db_type": "postgresql" if _USE_PG else "sqlite",
@@ -299,6 +319,8 @@ def db_status(request: Request):
             "latest_month": latest,
             "workspaces": workspaces,
             "table_counts": counts,
+            "sample_kpis": sample_kpis,
+            "sample_raw": sample_raw,
         }
     finally:
         conn.close()
