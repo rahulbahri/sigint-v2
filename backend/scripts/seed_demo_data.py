@@ -318,7 +318,14 @@ def seed_invoices(conn, mrr_curve):
             row_id += 1
             amount = round(mrr / n_invoices * _jitter(1.0, 0.3), 2)
             issue_day = random.randint(1, 20)
-            due_day = min(28, issue_day + 30)
+            # Due date 30-60 days after issue (next month or month after)
+            terms_days = random.choice([30, 30, 45, 60])
+            due_m = m + (terms_days // 30)
+            due_y = y
+            if due_m > 12:
+                due_m -= 12
+                due_y += 1
+            due_day = min(28, issue_day + (terms_days % 30))
             # AR aging: mostly paid, some overdue (worse in 2025 Q2-Q3)
             if y == 2025 and 4 <= m <= 9:
                 paid_prob = 0.65
@@ -327,7 +334,7 @@ def seed_invoices(conn, mrr_curve):
             status = "paid" if random.random() < paid_prob else random.choice(["outstanding", "overdue"])
             rows.append(
                 ["seed", f"inv_{row_id}", amount, "USD", f"cust_{random.randint(1,150):04d}",
-                 _date(y, m, issue_day), _date(y, m, due_day), status,
+                 _date(y, m, issue_day), _date(due_y, due_m, due_day), status,
                  _period(y, m), WORKSPACE],
             )
 
@@ -344,8 +351,8 @@ def seed_employees(conn, mrr_curve):
     departments = ["Engineering", "Sales", "Marketing", "CS", "G&A", "Product"]
     emp_id = 0
     for (y, m), mrr in sorted(mrr_curve.items()):
-        target_hc = max(2, int(mrr / 20000))
-        n_new = max(0, min(4, target_hc - emp_id))
+        target_hc = max(8, int(mrr / 8000))  # 1 employee per $8K MRR
+        n_new = max(0, min(6, target_hc - emp_id))
         for i in range(n_new):
             emp_id += 1
             dept = random.choice(departments)

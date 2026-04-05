@@ -81,12 +81,12 @@ _KPI_SPECIFIC_BOUNDS: dict[str, tuple[Optional[float], Optional[float], str]] = 
     "burn_multiple":       (-50, 50,       "Burn multiple of {value:.1f}x is extreme — near-zero net new ARR as denominator. Verify ARR is changing meaningfully MoM."),
     "cac_payback":         (0, 120,        "CAC payback of {value:.0f} months exceeds 10 years — very low ARPU or near-zero gross margin. Verify revenue per customer."),
     "payback_period":      (0, 120,        "Payback period of {value:.0f} months exceeds 10 years — same root cause as CAC payback."),
-    "sales_efficiency":    (0, 50,         "Sales efficiency of {value:.1f}x is extreme — very low S&M spend relative to ARR. Verify expense categorisation."),
+    "sales_efficiency":    (0, 5,          "Sales efficiency of {value:.1f}x is extreme (typical 0.3-3x) — S&M spend is very low relative to ARR. Verify expense categories include all sales and marketing costs."),
     "operating_leverage":  (-10, 10,       "Operating leverage of {value:.1f}x — near-zero OpEx change as denominator. Requires meaningful MoM expense variation."),
     "cash_runway":         (0, 240,        "Cash runway of {value:.0f} months exceeds 20 years — verify burn rate calculation."),
     "growth_efficiency":   (-200, 200,     "Growth efficiency of {value:.1f}x — very small burn multiple as denominator. Verify expense data completeness."),
     "rev_per_employee":    (0, 2_000_000,  "Rev/employee of ${value:,.0f} exceeds $2M — verify headcount data is complete in canonical_employees."),
-    "headcount_eff":       (0, 500_000,    "Headcount efficiency of ${value:,.0f}/mo — verify canonical_employees has all active staff."),
+    "headcount_eff":       (0, 50_000,     "Headcount efficiency of ${value:,.0f}/mo exceeds $50K — verify canonical_employees has cumulative headcount, not just new hires."),
     "ar_turnover":         (0, 365,        "AR turnover of {value:.0f}x — DSO below 1 day is unusual. Verify invoice issue_date and due_date fields."),
     "activation_rate":     (0, 100,        "Activation rate of {value:.0f}% exceeds 100% — multiple activations per user counted. Use one record per user."),
     "pipeline_velocity":   (0, 50_000,     "Pipeline velocity of ${value:,.0f}/day — verify deal amounts and duration data."),
@@ -705,7 +705,6 @@ def _extract_monthly_invoices(conn, workspace_id: str, summary: dict) -> dict:
             summary["skipped"].append("canonical_invoices: no rows")
             return {}
 
-        now = datetime.utcnow()
         for r in rows:
             amount = _safe_float(r.get("amount") if isinstance(r, dict) else r[0])
             issue_date = r.get("issue_date") if isinstance(r, dict) else r[1]
@@ -729,15 +728,23 @@ def _extract_monthly_invoices(conn, workspace_id: str, summary: dict) -> dict:
             else:
                 bucket["outstanding_total"] += abs_amount
 
-            # Compute days outstanding
+            # Compute days outstanding using PERIOD-RELATIVE dates
+            # Use (due_date - issue_date) as the payment term for DSO,
+            # NOT (now - issue_date) which inflates historical invoices.
             issued = _parse_date(issue_date)
             due = _parse_date(due_date) if due_date else None
-            if issued:
-                days_out = (now - issued).days
-                bucket["days_outstanding_sum"] += max(days_out, 0)
-                if due and now > due and status not in ("paid", "settled", "closed"):
+            if issued and due:
+                # Payment terms: how many days between issue and due
+                days_out = max((due - issued).days, 1)
+                bucket["days_outstanding_sum"] += days_out
+                # Overdue: status is not paid AND due_date is in the past relative to period end
+                period_end = datetime(ym[0], ym[1], 28)  # Approximate month end
+                if period_end > due and status not in ("paid", "settled", "closed"):
                     bucket["overdue_count"] += 1
                     bucket["overdue_amount"] += abs_amount
+            elif issued:
+                # No due_date: assume 30-day terms
+                bucket["days_outstanding_sum"] += 30
 
     except Exception as exc:
         summary["errors"].append(f"Invoice extraction: {exc}")
@@ -745,11 +752,13 @@ def _extract_monthly_invoices(conn, workspace_id: str, summary: dict) -> dict:
 
 
 def _extract_monthly_employees(conn, workspace_id: str, summary: dict) -> dict:
-    """Count active employees per month using hire_date."""
-    out: dict[tuple[int, int], dict] = defaultdict(lambda: {
-        "headcount": 0,
-        "total_salary": 0.0,
-    })
+    """Compute CUMULATIVE active headcount per month.
+
+    For each month, counts all employees whose hire_date is on or before
+    the last day of that month AND whose status is active. This gives the
+    real headcount for that period, not just new hires.
+    """
+    out: dict[tuple[int, int], dict] = {}
     try:
         rows = _safe_query(
             conn,
@@ -760,6 +769,8 @@ def _extract_monthly_employees(conn, workspace_id: str, summary: dict) -> dict:
             summary["skipped"].append("canonical_employees: no rows")
             return {}
 
+        # Collect all active employees with their hire month
+        active_employees = []
         for r in rows:
             hire_date = r.get("hire_date") if isinstance(r, dict) else r[1]
             status = str(r.get("status") if isinstance(r, dict) else r[2] or "active").lower()
@@ -770,8 +781,32 @@ def _extract_monthly_employees(conn, workspace_id: str, summary: dict) -> dict:
             ym = _parse_period(hire_date) if hire_date else None
             if ym is None:
                 continue
-            out[ym]["headcount"] += 1
-            out[ym]["total_salary"] += (salary or 0.0)
+            active_employees.append({"hire_ym": ym, "salary": salary or 0.0})
+
+        if not active_employees:
+            return {}
+
+        # Find the range of months we need to cover
+        earliest = min(e["hire_ym"] for e in active_employees)
+        # Cover up to current month
+        now = datetime.utcnow()
+        latest = (now.year, now.month)
+
+        # For each month, count employees hired on or before that month
+        y, m = earliest
+        while (y, m) <= latest:
+            headcount = 0
+            total_salary = 0.0
+            for emp in active_employees:
+                if emp["hire_ym"] <= (y, m):
+                    headcount += 1
+                    total_salary += emp["salary"]
+            if headcount > 0:
+                out[(y, m)] = {"headcount": headcount, "total_salary": total_salary}
+            m += 1
+            if m > 12:
+                m = 1
+                y += 1
 
     except Exception as exc:
         summary["errors"].append(f"Employee extraction: {exc}")
@@ -1177,8 +1212,10 @@ def _compute_month_kpis(
     # ── Sales & marketing efficiency ─────────────────────────────────────
     if sm_exp > 0:
         if total_rev > 0:
-            se = _safe_ratio(kpis.get("arr", total_rev * 12), sm_exp, min_denom=100)
-            _safe_set(kpis, "sales_efficiency", se, sm_exp=sm_exp)
+            # Sales efficiency = ARR / annualized S&M spend (both annual)
+            annual_sm = sm_exp * 12
+            se = _safe_ratio(kpis.get("arr", total_rev * 12), annual_sm, min_denom=100)
+            _safe_set(kpis, "sales_efficiency", se, sm_exp=annual_sm)
         if new_cust > 0:
             cac = sm_exp / new_cust
             arpu = total_rev / max(len(rev.get("customer_ids", set())), 1)

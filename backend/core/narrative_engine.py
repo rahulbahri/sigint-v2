@@ -239,13 +239,36 @@ def analyze_root_causes(
             "More months of data will enable root cause tracing."
         )
     else:
-        narrative_parts.append(
-            "No upstream KPI deterioration detected. "
-            "The issue may be external (market, product, or operational)."
-        )
+        # DATA-DRIVEN SELF-ANALYSIS FALLBACK:
+        # No upstream parent is deteriorating. Analyze the KPI's own behavior
+        # and its downstream impact to provide actionable context.
+        downstream = ALL_CAUSATION_RULES.get(kpi_key, {}).get("downstream_impact", [])
+        at_risk_downstream = []
+        for ds in downstream:
+            ds_trend = _compute_trend(ds, time_series, directions.get(ds, "higher"))
+            if ds_trend["is_deteriorating"]:
+                at_risk_downstream.append((ds, ds_trend["delta_pct"]))
+
+        if at_risk_downstream:
+            ds_names = ", ".join(f"{_friendly(d)} ({dp:+.1f}%)" for d, dp in at_risk_downstream[:3])
+            narrative_parts.append(
+                f"No upstream deterioration detected — this appears to be a primary driver. "
+                f"Downstream KPIs already impacted: {ds_names}."
+            )
+        elif own_trend["available"] and abs(own_trend["delta_pct"] or 0) < 2:
+            narrative_parts.append(
+                f"This KPI is stable (only {abs(own_trend['delta_pct']):.1f}% change) but below target. "
+                f"This is a structural gap rather than an active deterioration — review whether the target is realistic or if operational changes are needed."
+            )
+        else:
+            narrative_parts.append(
+                "No upstream KPI deterioration detected — the issue may be driven by external factors "
+                "(market conditions, competitive pressure, or operational capacity constraints) "
+                "not captured in the current KPI framework."
+            )
 
     if rejected:
-        narrative_parts.append(f"Rejected hypotheses: {rejected[0]}")
+        narrative_parts.append(f"Rejected hypothesis: {rejected[0]}")
 
     # Contextual action
     if confirmed:
@@ -254,8 +277,15 @@ def analyze_root_causes(
             f"Investigate {top_cause['name']} first — it shows a {abs(top_cause['delta_pct']):.1f}% "
             f"deterioration that is driving {kpi_name}. "
         )
-        # Add specific action from template if it aligns with the confirmed cause
         template_actions = _CORRECTIVE_ACTIONS.get(top_cause["kpi"], [])
+        if template_actions:
+            action += template_actions[0]
+    elif at_risk_downstream if 'at_risk_downstream' in dir() else False:
+        action = (
+            f"Address {kpi_name} urgently — it is a primary driver affecting "
+            f"{len(at_risk_downstream)} downstream KPIs. "
+        )
+        template_actions = _CORRECTIVE_ACTIONS.get(kpi_key, [])
         if template_actions:
             action += template_actions[0]
     else:
