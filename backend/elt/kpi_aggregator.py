@@ -1579,23 +1579,17 @@ def _clean_empty_buckets(out: dict, key_field: str, min_value=0) -> dict:
             or (isinstance(b.get(key_field), list) and len(b.get(key_field, [])) > 0)}
 
 
-def _safe_query(conn, sql: str, params: list, *, batch_size: int = 10_000) -> list:
-    """Execute a query with batched fetching for memory safety.
-
-    Uses fetchmany() to prevent loading millions of rows into memory at once.
-    Returns the same list type as fetchall() for backward compatibility.
-    """
+def _safe_query(conn, sql: str, params: list) -> list:
+    """Execute a query, returning empty list if the table doesn't exist yet."""
     try:
         cursor = conn.execute(sql, params)
-        results = []
-        while True:
-            batch = cursor.fetchmany(batch_size)
-            if not batch:
-                break
-            results.extend(batch)
-        return results
+        # Use fetchall — fetchmany not available on all cursor wrappers
+        return cursor.fetchall()
     except Exception as exc:
         if "no such table" in str(exc).lower() or "does not exist" in str(exc).lower():
+            return []
+        # PostgreSQL: "relation does not exist"
+        if "relation" in str(exc).lower() and "does not exist" in str(exc).lower():
             return []
         raise
 
