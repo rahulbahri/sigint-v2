@@ -119,6 +119,32 @@ def _mrr_trajectory():
     return mrr
 
 
+# ── Batch insert helper (critical for PostgreSQL performance) ────────────────
+
+def _batch_insert(conn, table, columns, rows, batch_size=200):
+    """Insert rows in batches using multi-row VALUES for PostgreSQL performance.
+    Individual INSERTs over network = ~20ms each = timeout on 1000+ rows.
+    Multi-row INSERT = single round-trip per batch."""
+    if not rows:
+        return
+    from core.database import _USE_PG
+    col_list = ",".join(columns)
+    for i in range(0, len(rows), batch_size):
+        batch = rows[i:i + batch_size]
+        if _USE_PG:
+            # PostgreSQL: use %s placeholders
+            ph = ",".join(["(" + ",".join(["%s"] * len(columns)) + ")"] * len(batch))
+            flat = [v for row in batch for v in row]
+            conn._r.cursor().execute(f"INSERT INTO {table} ({col_list}) VALUES {ph}", flat)
+            conn._r.commit()
+        else:
+            # SQLite: use individual inserts with executemany
+            ph = ",".join(["?"] * len(columns))
+            sql = f"INSERT INTO {table} ({col_list}) VALUES ({ph})"
+            for row in batch:
+                conn.execute(sql, row)
+
+
 # ── Seeding functions ────────────────────────────────────────────────────────
 
 def seed_revenue(conn, mrr_curve):
@@ -126,9 +152,10 @@ def seed_revenue(conn, mrr_curve):
     conn.execute("DELETE FROM canonical_revenue WHERE workspace_id=?", [WORKSPACE])
 
     customer_pool = [f"cust_{i:04d}" for i in range(1, 201)]
-    active_customers = set(customer_pool[:15])  # Start with 15
+    active_customers = set(customer_pool[:15])
     all_customers_ever = set(active_customers)
     row_id = 0
+    rows = []
 
     for (y, m), mrr in sorted(mrr_curve.items()):
         # Churn FIRST: remove customers before adding new ones
@@ -166,18 +193,19 @@ def seed_revenue(conn, mrr_curve):
             is_recurring = random.random() < 0.82
             row_id += 1
             day = random.randint(1, 28)
-            conn.execute(
-                "INSERT INTO canonical_revenue (source, source_id, amount, currency, period, "
-                "customer_id, subscription_type, workspace_id) VALUES (?,?,?,?,?,?,?,?)",
-                ["seed", f"rev_{row_id}", amount, "USD", _date(y, m, day),
-                 cust, "recurring" if is_recurring else "one-time", WORKSPACE],
-            )
+            rows.append(["seed", f"rev_{row_id}", amount, "USD", _date(y, m, day),
+                         cust, "recurring" if is_recurring else "one-time", WORKSPACE])
+
+    _batch_insert(conn, "canonical_revenue",
+                  ["source", "source_id", "amount", "currency", "period",
+                   "customer_id", "subscription_type", "workspace_id"], rows)
 
 
 def seed_customers(conn, mrr_curve):
     """Seed canonical_customers with acquisition dates."""
     conn.execute("DELETE FROM canonical_customers WHERE workspace_id=?", [WORKSPACE])
 
+    rows = []
     n_total = 0
     for (y, m), mrr in sorted(mrr_curve.items()):
         target = max(2, int(mrr / 60000))  # new customers per month
@@ -188,19 +216,22 @@ def seed_customers(conn, mrr_curve):
             n_total += 1
             cid = f"cust_{n_total:04d}"
             day = random.randint(1, 28)
-            conn.execute(
-                "INSERT INTO canonical_customers (source, source_id, name, email, company, "
-                "country, created_at, lifecycle_stage, workspace_id) VALUES (?,?,?,?,?,?,?,?,?)",
+            rows.append(
                 ["seed", cid, f"Customer {n_total}", f"contact{n_total}@example.com",
                  f"Company {n_total}", random.choice(["US", "CA", "GB", "DE", "AU"]),
                  _date(y, m, day), "customer", WORKSPACE],
             )
+
+    _batch_insert(conn, "canonical_customers",
+                  ["source", "source_id", "name", "email", "company",
+                   "country", "created_at", "lifecycle_stage", "workspace_id"], rows)
 
 
 def seed_expenses(conn, mrr_curve):
     """Seed canonical_expenses with categorised transactions."""
     conn.execute("DELETE FROM canonical_expenses WHERE workspace_id=?", [WORKSPACE])
 
+    rows = []
     row_id = 0
     for (y, m), mrr in sorted(mrr_curve.items()):
         total_rev = mrr * 1.12  # approximate total (MRR + one-time)
@@ -232,19 +263,22 @@ def seed_expenses(conn, mrr_curve):
                 row_id += 1
                 amount = round(cat_total / n_txns * _jitter(1.0, 0.2), 2)
                 day = random.randint(1, 28)
-                conn.execute(
-                    "INSERT INTO canonical_expenses (source, source_id, amount, currency, "
-                    "category, vendor, period, description, workspace_id) VALUES (?,?,?,?,?,?,?,?,?)",
+                rows.append(
                     ["seed", f"exp_{row_id}", amount, "USD",
                      random.choice(cat_labels), f"Vendor-{random.randint(1,50)}",
                      _date(y, m, day), f"{cat_name} expense", WORKSPACE],
                 )
+
+    _batch_insert(conn, "canonical_expenses",
+                  ["source", "source_id", "amount", "currency",
+                   "category", "vendor", "period", "description", "workspace_id"], rows)
 
 
 def seed_pipeline(conn, mrr_curve):
     """Seed canonical_pipeline with deals."""
     conn.execute("DELETE FROM canonical_pipeline WHERE workspace_id=?", [WORKSPACE])
 
+    rows = []
     row_id = 0
     for (y, m), mrr in sorted(mrr_curve.items()):
         n_deals = max(5, int(mrr / 15000))
@@ -261,19 +295,22 @@ def seed_pipeline(conn, mrr_curve):
             if created_m < 1:
                 created_m += 12
                 created_y -= 1
-            conn.execute(
-                "INSERT INTO canonical_pipeline (source, source_id, name, amount, stage, "
-                "close_date, probability, owner, created_at, workspace_id) VALUES (?,?,?,?,?,?,?,?,?,?)",
+            rows.append(
                 ["seed", f"deal_{row_id}", f"Deal {row_id}", amount, stage,
                  _date(y, m, close_day), 0.9 if is_won else random.uniform(0.1, 0.6),
                  f"rep_{random.randint(1,8)}", _date(created_y, created_m, created_day), WORKSPACE],
             )
+
+    _batch_insert(conn, "canonical_pipeline",
+                  ["source", "source_id", "name", "amount", "stage",
+                   "close_date", "probability", "owner", "created_at", "workspace_id"], rows)
 
 
 def seed_invoices(conn, mrr_curve):
     """Seed canonical_invoices with AR data."""
     conn.execute("DELETE FROM canonical_invoices WHERE workspace_id=?", [WORKSPACE])
 
+    rows = []
     row_id = 0
     for (y, m), mrr in sorted(mrr_curve.items()):
         n_invoices = max(10, int(mrr / 5000))
@@ -288,19 +325,22 @@ def seed_invoices(conn, mrr_curve):
             else:
                 paid_prob = 0.82
             status = "paid" if random.random() < paid_prob else random.choice(["outstanding", "overdue"])
-            conn.execute(
-                "INSERT INTO canonical_invoices (source, source_id, amount, currency, customer_id, "
-                "issue_date, due_date, status, period, workspace_id) VALUES (?,?,?,?,?,?,?,?,?,?)",
+            rows.append(
                 ["seed", f"inv_{row_id}", amount, "USD", f"cust_{random.randint(1,150):04d}",
                  _date(y, m, issue_day), _date(y, m, due_day), status,
                  _period(y, m), WORKSPACE],
             )
+
+    _batch_insert(conn, "canonical_invoices",
+                  ["source", "source_id", "amount", "currency", "customer_id",
+                   "issue_date", "due_date", "status", "period", "workspace_id"], rows)
 
 
 def seed_employees(conn, mrr_curve):
     """Seed canonical_employees with headcount growth."""
     conn.execute("DELETE FROM canonical_employees WHERE workspace_id=?", [WORKSPACE])
 
+    rows = []
     departments = ["Engineering", "Sales", "Marketing", "CS", "G&A", "Product"]
     emp_id = 0
     for (y, m), mrr in sorted(mrr_curve.items()):
@@ -311,19 +351,22 @@ def seed_employees(conn, mrr_curve):
             dept = random.choice(departments)
             salary = round(random.uniform(5000, 18000) * (1 + (y - 2022) * 0.05), 2)
             day = random.randint(1, 28)
-            conn.execute(
-                "INSERT INTO canonical_employees (source, source_id, name, email, title, "
-                "department, salary, hire_date, status, workspace_id) VALUES (?,?,?,?,?,?,?,?,?,?)",
+            rows.append(
                 ["seed", f"emp_{emp_id:04d}", f"Employee {emp_id}",
                  f"emp{emp_id}@axiom.co", f"{'Senior ' if random.random() > 0.6 else ''}{dept} Role",
                  dept, salary, _date(y, m, day), "active", WORKSPACE],
             )
+
+    _batch_insert(conn, "canonical_employees",
+                  ["source", "source_id", "name", "email", "title",
+                   "department", "salary", "hire_date", "status", "workspace_id"], rows)
 
 
 def seed_marketing(conn, mrr_curve):
     """Seed canonical_marketing with channel spend/leads."""
     conn.execute("DELETE FROM canonical_marketing WHERE workspace_id=?", [WORKSPACE])
 
+    rows = []
     channels = ["paid_search", "content", "events", "social", "organic", "referral"]
     row_id = 0
     for (y, m), mrr in sorted(mrr_curve.items()):
@@ -334,18 +377,21 @@ def seed_marketing(conn, mrr_curve):
             spend = round(total_spend * ch_share, 2)
             leads = max(1, int(spend / random.uniform(40, 120)))
             conversions = max(0, int(leads * random.uniform(0.15, 0.35)))
-            conn.execute(
-                "INSERT INTO canonical_marketing (source, source_id, channel, spend, currency, "
-                "period, leads, conversions, workspace_id) VALUES (?,?,?,?,?,?,?,?,?)",
+            rows.append(
                 ["seed", f"mkt_{row_id}", ch, spend, "USD",
                  _period(y, m), leads, conversions, WORKSPACE],
             )
+
+    _batch_insert(conn, "canonical_marketing",
+                  ["source", "source_id", "channel", "spend", "currency",
+                   "period", "leads", "conversions", "workspace_id"], rows)
 
 
 def seed_balance_sheet(conn, mrr_curve):
     """Seed canonical_balance_sheet with monthly snapshots."""
     conn.execute("DELETE FROM canonical_balance_sheet WHERE workspace_id=?", [WORKSPACE])
 
+    rows = []
     cash = 2_500_000  # Starting cash (post-seed)
     row_id = 0
     for (y, m), mrr in sorted(mrr_curve.items()):
@@ -364,18 +410,21 @@ def seed_balance_sheet(conn, mrr_curve):
         curr_assets = cash + mrr * random.uniform(0.3, 0.5)
         curr_liab = total_exp * random.uniform(0.2, 0.4)
 
-        conn.execute(
-            "INSERT INTO canonical_balance_sheet (source, source_id, period, cash_balance, "
-            "current_assets, current_liabilities, currency, workspace_id) VALUES (?,?,?,?,?,?,?,?)",
+        rows.append(
             ["seed", f"bs_{row_id}", _period(y, m), round(cash, 2),
              round(curr_assets, 2), round(curr_liab, 2), "USD", WORKSPACE],
         )
+
+    _batch_insert(conn, "canonical_balance_sheet",
+                  ["source", "source_id", "period", "cash_balance",
+                   "current_assets", "current_liabilities", "currency", "workspace_id"], rows)
 
 
 def seed_time_tracking(conn, mrr_curve):
     """Seed canonical_time_tracking with billable hours."""
     conn.execute("DELETE FROM canonical_time_tracking WHERE workspace_id=?", [WORKSPACE])
 
+    rows = []
     row_id = 0
     for (y, m), mrr in sorted(mrr_curve.items()):
         n_workers = max(5, int(mrr / 25000))
@@ -385,18 +434,21 @@ def seed_time_tracking(conn, mrr_curve):
             # Utilization improves over time: 65% -> 78%
             util_rate = 0.65 + (y - 2022) * 0.03 + random.uniform(-0.05, 0.05)
             billable = round(total_hrs * min(util_rate, 0.85), 1)
-            conn.execute(
-                "INSERT INTO canonical_time_tracking (source, source_id, worker_id, period, "
-                "billable_hours, total_hours, workspace_id) VALUES (?,?,?,?,?,?,?)",
+            rows.append(
                 ["seed", f"tt_{row_id}", f"emp_{w+1:04d}", _period(y, m),
                  billable, total_hrs, WORKSPACE],
             )
+
+    _batch_insert(conn, "canonical_time_tracking",
+                  ["source", "source_id", "worker_id", "period",
+                   "billable_hours", "total_hours", "workspace_id"], rows)
 
 
 def seed_surveys(conn, mrr_curve):
     """Seed canonical_surveys with NPS and CSAT scores."""
     conn.execute("DELETE FROM canonical_surveys WHERE workspace_id=?", [WORKSPACE])
 
+    rows = []
     row_id = 0
     for (y, m), mrr in sorted(mrr_curve.items()):
         n_responses = max(10, int(mrr / 10000))
@@ -412,18 +464,21 @@ def seed_surveys(conn, mrr_curve):
             base_csat = 3.5 + (y - 2022) * 0.18 + random.uniform(-0.4, 0.4)
             csat = round(max(1, min(5, base_csat)), 2)
 
-            conn.execute(
-                "INSERT INTO canonical_surveys (source, source_id, respondent_id, period, "
-                "nps_score, csat_score, survey_type, workspace_id) VALUES (?,?,?,?,?,?,?,?)",
+            rows.append(
                 ["seed", f"surv_{row_id}", f"cust_{random.randint(1,150):04d}",
                  _period(y, m), nps, csat, "quarterly", WORKSPACE],
             )
+
+    _batch_insert(conn, "canonical_surveys",
+                  ["source", "source_id", "respondent_id", "period",
+                   "nps_score", "csat_score", "survey_type", "workspace_id"], rows)
 
 
 def seed_support(conn, mrr_curve):
     """Seed canonical_support with ticket data."""
     conn.execute("DELETE FROM canonical_support WHERE workspace_id=?", [WORKSPACE])
 
+    rows = []
     row_id = 0
     for (y, m), mrr in sorted(mrr_curve.items()):
         n_customers = max(15, int(mrr / 8000))
@@ -435,20 +490,23 @@ def seed_support(conn, mrr_curve):
             row_id += 1
             resolution_hrs = round(random.uniform(1, 48) * (1 - (y - 2022) * 0.05), 1)
             day = random.randint(1, 28)
-            conn.execute(
-                "INSERT INTO canonical_support (source, source_id, ticket_id, period, "
-                "resolution_hours, effort_score, status, customer_id, workspace_id) VALUES (?,?,?,?,?,?,?,?,?)",
+            rows.append(
                 ["seed", f"tkt_{row_id}", f"TKT-{row_id:05d}", _period(y, m),
                  max(0.5, resolution_hrs), round(random.uniform(1, 5), 1),
                  random.choice(["resolved", "closed", "open"]),
                  f"cust_{random.randint(1,150):04d}", WORKSPACE],
             )
 
+    _batch_insert(conn, "canonical_support",
+                  ["source", "source_id", "ticket_id", "period",
+                   "resolution_hours", "effort_score", "status", "customer_id", "workspace_id"], rows)
+
 
 def seed_product_usage(conn, mrr_curve):
     """Seed canonical_product_usage with feature adoption data."""
     conn.execute("DELETE FROM canonical_product_usage WHERE workspace_id=?", [WORKSPACE])
 
+    rows = []
     features = [f"feature_{i}" for i in range(1, 13)]
     row_id = 0
     for (y, m), mrr in sorted(mrr_curve.items()):
@@ -464,13 +522,15 @@ def seed_product_usage(conn, mrr_curve):
                 activated_day = random.randint(1, 15)
                 ttv_days = random.randint(1, 21)
                 fv_day = min(28, activated_day + ttv_days)
-                conn.execute(
-                    "INSERT INTO canonical_product_usage (source, source_id, user_id, period, "
-                    "feature_id, usage_count, activated_at, first_value_at, workspace_id) VALUES (?,?,?,?,?,?,?,?,?)",
+                rows.append(
                     ["seed", f"usage_{row_id}", user_id, _period(y, m),
                      feat, random.randint(1, 50),
                      _date(y, m, activated_day), _date(y, m, fv_day), WORKSPACE],
                 )
+
+    _batch_insert(conn, "canonical_product_usage",
+                  ["source", "source_id", "user_id", "period",
+                   "feature_id", "usage_count", "activated_at", "first_value_at", "workspace_id"], rows)
 
 
 def seed_targets(conn):
@@ -521,19 +581,12 @@ def seed_targets(conn):
         "organic_traffic": (10, "higher", "pct"), "brand_awareness": (50, "higher", "score"),
     }
 
+    rows = []
     for key, (val, direction, unit) in targets.items():
-        try:
-            conn.execute(
-                "INSERT INTO kpi_targets (kpi_key, target_value, direction, unit, workspace_id) "
-                "VALUES (?,?,?,?,?)",
-                [key, val, direction, unit, WORKSPACE],
-            )
-        except Exception:
-            conn.execute(
-                "UPDATE kpi_targets SET target_value=?, direction=?, unit=? "
-                "WHERE kpi_key=? AND workspace_id=?",
-                [val, direction, unit, key, WORKSPACE],
-            )
+        rows.append([key, val, direction, unit, WORKSPACE])
+
+    _batch_insert(conn, "kpi_targets",
+                  ["kpi_key", "target_value", "direction", "unit", "workspace_id"], rows)
 
 
 def seed_company_settings(conn):
@@ -547,11 +600,12 @@ def seed_company_settings(conn):
         "logo_url": "",
         "criticality_weights": json.dumps({"cw_gap": 25, "cw_trend": 25, "cw_impact": 30, "cw_domain": 20}),
     }
+    rows = []
     for key, value in settings.items():
-        conn.execute(
-            "INSERT INTO company_settings (key, value, workspace_id) VALUES (?,?,?)",
-            [key, value, WORKSPACE],
-        )
+        rows.append([key, value, WORKSPACE])
+
+    _batch_insert(conn, "company_settings",
+                  ["key", "value", "workspace_id"], rows)
 
 
 def seed_projections(conn, mrr_curve):
@@ -559,6 +613,7 @@ def seed_projections(conn, mrr_curve):
     conn.execute("DELETE FROM projection_monthly_data WHERE workspace_id=?", [WORKSPACE])
 
     # Project from April 2026 MRR forward
+    rows = []
     apr_mrr = mrr_curve.get((2026, 4), 850000)
     base = apr_mrr
     for y, m in _months(2026, 5, 2026, 12):
@@ -590,11 +645,10 @@ def seed_projections(conn, mrr_curve):
             "mrr": round(base, 2),
             "arr": round(base * 12, 2),
         }
-        conn.execute(
-            "INSERT INTO projection_monthly_data (year, month, data_json, workspace_id) "
-            "VALUES (?,?,?,?)",
-            [y, m, json.dumps(proj_data), WORKSPACE],
-        )
+        rows.append([y, m, json.dumps(proj_data), WORKSPACE])
+
+    _batch_insert(conn, "projection_monthly_data",
+                  ["year", "month", "data_json", "workspace_id"], rows)
 
 
 # ── Main ─────────────────────────────────────────────────────────────────────
