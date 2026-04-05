@@ -1610,109 +1610,83 @@ def seed_multiyear(request: Request):
 @router.get("/api/reseed-canonical", tags=["System"])
 def reseed_canonical(request: Request):
     """
-    Wipe all existing data and reseed all 12 canonical tables + monthly_data
-    + projections + targets + company settings.
-
-    Uses the authenticated user's workspace_id so it works on both local
-    SQLite AND production PostgreSQL.
+    Wipe all existing data and reseed all 12 canonical tables + monthly_data.
+    Runs in a background thread to survive Render's 30-second HTTP timeout.
+    Returns immediately with status=started; poll /api/summary to see data.
     """
-    # Allow auth via JWT, or workspace param for initial production seeding
     from core.deps import _get_workspace
     workspace_id = _get_workspace(request)
     if not workspace_id:
         workspace_id = request.query_params.get("workspace", "")
     if not workspace_id:
-        raise HTTPException(status_code=401, detail="Not authenticated. Pass ?workspace=your.domain or log in.")
+        raise HTTPException(status_code=401, detail="Pass ?workspace=your.domain or log in.")
 
-    import sys, os
-    sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-    from scripts.seed_demo_data import (
-        _ensure_canonical_tables, _mrr_trajectory,
-        seed_revenue, seed_customers, seed_expenses, seed_pipeline,
-        seed_invoices, seed_employees, seed_marketing, seed_balance_sheet,
-        seed_time_tracking, seed_surveys, seed_support, seed_product_usage,
-        seed_targets, seed_company_settings, seed_projections,
-    )
-    from scripts import seed_demo_data
-    from elt.kpi_aggregator import aggregate_canonical_to_monthly
+    import threading
 
-    # Override the workspace in the seed module
-    seed_demo_data.WORKSPACE = workspace_id
+    def _run_seed(ws_id):
+        import sys, os, random as _r
+        sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+        from scripts.seed_demo_data import (
+            _ensure_canonical_tables, _mrr_trajectory,
+            seed_revenue, seed_customers, seed_expenses, seed_pipeline,
+            seed_invoices, seed_employees, seed_marketing, seed_balance_sheet,
+            seed_time_tracking, seed_surveys, seed_support, seed_product_usage,
+            seed_targets, seed_company_settings, seed_projections,
+        )
+        from scripts import seed_demo_data
+        from elt.kpi_aggregator import aggregate_canonical_to_monthly
 
-    conn = get_db()
-    try:
-        # Ensure tables exist
-        _ensure_canonical_tables(conn)
+        seed_demo_data.WORKSPACE = ws_id
+        _r.seed(42)
 
-        # Wipe everything for this workspace
-        for table in ["monthly_data", "projection_monthly_data", "kpi_targets",
-                      "company_settings",
-                      "canonical_revenue", "canonical_expenses", "canonical_customers",
-                      "canonical_pipeline", "canonical_invoices", "canonical_employees",
-                      "canonical_marketing", "canonical_balance_sheet",
-                      "canonical_time_tracking", "canonical_surveys",
-                      "canonical_support", "canonical_product_usage"]:
+        conn = get_db()
+        try:
+            _ensure_canonical_tables(conn)
+
+            for table in ["monthly_data", "projection_monthly_data", "kpi_targets",
+                          "company_settings",
+                          "canonical_revenue", "canonical_expenses", "canonical_customers",
+                          "canonical_pipeline", "canonical_invoices", "canonical_employees",
+                          "canonical_marketing", "canonical_balance_sheet",
+                          "canonical_time_tracking", "canonical_surveys",
+                          "canonical_support", "canonical_product_usage"]:
+                try:
+                    conn.execute(f"DELETE FROM {table} WHERE workspace_id=?", [ws_id])
+                except Exception:
+                    pass
+            conn.commit()
+
+            mrr = _mrr_trajectory()
+            for fn in [seed_revenue, seed_customers, seed_expenses, seed_pipeline,
+                       seed_invoices, seed_employees, seed_marketing, seed_balance_sheet,
+                       seed_time_tracking, seed_surveys, seed_support, seed_product_usage]:
+                fn(conn, mrr)
+                conn.commit()
+
+            aggregate_canonical_to_monthly(conn, ws_id)
+            seed_targets(conn); conn.commit()
+            seed_company_settings(conn); conn.commit()
+            seed_projections(conn, mrr); conn.commit()
+
+            _audit(ws_id, "reseed_canonical", "Background reseed complete", workspace_id=ws_id)
+        except Exception as exc:
             try:
-                conn.execute(f"DELETE FROM {table} WHERE workspace_id=?", [workspace_id])
+                conn.rollback()
             except Exception:
                 pass
-        conn.commit()
-
-        # Generate MRR trajectory and seed all tables
-        import random as _r
-        _r.seed(42)
-        mrr = _mrr_trajectory()
-
-        seed_revenue(conn, mrr); conn.commit()
-        seed_customers(conn, mrr); conn.commit()
-        seed_expenses(conn, mrr); conn.commit()
-        seed_pipeline(conn, mrr); conn.commit()
-        seed_invoices(conn, mrr); conn.commit()
-        seed_employees(conn, mrr); conn.commit()
-        seed_marketing(conn, mrr); conn.commit()
-        seed_balance_sheet(conn, mrr); conn.commit()
-        seed_time_tracking(conn, mrr); conn.commit()
-        seed_surveys(conn, mrr); conn.commit()
-        seed_support(conn, mrr); conn.commit()
-        seed_product_usage(conn, mrr); conn.commit()
-
-        # Run KPI aggregator
-        agg_result = aggregate_canonical_to_monthly(conn, workspace_id)
-
-        # Seed targets, settings, projections
-        seed_targets(conn); conn.commit()
-        seed_company_settings(conn); conn.commit()
-        seed_projections(conn, mrr); conn.commit()
-
-        # Count results
-        counts = {}
-        for table in ["monthly_data", "kpi_targets", "canonical_revenue",
-                      "canonical_expenses", "canonical_customers"]:
+            _audit(ws_id, "reseed_error", str(exc)[:200], workspace_id=ws_id)
+        finally:
             try:
-                n = conn.execute(f"SELECT COUNT(*) FROM {table} WHERE workspace_id=?",
-                                 [workspace_id]).fetchone()[0]
-                counts[table] = n
+                conn.close()
             except Exception:
-                counts[table] = -1
+                pass
 
-        _audit(workspace_id, "reseed_canonical", f"Reseeded {agg_result['months_written']} months, "
-               f"{len(agg_result['kpis_computed'])} KPIs", workspace_id=workspace_id)
+    t = threading.Thread(target=_run_seed, args=(workspace_id,), daemon=True)
+    t.start()
 
-        return {
-            "status": "ok",
-            "workspace_id": workspace_id,
-            "months_written": agg_result["months_written"],
-            "kpis_computed": len(agg_result["kpis_computed"]),
-            "errors": agg_result.get("errors", []),
-            "table_counts": counts,
-        }
-
-    except Exception as exc:
-        try:
-            conn.rollback()
-        except Exception:
-            pass
-        raise HTTPException(status_code=500, detail=str(exc))
-    finally:
-        conn.close()
+    return {
+        "status": "started",
+        "workspace_id": workspace_id,
+        "message": "Reseed running in background. Takes 2-5 minutes. Refresh the dashboard to see data.",
+    }
 
