@@ -142,6 +142,31 @@ def _auto_seed_if_empty():
                                 log.warning("[AUTO_SEED] Skip migrate %s: %s", table, e)
                         conn.commit()
                         log.info("[AUTO_SEED] Migration complete.")
+
+                    # Always ensure targets and settings exist (even if data was migrated)
+                    try:
+                        tgt_count = conn.execute(
+                            "SELECT COUNT(*) FROM kpi_targets WHERE workspace_id=?", [_DEFAULT_WS]
+                        ).fetchone()
+                        tc = tgt_count[0] if not isinstance(tgt_count, dict) else list(tgt_count.values())[0]
+                        if tc < 60:
+                            log.info("[AUTO_SEED] Only %d targets — seeding full 62 targets + settings...", tc)
+                            import sys as _sys2, random as _r2
+                            _sys2.path.insert(0, os.path.join(os.path.dirname(__file__)))
+                            from scripts.seed_demo_data import seed_targets, seed_company_settings
+                            from scripts import seed_demo_data
+                            seed_demo_data.WORKSPACE = _DEFAULT_WS
+                            # Wipe old partial targets
+                            conn.execute("DELETE FROM kpi_targets WHERE workspace_id=?", [_DEFAULT_WS])
+                            conn.execute("DELETE FROM company_settings WHERE workspace_id=?", [_DEFAULT_WS])
+                            conn.commit()
+                            _r2.seed(42)
+                            seed_targets(conn); conn.commit()
+                            seed_company_settings(conn); conn.commit()
+                            log.info("[AUTO_SEED] Targets + settings seeded for %s", _DEFAULT_WS)
+                    except Exception as e:
+                        log.warning("[AUTO_SEED] Target seeding failed: %s", e)
+
                     return
             except Exception:
                 pass
