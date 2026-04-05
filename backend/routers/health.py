@@ -208,7 +208,50 @@ def get_home(
     except Exception:
         raw_decisions = []
 
+    # Load ontology edges for Granger-weighted narrative engine
+    ontology_edges_map = {}
+    try:
+        edge_rows = conn.execute(
+            "SELECT source, target, granger_pval, confidence_tier, strength "
+            "FROM ontology_edges"
+        ).fetchall()
+        for er in edge_rows:
+            edge_key = f"{er['source']}->{er['target']}" if isinstance(er, dict) else f"{er[0]}->{er[1]}"
+            ontology_edges_map[edge_key] = {
+                "granger_pval": er["granger_pval"] if isinstance(er, dict) else er[2],
+                "confidence_tier": er["confidence_tier"] if isinstance(er, dict) else er[3],
+                "strength": er["strength"] if isinstance(er, dict) else er[4],
+            }
+    except Exception:
+        pass  # Table may not exist or be empty
+
     conn.close()
+
+    # ── Data-driven root cause analysis ──────────────────────────────────────
+    from core.narrative_engine import enrich_needs_attention as _run_root_cause_analysis
+
+    # Build time_series from kpi_monthly for the narrative engine
+    _ts_for_engine = {}
+    for k, entries in kpi_monthly.items():
+        sorted_entries = sorted(entries, key=lambda x: x["period"])
+        _ts_for_engine[k] = [e["value"] for e in sorted_entries if isinstance(e.get("value"), (int, float))]
+
+    _directions_for_engine = {
+        t_key: t_val.get("direction", "higher") for t_key, t_val in targets_map.items()
+    }
+    _kpi_avgs_for_engine = {}
+    for k, entries in kpi_monthly.items():
+        vals = [e["value"] for e in entries if isinstance(e.get("value"), (int, float))]
+        _kpi_avgs_for_engine[k] = sum(vals[-3:]) / len(vals[-3:]) if vals else None
+
+    root_cause_analyses = _run_root_cause_analysis(
+        health.get("needs_attention", []),
+        _kpi_avgs_for_engine,
+        _ts_for_engine,
+        {k: v.get("target") for k, v in targets_map.items()},
+        _directions_for_engine,
+        ontology_edges_map,
+    )
 
     # ── Composite criticality ranking ─────────────────────────────────────────
     composite_ranked = health.get("composite_ranked", [])
@@ -252,6 +295,11 @@ def get_home(
         spot["miss_streak"]   = streak["miss_streak"]
         spot["streak_label"]  = streak["streak_label"]
         spot["is_structural"] = streak["is_structural"]
+
+        # Data-driven root cause analysis
+        rca = root_cause_analyses.get(k)
+        if rca:
+            spot["root_cause_analysis"] = rca
 
         needs_enriched.append(spot)
 
@@ -301,6 +349,7 @@ def get_home(
         "period_comparison": period_delta,
         "decision_check_ins": check_ins,
         "company_stage":   company_stage,
+        "root_cause_analyses": root_cause_analyses,
         "composite_methodology": {
             "signals": [
                 {"key": "gap",    "label": "Gap Severity",    "weight": 25, "desc": "How far the KPI is from its target"},

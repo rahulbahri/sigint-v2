@@ -108,15 +108,46 @@ class _PGCur:
         try:
             rows = self._c.fetchall() or []
             return [_PGFakeRow(r) if isinstance(r, dict) else r for r in rows]
-        except Exception:
-            return []
+        except Exception as e:
+            # Only swallow "no results to fetch" (after INSERT/UPDATE/DELETE)
+            if "no results" in str(e).lower():
+                return []
+            raise
 
     def fetchone(self):
         try:
             r = self._c.fetchone()
             return _PGFakeRow(r) if r else None
-        except Exception:
-            return None
+        except Exception as e:
+            if "no results" in str(e).lower():
+                return None
+            raise
+
+    def fetchmany(self, size=None):
+        try:
+            rows = self._c.fetchmany(size) if size else self._c.fetchall()
+            return [_PGFakeRow(r) if isinstance(r, dict) else r for r in (rows or [])]
+        except Exception as e:
+            if "no results" in str(e).lower():
+                return []
+            raise
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        row = self.fetchone()
+        if row is None:
+            raise StopIteration
+        return row
+
+    @property
+    def rowcount(self):
+        return self._c.rowcount
+
+    @property
+    def description(self):
+        return self._c.description
 
     @property
     def lastrowid(self):
@@ -130,8 +161,9 @@ class _PGCur:
 
 class _PGConn:
     """Wraps psycopg2 connection to behave like sqlite3 connection."""
-    def __init__(self, raw):
+    def __init__(self, raw, pool=None):
         self._r = raw
+        self._pool = pool
         self._last_cur: Optional[_PGCur] = None
 
     def execute(self, sql: str, params=None):
@@ -181,11 +213,44 @@ class _PGConn:
                 if "already exists" not in err and "duplicate" not in err:
                     print(f"[DB][WARN] DDL failed: {e} | stmt={stmt[:120]}")
 
+    def executemany(self, sql: str, params_list):
+        """Execute SQL for each set of params (batch DML)."""
+        pg_sql = _sql_translate(sql.strip())
+        cur = self._r.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        try:
+            cur.executemany(pg_sql, params_list)
+            self._last_cur = _PGCur(cur)
+            return self._last_cur
+        except Exception:
+            self._r.rollback()
+            raise
+
     def commit(self):
         self._r.commit()
 
+    def rollback(self):
+        self._r.rollback()
+
     def close(self):
-        self._r.close()
+        if self._pool:
+            try:
+                self._r.reset()  # Roll back uncommitted work
+            except Exception:
+                pass
+            self._pool.putconn(self._r)
+        else:
+            self._r.close()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        if exc_type:
+            self.rollback()
+        else:
+            self.commit()
+        self.close()
+        return False
 
     @property
     def lastrowid(self):
@@ -194,11 +259,38 @@ class _PGConn:
         return None
 
 
+# ── Connection Pooling ────────────────────────────────────────────────────────
+
+import threading as _threading
+
+_pg_pool = None
+_pg_pool_lock = _threading.Lock()
+
+
+def _get_pg_pool():
+    """Lazy-init a thread-safe PostgreSQL connection pool."""
+    global _pg_pool
+    if _pg_pool is None:
+        with _pg_pool_lock:
+            if _pg_pool is None and _USE_PG:
+                from psycopg2.pool import ThreadedConnectionPool
+                _pg_pool = ThreadedConnectionPool(
+                    minconn=2, maxconn=20,
+                    dsn=DATABASE_URL, connect_timeout=10,
+                )
+    return _pg_pool
+
+
 # ── Public DB factory ─────────────────────────────────────────────────────────
 
 def get_db():
     if _USE_PG:
         try:
+            pool = _get_pg_pool()
+            if pool:
+                raw_conn = pool.getconn()
+                return _PGConn(raw_conn, pool=pool)
+            # Fallback: direct connection if pool failed
             conn = psycopg2.connect(DATABASE_URL, connect_timeout=10)
             return _PGConn(conn)
         except Exception as _pg_err:
