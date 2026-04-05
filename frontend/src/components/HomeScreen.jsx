@@ -1632,10 +1632,21 @@ export default function HomeScreen({ onNavigate, onAskAnika }) {
   const loadDemoData = async () => {
     setSeeding(true)
     try {
-      await axios.get('/api/seed-multiyear')
-    } catch {}
-    setSeeding(false)
-    load()
+      await axios.get('/api/reseed-canonical')
+      // Background seed takes 2-5 min; poll for data
+      let attempts = 0
+      const poll = setInterval(async () => {
+        attempts++
+        try {
+          const r = await axios.get('/api/home')
+          if (r.data?.health?.kpis_green > 0 || attempts > 30) {
+            clearInterval(poll)
+            setSeeding(false)
+            load()
+          }
+        } catch { if (attempts > 30) { clearInterval(poll); setSeeding(false); load() } }
+      }, 10000)
+    } catch { setSeeding(false); load() }
   }
 
   const handlePeriodChange = (preset) => {

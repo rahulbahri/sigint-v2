@@ -82,12 +82,23 @@ export default function CSVUpload({ onUploaded }) {
   async function seedDemoActuals() {
     setSeeding(true); setResult(null); setError(null)
     try {
-      const r = await axios.get('/api/seed-demo-actuals')
-      setResult({ message: r.data.message, rows_processed: r.data.transactions,
-                  months_detected: r.data.months, upload_id: r.data.upload_id, kpis_computed: [] })
-      onUploaded?.(); fetchUploads()
-    } catch(e) { setError(e.response?.data?.detail || 'Seed failed') }
-    setSeeding(false)
+      await axios.get('/api/reseed-canonical')
+      setResult({ message: 'Demo data seeding in background (2-5 min). Refresh to see data.',
+                  rows_processed: 0, months_detected: 52, upload_id: null, kpis_computed: [] })
+      // Poll until data appears
+      const poll = setInterval(async () => {
+        try {
+          const r = await axios.get('/api/home')
+          if (r.data?.health?.kpis_green > 0) {
+            clearInterval(poll); setSeeding(false)
+            setResult({ message: 'Demo data loaded — 52 months, 62 KPIs.',
+                        rows_processed: 27000, months_detected: 52, kpis_computed: [] })
+            onUploaded?.(); fetchUploads()
+          }
+        } catch {}
+      }, 10000)
+      setTimeout(() => { clearInterval(poll); setSeeding(false) }, 300000) // 5 min max
+    } catch(e) { setError(e.response?.data?.detail || 'Seed failed'); setSeeding(false) }
   }
 
   // ── Projection state ─────────────────────────────────────────────────────
