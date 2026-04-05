@@ -115,23 +115,38 @@ def _auto_seed_if_empty():
     log = logging.getLogger("auto_seed")
 
     _DEFAULT_WS = os.environ.get("DEFAULT_WORKSPACE", "axiomsync.ai")
+    # Also check the email-format workspace (pre-migration format)
+    _LEGACY_WS = "rahul@axiomsync.ai"
     conn = None
     try:
         conn = get_db()
-        # Check if monthly_data has any rows for the default workspace
-        try:
-            row = conn.execute(
-                "SELECT COUNT(*) FROM monthly_data WHERE workspace_id=?", [_DEFAULT_WS]
-            ).fetchone()
-            count = row[0] if not isinstance(row, dict) else list(row.values())[0]
-        except Exception:
-            count = 0  # Table may not exist yet
 
-        if count > 10:
-            log.info("[AUTO_SEED] Database has %d months for %s — skipping seed.", count, _DEFAULT_WS)
-            return
+        # Check if either workspace has data
+        for ws_check in [_DEFAULT_WS, _LEGACY_WS]:
+            try:
+                row = conn.execute(
+                    "SELECT COUNT(*) FROM monthly_data WHERE workspace_id=?", [ws_check]
+                ).fetchone()
+                count = row[0] if not isinstance(row, dict) else list(row.values())[0]
+                if count > 10:
+                    log.info("[AUTO_SEED] Database has %d months for %s — skipping seed.", count, ws_check)
+                    # If data exists under legacy workspace, migrate it to new workspace
+                    if ws_check == _LEGACY_WS and ws_check != _DEFAULT_WS:
+                        log.info("[AUTO_SEED] Migrating data from %s to %s...", _LEGACY_WS, _DEFAULT_WS)
+                        for table in ["monthly_data", "projection_monthly_data", "kpi_targets",
+                                      "company_settings", "uploads"]:
+                            try:
+                                conn.execute(f"UPDATE {table} SET workspace_id=? WHERE workspace_id=?",
+                                             [_DEFAULT_WS, _LEGACY_WS])
+                            except Exception as e:
+                                log.warning("[AUTO_SEED] Skip migrate %s: %s", table, e)
+                        conn.commit()
+                        log.info("[AUTO_SEED] Migration complete.")
+                    return
+            except Exception:
+                pass
 
-        log.info("[AUTO_SEED] Database empty for %s — starting seed...", _DEFAULT_WS)
+        log.info("[AUTO_SEED] Database empty — starting seed for %s...", _DEFAULT_WS)
 
         import sys
         sys.path.insert(0, os.path.join(os.path.dirname(__file__)))
