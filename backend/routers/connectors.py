@@ -556,7 +556,11 @@ async def connector_oauth_callback(
     conn.execute("DELETE FROM oauth_states WHERE state=?", [state])
     conn.commit()
 
-    redirect_uri = f"{APP_URL}/api/connectors/{source}/callback"
+    # Build redirect_uri from the actual request URL (not APP_URL) so it matches
+    # what was used in the authorization request. Xero/Salesforce reject mismatches.
+    _scheme = request.headers.get("x-forwarded-proto", request.url.scheme)
+    _host   = request.headers.get("host", request.url.netloc)
+    redirect_uri = f"{_scheme}://{_host}/api/connectors/{source}/callback"
     try:
         if source == "shopify":
             shop_domain = shop or state.split("|")[-1]
@@ -746,7 +750,9 @@ _CANONICAL_ENTITY_ALLOWLIST = frozenset({
 })
 
 @router.get("/api/canonical/{entity_type}", tags=["ELT"])
-async def get_canonical_data(entity_type: str, request: Request, limit: int = 100):
+async def get_canonical_data(entity_type: str, request: Request,
+                             limit: int = 100, source: str = ""):
+    """Get canonical records, optionally filtered by source (e.g. ?source=quickbooks)."""
     workspace_id = _get_workspace(request)
     if not workspace_id:
         raise HTTPException(status_code=401, detail="Unauthorised")
@@ -755,20 +761,61 @@ async def get_canonical_data(entity_type: str, request: Request, limit: int = 10
     table = f"canonical_{entity_type}"
     conn        = get_db()
     try:
-        rows = conn.execute(
-            f"SELECT * FROM {table} WHERE workspace_id=? LIMIT ?",
-            [workspace_id, limit],
-        ).fetchall()
+        if source:
+            rows = conn.execute(
+                f"SELECT * FROM {table} WHERE workspace_id=? AND source=? LIMIT ?",
+                [workspace_id, source, limit],
+            ).fetchall()
+            total = conn.execute(
+                f"SELECT COUNT(*) FROM {table} WHERE workspace_id=? AND source=?",
+                [workspace_id, source],
+            ).fetchone()[0]
+        else:
+            rows = conn.execute(
+                f"SELECT * FROM {table} WHERE workspace_id=? LIMIT ?",
+                [workspace_id, limit],
+            ).fetchall()
+            total = conn.execute(
+                f"SELECT COUNT(*) FROM {table} WHERE workspace_id=?", [workspace_id]
+            ).fetchone()[0]
         if not rows:
-            return {"records": [], "total": 0}
+            return {"records": [], "total": 0, "source_filter": source or "all"}
         cols    = [d[0] for d in conn.execute(f"PRAGMA table_info({table})").fetchall()]
         records = [dict(zip(cols, r)) for r in rows]
-        total   = conn.execute(
-            f"SELECT COUNT(*) FROM {table} WHERE workspace_id=?", [workspace_id]
-        ).fetchone()[0]
-        return {"records": records, "total": total}
+        return {"records": records, "total": total, "source_filter": source or "all"}
     except Exception:
-        return {"records": [], "total": 0}
+        return {"records": [], "total": 0, "source_filter": source or "all"}
+    finally:
+        conn.close()
+
+
+@router.get("/api/connectors/data-summary", tags=["ELT"])
+async def connector_data_summary(request: Request):
+    """Summary of all canonical data broken down by source connector."""
+    workspace_id = _get_workspace(request)
+    if not workspace_id:
+        raise HTTPException(status_code=401, detail="Unauthorised")
+    conn = get_db()
+    try:
+        summary = {}
+        for entity in _CANONICAL_ENTITY_ALLOWLIST:
+            table = f"canonical_{entity}"
+            try:
+                rows = conn.execute(
+                    f"SELECT source, COUNT(*) as cnt FROM {table} "
+                    f"WHERE workspace_id=? GROUP BY source",
+                    [workspace_id],
+                ).fetchall()
+                for r in rows:
+                    src = r[0] if not isinstance(r, dict) else r["source"]
+                    cnt = r[1] if not isinstance(r, dict) else r["cnt"]
+                    if src not in summary:
+                        summary[src] = {"source": src, "entities": {}, "total_records": 0}
+                    summary[src]["entities"][entity] = cnt
+                    summary[src]["total_records"] += cnt
+            except Exception:
+                pass
+        return {"sources": list(summary.values())}
     finally:
         conn.close()
 

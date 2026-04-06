@@ -7,10 +7,13 @@ Credentials required (Render env vars):
 """
 from __future__ import annotations
 
+import logging
 import os
 import httpx
 
-from .base import BaseConnector, ConnectorError
+from .base import BaseConnector, ConnectorError, ConnectorAuthError, _request_with_retry
+
+log = logging.getLogger("connectors.brex")
 
 _BASE   = "https://platform.brexapis.com"
 _LIMIT  = 100
@@ -38,10 +41,21 @@ class BrexConnector(BaseConnector):
             raise ConnectorError("Brex API token not configured.")
 
         creds = {"api_key": api_token}
-        return [
-            {"entity_type": "expenses",  "records": self._fetch_expenses(creds)},
-            {"entity_type": "employees", "records": self._fetch_users(creds)},
+        entities = [
+            ("expenses",  self._fetch_expenses),
+            ("employees", self._fetch_users),
         ]
+        results = []
+        for entity_type, fetcher in entities:
+            try:
+                records = fetcher(creds)
+                results.append({"entity_type": entity_type, "records": records})
+            except ConnectorAuthError:
+                raise
+            except Exception as exc:
+                log.error("[brex] Failed to fetch %s: %s", entity_type, exc)
+                results.append({"entity_type": entity_type, "records": [], "error": str(exc)})
+        return results
 
     # ── Private helpers ───────────────────────────────────────────────────────
 
@@ -62,11 +76,11 @@ class BrexConnector(BaseConnector):
                 params: dict = {"limit": _LIMIT, "status": "APPROVED"}
                 if cursor:
                     params["cursor"] = cursor
-                r = client.get(f"{_BASE}/v2/transactions/card/primary", headers=hdrs, params=params)
-                if r.status_code == 401:
-                    raise ConnectorError("Brex token invalid or expired.")
-                if r.status_code != 200:
-                    raise ConnectorError(f"Brex API error {r.status_code}")
+                r = _request_with_retry(
+                    client, "GET",
+                    f"{_BASE}/v2/transactions/card/primary",
+                    headers=hdrs, params=params,
+                )
                 data = r.json()
                 items = data.get("items", [])
                 records.extend(items)
@@ -76,10 +90,24 @@ class BrexConnector(BaseConnector):
         return records
 
     def _fetch_users(self, credentials: dict) -> list[dict]:
-        """Pull team/user list for headcount metrics."""
+        """Pull team/user list for headcount metrics (paginated)."""
+        records: list[dict] = []
+        cursor = None
         hdrs = self._headers(credentials)
         with httpx.Client(timeout=20) as client:
-            r = client.get(f"{_BASE}/v2/users", headers=hdrs, params={"limit": _LIMIT})
-        if r.status_code != 200:
-            return []
-        return r.json().get("items", [])
+            for _ in range(200):
+                params: dict = {"limit": _LIMIT}
+                if cursor:
+                    params["cursor"] = cursor
+                r = _request_with_retry(
+                    client, "GET",
+                    f"{_BASE}/v2/users",
+                    headers=hdrs, params=params,
+                )
+                data = r.json()
+                items = data.get("items", [])
+                records.extend(items)
+                cursor = data.get("next_cursor")
+                if not cursor or not items:
+                    break
+        return records

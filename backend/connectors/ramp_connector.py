@@ -8,11 +8,15 @@ Credentials required (Render env vars):
 """
 from __future__ import annotations
 
+import logging
 import os
+import threading
 import time
 import httpx
 
-from .base import BaseConnector, ConnectorError
+from .base import BaseConnector, ConnectorError, _request_with_retry
+
+log = logging.getLogger("connectors.ramp")
 
 _BASE          = "https://api.ramp.com/developer/v1"
 _TOKEN_URL     = "https://api.ramp.com/v1/public/customer/token"
@@ -20,20 +24,26 @@ _LIMIT         = 100
 _CLIENT_ID     = os.environ.get("RAMP_CLIENT_ID", "")
 _CLIENT_SECRET = os.environ.get("RAMP_CLIENT_SECRET", "")
 
-# In-memory token cache (refreshed automatically)
+# In-memory token cache (refreshed automatically), guarded by lock
 _token_cache: dict = {}
+_token_lock = threading.Lock()
 
 
 def _get_access_token(client_id: str, client_secret: str) -> str:
-    """Return a valid access token, refreshing if expired."""
+    """Return a valid access token, refreshing if expired. Thread-safe."""
+    cache_key = f"{client_id}:ramp"
     now = time.time()
-    cached = _token_cache.get(f"{client_id}:ramp")
-    if cached and cached["expires_at"] > now + 60:
-        return cached["token"]
 
+    with _token_lock:
+        cached = _token_cache.get(cache_key)
+        if cached and cached["expires_at"] > now + 60:
+            return cached["token"]
+
+    # Token missing or expired — fetch a new one outside the lock
+    log.info("[Ramp] Fetching new access token for client %s...", client_id[:8])
     with httpx.Client(timeout=15) as client:
-        r = client.post(
-            _TOKEN_URL,
+        r = _request_with_retry(
+            client, "POST", _TOKEN_URL,
             data={
                 "grant_type":    "client_credentials",
                 "client_id":     client_id,
@@ -42,13 +52,16 @@ def _get_access_token(client_id: str, client_secret: str) -> str:
             },
             headers={"Content-Type": "application/x-www-form-urlencoded"},
         )
-    if r.status_code != 200:
-        raise ConnectorError(f"Ramp token fetch failed: {r.text}")
     tok = r.json()
-    _token_cache[f"{client_id}:ramp"] = {
+    new_entry = {
         "token":      tok["access_token"],
-        "expires_at": now + tok.get("expires_in", 3600),
+        "expires_at": time.time() + tok.get("expires_in", 3600),
     }
+
+    with _token_lock:
+        _token_cache[cache_key] = new_entry
+
+    log.info("[Ramp] Token refreshed successfully")
     return tok["access_token"]
 
 
@@ -71,12 +84,18 @@ class RampConnector(BaseConnector):
         if not cid or not sec:
             raise ConnectorError("Ramp client credentials not configured.")
 
+        log.info("[Ramp] Starting extract for workspace %s", workspace_id)
         token   = _get_access_token(cid, sec)
         headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
 
+        transactions = self._fetch_transactions(headers)
+        users = self._fetch_users(headers)
+        log.info("[Ramp] Extract complete: %d transactions, %d users",
+                 len(transactions), len(users))
+
         return [
-            {"entity_type": "expenses",  "records": self._fetch_transactions(headers)},
-            {"entity_type": "employees", "records": self._fetch_users(headers)},
+            {"entity_type": "expenses",  "records": transactions},
+            {"entity_type": "employees", "records": users},
         ]
 
     # ── Private helpers ───────────────────────────────────────────────────────
@@ -85,23 +104,43 @@ class RampConnector(BaseConnector):
         records: list[dict] = []
         page_token = None
         with httpx.Client(timeout=30) as client:
-            for _ in range(200):
+            for page_num in range(200):
                 params: dict = {"page_size": _LIMIT}
                 if page_token:
                     params["page_token"] = page_token
-                r = client.get(f"{_BASE}/transactions", headers=headers, params=params)
-                if r.status_code != 200:
-                    raise ConnectorError(f"Ramp transactions error {r.status_code}: {r.text}")
+                r = _request_with_retry(
+                    client, "GET", f"{_BASE}/transactions",
+                    headers=headers, params=params,
+                )
                 data = r.json()
-                records.extend(data.get("data", []))
+                page_records = data.get("data", [])
+                records.extend(page_records)
                 page_token = data.get("page", {}).get("next")
+                log.info("[Ramp] Transactions page %d: fetched %d (total %d)",
+                         page_num + 1, len(page_records), len(records))
                 if not page_token:
                     break
         return records
 
     def _fetch_users(self, headers: dict) -> list[dict]:
+        """Fetch all users with cursor-based pagination."""
+        records: list[dict] = []
+        page_token = None
         with httpx.Client(timeout=20) as client:
-            r = client.get(f"{_BASE}/users", headers=headers, params={"page_size": _LIMIT})
-        if r.status_code != 200:
-            return []
-        return r.json().get("data", [])
+            for page_num in range(200):
+                params: dict = {"page_size": _LIMIT}
+                if page_token:
+                    params["page_token"] = page_token
+                r = _request_with_retry(
+                    client, "GET", f"{_BASE}/users",
+                    headers=headers, params=params,
+                )
+                data = r.json()
+                page_records = data.get("data", [])
+                records.extend(page_records)
+                page_token = data.get("page", {}).get("next")
+                log.info("[Ramp] Users page %d: fetched %d (total %d)",
+                         page_num + 1, len(page_records), len(records))
+                if not page_token:
+                    break
+        return records

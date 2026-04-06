@@ -11,11 +11,14 @@ Expected sheet format: columns = month (YYYY-MM), plus any KPI keys as column he
 """
 from __future__ import annotations
 
+import logging
 import os
 import httpx
 from urllib.parse import urlencode
 
-from .base import BaseConnector, ConnectorError
+from .base import BaseConnector, ConnectorError, ConnectorAuthError, _request_with_retry
+
+log = logging.getLogger("connectors.google_sheets")
 
 _GOOGLE_AUTH_URL  = "https://accounts.google.com/o/oauth2/v2/auth"
 _GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
@@ -110,41 +113,59 @@ class GoogleSheetsConnector(BaseConnector):
             raise ConnectorError("Google Sheets: no spreadsheet_id in credentials. "
                                  "Please enter your Google Sheet ID after connecting.")
 
-        headers = {"Authorization": f"Bearer {access_token}"}
+        hdrs = {"Authorization": f"Bearer {access_token}"}
 
         # Get spreadsheet metadata to find sheet names
         with httpx.Client(timeout=20) as client:
-            meta = client.get(f"{_SHEETS_API_BASE}/{spreadsheet_id}", headers=headers)
-        if meta.status_code == 401:
-            raise ConnectorError("Google token expired. Please reconnect.")
-        if meta.status_code != 200:
-            raise ConnectorError(f"Google Sheets metadata error: {meta.status_code}")
+            meta = _request_with_retry(
+                client, "GET",
+                f"{_SHEETS_API_BASE}/{spreadsheet_id}",
+                headers=hdrs,
+            )
 
         sheets = meta.json().get("sheets", [])
         if not sheets:
-            raise ConnectorError("No sheets found in this spreadsheet")
+            log.warning("[google_sheets] Spreadsheet %s has no sheets", spreadsheet_id)
+            return [{"entity_type": "revenue", "records": [], "error": "No sheets found in spreadsheet"}]
 
         # Read first sheet
-        sheet_name = sheets[0]["properties"]["title"]
-        with httpx.Client(timeout=30) as client:
-            data_resp = client.get(
-                f"{_SHEETS_API_BASE}/{spreadsheet_id}/values/{sheet_name}",
-                headers=headers,
-            )
-        if data_resp.status_code != 200:
-            raise ConnectorError(f"Google Sheets read error: {data_resp.status_code}")
+        sheet_name = sheets[0].get("properties", {}).get("title")
+        if not sheet_name:
+            log.warning("[google_sheets] First sheet has no title in spreadsheet %s", spreadsheet_id)
+            return [{"entity_type": "revenue", "records": [], "error": "First sheet has no title"}]
+
+        try:
+            with httpx.Client(timeout=30) as client:
+                data_resp = _request_with_retry(
+                    client, "GET",
+                    f"{_SHEETS_API_BASE}/{spreadsheet_id}/values/{sheet_name}",
+                    headers=hdrs,
+                )
+        except ConnectorAuthError:
+            raise
+        except Exception as exc:
+            log.error("[google_sheets] Failed to read sheet '%s': %s", sheet_name, exc)
+            return [{"entity_type": "revenue", "records": [], "error": str(exc)}]
 
         values = data_resp.json().get("values", [])
         if len(values) < 2:
-            return []
+            log.info("[google_sheets] Sheet '%s' has fewer than 2 rows, returning empty", sheet_name)
+            return [{"entity_type": "revenue", "records": []}]
 
         headers_row = [str(h).strip().lower() for h in values[0]]
+        if not any(headers_row):
+            log.warning("[google_sheets] Header row is empty in sheet '%s'", sheet_name)
+            return [{"entity_type": "revenue", "records": [], "error": "Header row is empty"}]
+
         records = []
-        for row in values[1:]:
-            record = {}
-            for i, header in enumerate(headers_row):
-                record[header] = row[i] if i < len(row) else None
-            records.append(record)
+        for row_idx, row in enumerate(values[1:], start=2):
+            try:
+                record = {}
+                for i, header in enumerate(headers_row):
+                    record[header] = row[i] if i < len(row) else None
+                records.append(record)
+            except Exception as exc:
+                log.warning("[google_sheets] Skipping malformed row %d: %s", row_idx, exc)
 
         # Attempt to detect month column (e.g. "month", "period", "date")
         # Return as revenue-like entity; the transformer will normalise column names

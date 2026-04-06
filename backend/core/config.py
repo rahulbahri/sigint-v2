@@ -11,6 +11,14 @@ RESEND_FROM        = os.environ.get("RESEND_FROM_EMAIL", "rahul@axiomsync.ai")
 APP_URL            = os.environ.get("APP_URL", "https://sigint-v2.onrender.com")
 _jwt_secret_env    = os.environ.get("JWT_SECRET", "")
 if not _jwt_secret_env:
+    _is_production = bool(os.environ.get("DATABASE_URL")) or os.environ.get("RENDER", "")
+    if _is_production:
+        raise RuntimeError(
+            "FATAL: JWT_SECRET environment variable is not set. "
+            "This is required in production — all user sessions depend on it. "
+            "Generate one with: python3 -c \"import secrets; print(secrets.token_hex(32))\" "
+            "and add it to your Render environment variables."
+        )
     import warnings
     _jwt_secret_env = secrets.token_hex(32)
     warnings.warn(

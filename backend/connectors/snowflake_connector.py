@@ -20,10 +20,16 @@ The connector reads the table and maps each row to a revenue record.
 from __future__ import annotations
 
 import base64
+import logging
 import os
+import time
 import httpx
 
 from .base import BaseConnector, ConnectorError
+
+log = logging.getLogger("connectors.snowflake")
+
+_MAX_ROWS = 10000
 
 _ACCOUNT   = os.environ.get("SNOWFLAKE_ACCOUNT", "")      # e.g. xy12345.us-east-1
 _USER      = os.environ.get("SNOWFLAKE_USER", "")
@@ -38,16 +44,22 @@ def _snowflake_base(account: str) -> str:
     return f"https://{account}.snowflakecomputing.com"
 
 
-def _get_token(account: str, user: str, password: str) -> str:
+def _get_token(account: str, user: str, password: str,
+               warehouse: str = "", database: str = "",
+               schema: str = "") -> str:
     """Obtain a Snowflake OAuth-style session token via REST login."""
     url = f"{_snowflake_base(account)}/session/v1/login-request"
     creds = base64.b64encode(f"{user}:{password}".encode()).decode()
+    wh = warehouse or _WAREHOUSE
+    db = database or _DATABASE
+    sch = schema or _SCHEMA
+    log.info("[Snowflake] Authenticating as %s on account %s", user, account)
     with httpx.Client(timeout=20) as client:
         r = client.post(
             url,
             headers={"Authorization": f"Basic {creds}", "Content-Type": "application/json"},
             json={"data": {"ACCOUNT_NAME": account}},
-            params={"warehouse": _WAREHOUSE, "databaseName": _DATABASE, "schemaName": _SCHEMA},
+            params={"warehouse": wh, "databaseName": db, "schemaName": sch},
         )
     if r.status_code != 200:
         raise ConnectorError(f"Snowflake login failed: {r.status_code} {r.text[:200]}")
@@ -55,34 +67,72 @@ def _get_token(account: str, user: str, password: str) -> str:
     token = data.get("token")
     if not token:
         raise ConnectorError("Snowflake login succeeded but no token returned")
+    log.info("[Snowflake] Authentication successful")
     return token
 
 
-def _run_query(account: str, token: str, sql: str) -> list[dict]:
-    """Execute a SQL query and return list of row dicts."""
+def _run_query(account: str, token: str, sql: str,
+               database: str = "", schema: str = "",
+               warehouse: str = "",
+               max_retries: int = 3) -> list[dict]:
+    """Execute a SQL query and return list of row dicts, with retry."""
     url = f"{_snowflake_base(account)}/api/v2/statements"
-    with httpx.Client(timeout=60) as client:
-        r = client.post(
-            url,
-            headers={
-                "Authorization":  f"Snowflake Token=\"{token}\"",
-                "Content-Type":   "application/json",
-                "X-Snowflake-Authorization-Token-Type": "SESSION",
-            },
-            json={
-                "statement": sql,
-                "timeout":   50,
-                "database":  _DATABASE,
-                "schema":    _SCHEMA,
-                "warehouse": _WAREHOUSE,
-            },
-        )
-    if r.status_code not in (200, 202):
-        raise ConnectorError(f"Snowflake query error {r.status_code}: {r.text[:300]}")
+    db = database or _DATABASE
+    sch = schema or _SCHEMA
+    wh = warehouse or _WAREHOUSE
+
+    last_exc: Exception | None = None
+    for attempt in range(max_retries + 1):
+        try:
+            with httpx.Client(timeout=60) as client:
+                r = client.post(
+                    url,
+                    headers={
+                        "Authorization":  f"Snowflake Token=\"{token}\"",
+                        "Content-Type":   "application/json",
+                        "X-Snowflake-Authorization-Token-Type": "SESSION",
+                    },
+                    json={
+                        "statement": sql,
+                        "timeout":   50,
+                        "database":  db,
+                        "schema":    sch,
+                        "warehouse": wh,
+                    },
+                )
+            if r.status_code in (200, 202):
+                break
+            if r.status_code >= 500 and attempt < max_retries:
+                wait = 2 ** attempt
+                log.warning("[Snowflake] Server error %d, retry in %ds "
+                            "(attempt %d/%d)",
+                            r.status_code, wait, attempt + 1, max_retries)
+                time.sleep(wait)
+                continue
+            raise ConnectorError(
+                f"Snowflake query error {r.status_code}: {r.text[:300]}")
+        except (httpx.ConnectError, httpx.ReadTimeout, httpx.WriteTimeout,
+                httpx.PoolTimeout, httpx.ConnectTimeout) as exc:
+            last_exc = exc
+            if attempt < max_retries:
+                wait = 2 ** attempt
+                log.warning("[Snowflake] Network error %s, retry in %ds "
+                            "(attempt %d/%d)",
+                            type(exc).__name__, wait, attempt + 1, max_retries)
+                time.sleep(wait)
+                continue
+            raise ConnectorError(
+                f"Snowflake network error after {max_retries} retries: {exc}"
+            ) from exc
+    else:
+        raise ConnectorError(
+            f"Snowflake query failed after {max_retries} retries: {last_exc}")
+
     data     = r.json()
     col_defs = data.get("resultSetMetaData", {}).get("rowType", [])
     col_names = [c["name"].lower() for c in col_defs]
     rows     = data.get("data", [])
+    log.info("[Snowflake] Query returned %d rows", len(rows))
     return [dict(zip(col_names, row)) for row in rows]
 
 
@@ -103,8 +153,6 @@ class SnowflakeConnector(BaseConnector):
             return False
 
     def extract(self, workspace_id: str, credentials: dict) -> list[dict]:
-        global _DATABASE, _SCHEMA, _WAREHOUSE  # declared before first use
-
         acct  = credentials.get("account")   or _ACCOUNT
         user  = credentials.get("user")      or _USER
         pwd   = credentials.get("password")  or _PASSWORD
@@ -119,12 +167,17 @@ class SnowflakeConnector(BaseConnector):
                 "SNOWFLAKE_DATABASE, and SNOWFLAKE_TABLE in Render."
             )
 
-        # Ensure globals are correct for this connection
-        _DATABASE, _SCHEMA, _WAREHOUSE = db, sch, wh
+        log.info("[Snowflake] Extracting from %s.%s.%s for workspace %s",
+                 db, sch, table, workspace_id)
 
-        token   = _get_token(acct, user, pwd)
-        sql     = f'SELECT * FROM "{db}"."{sch}"."{table}" ORDER BY PERIOD DESC LIMIT 60'
-        records = _run_query(acct, token, sql)
+        token = _get_token(acct, user, pwd,
+                           warehouse=wh, database=db, schema=sch)
+        sql = (f'SELECT * FROM "{db}"."{sch}"."{table}" '
+               f'ORDER BY PERIOD DESC LIMIT {_MAX_ROWS}')
+        records = _run_query(acct, token, sql,
+                             database=db, schema=sch, warehouse=wh)
+
+        log.info("[Snowflake] Extracted %d records from %s", len(records), table)
 
         # Return as generic revenue entity — transformer will normalise column names
         return [

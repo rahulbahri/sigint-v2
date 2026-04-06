@@ -11,7 +11,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel as _BM
 
 from core.database import get_db, _audit
-from core.deps import _get_workspace
+from core.deps import _require_workspace
 from core.kpi_defs import KPI_DEFS, ALL_CAUSATION_RULES, BENCHMARKS, EXTENDED_ONTOLOGY_METRICS
 
 import numpy as np
@@ -38,7 +38,7 @@ class _AnnotationBody(_BM):
 @router.get("/api/annotations", tags=["Annotations"])
 def list_annotations(request: Request, kpi_key: Optional[str] = None, period: Optional[str] = None):
     """List KPI annotations, optionally filtered by kpi_key and/or period."""
-    workspace_id = _get_workspace(request)
+    workspace_id = _require_workspace(request)
     conn = get_db()
     clauses: list = ["workspace_id = ?"]
     params: list = [workspace_id]
@@ -57,7 +57,7 @@ def list_annotations(request: Request, kpi_key: Optional[str] = None, period: Op
 @router.put("/api/annotations", tags=["Annotations"])
 def upsert_annotation(request: Request, body: _AnnotationBody):
     """Create or update (upsert) a KPI annotation for a given kpi_key + period."""
-    workspace_id = _get_workspace(request)
+    workspace_id = _require_workspace(request)
     conn = get_db()
     now = datetime.utcnow().isoformat()
     conn.execute(
@@ -93,7 +93,7 @@ def delete_annotation(annotation_id: int):
 
 @router.get("/api/annotations/{kpi_key}", tags=["Annotations"])
 def get_annotations(request: Request, kpi_key: str, period: str = None):
-    workspace_id = _get_workspace(request)
+    workspace_id = _require_workspace(request)
     conn = get_db()
     if period:
         rows = conn.execute(
@@ -111,7 +111,7 @@ def get_annotations(request: Request, kpi_key: str, period: str = None):
 
 @router.post("/api/annotations/{kpi_key}", tags=["Annotations"])
 async def add_annotation(kpi_key: str, request: Request):
-    workspace_id = _get_workspace(request)
+    workspace_id = _require_workspace(request)
     body = await request.json()
     note = body.get("note", "").strip()
     if not note:
@@ -133,7 +133,7 @@ async def add_annotation(kpi_key: str, request: Request):
 
 @router.get("/api/accountability", tags=["Accountability"])
 def get_accountability(request: Request, kpi_key: Optional[str] = None):
-    workspace_id = _get_workspace(request)
+    workspace_id = _require_workspace(request)
     conn = get_db()
     if kpi_key:
         rows = conn.execute("SELECT * FROM kpi_accountability WHERE kpi_key=? AND workspace_id=?", (kpi_key, workspace_id)).fetchall()
@@ -154,7 +154,7 @@ def get_accountability(request: Request, kpi_key: Optional[str] = None):
 
 @router.put("/api/accountability/{kpi_key}", tags=["Accountability"])
 def put_accountability(request: Request, kpi_key: str, body: dict):
-    workspace_id = _get_workspace(request)
+    workspace_id = _require_workspace(request)
     owner = body.get("owner", "")
     due_date = body.get("due_date", "")
     status = body.get("status", "open")
@@ -179,7 +179,7 @@ def put_accountability(request: Request, kpi_key: str, body: dict):
 
 @router.get("/api/outcomes/{kpi_key}", tags=["Outcomes"])
 def get_outcomes(request: Request, kpi_key: str):
-    workspace_id = _get_workspace(request)
+    workspace_id = _require_workspace(request)
     conn = get_db()
     rows = conn.execute(
         "SELECT * FROM recommendation_outcomes WHERE kpi_key=? AND workspace_id=? ORDER BY started_at DESC",
@@ -191,7 +191,7 @@ def get_outcomes(request: Request, kpi_key: str):
 
 @router.post("/api/outcomes/{kpi_key}", tags=["Outcomes"])
 async def record_outcome(kpi_key: str, request: Request):
-    workspace_id = _get_workspace(request)
+    workspace_id = _require_workspace(request)
     body = await request.json()
     conn = get_db()
     cursor = conn.execute("""
@@ -237,7 +237,7 @@ async def resolve_outcome(outcome_id: int, request: Request):
 
 @router.get("/api/audit-log", tags=["Audit"])
 def get_audit_log(request: Request, limit: int = 100, event_type: str = None):
-    workspace_id = _get_workspace(request)
+    workspace_id = _require_workspace(request)
     conn = get_db()
     if event_type:
         rows = conn.execute(
@@ -740,7 +740,7 @@ def _generate_smart_actions(kpi_key: str, fp_data: list, benchmarks_for_stage: d
 
 @router.get("/api/smart-actions/{kpi_key}", tags=["Smart Actions"])
 def get_smart_actions(request: Request, kpi_key: str, stage: str = "series_b"):
-    workspace_id = _get_workspace(request)
+    workspace_id = _require_workspace(request)
     valid_stages = {"seed", "series_a", "series_b", "series_c"}
     if stage not in valid_stages:
         stage = "series_b"
@@ -856,7 +856,7 @@ _TOTAL_KPIS = 57
 
 @router.get("/api/kpi-coverage")
 async def get_kpi_coverage(request: Request):
-    workspace_id = _get_workspace(request)
+    workspace_id = _require_workspace(request)
     if not workspace_id:
         raise HTTPException(status_code=401, detail="Not authenticated")
     conn = get_db()

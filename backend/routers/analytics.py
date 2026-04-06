@@ -15,7 +15,7 @@ from fastapi.responses import StreamingResponse, HTMLResponse
 from pydantic import BaseModel
 
 from core.database import get_db
-from core.deps import _get_workspace, _require_workspace
+from core.deps import _require_workspace
 from core.kpi_defs import (
     KPI_DEFS, CAUSATION_RULES, ALL_CAUSATION_RULES, BENCHMARKS,
     EXTENDED_ONTOLOGY_METRICS, ONTOLOGY_DOMAIN, compute_gap_status,
@@ -114,7 +114,7 @@ def fingerprint(request: Request, year: Optional[int] = None):
 @router.get("/api/summary", tags=["Analytics"])
 def summary(request: Request, year: Optional[int] = None):
     """High-level dashboard summary: upload count, KPI coverage, status breakdown."""
-    workspace_id = _get_workspace(request)
+    workspace_id = _require_workspace(request)
     conn = get_db()
     uploads = conn.execute("SELECT COUNT(*) as c FROM uploads WHERE workspace_id=?", [workspace_id]).fetchone()["c"]
     # Filter by year when provided so status counts match the fingerprint tab

@@ -5,6 +5,13 @@ All business logic lives in routers/ and core/.
 import os
 from pathlib import Path
 
+# Load .env file for local development (no-op if file doesn't exist)
+try:
+    import dotenv
+    dotenv.load_dotenv(Path(__file__).parent / ".env")
+except ImportError:
+    pass
+
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
@@ -110,11 +117,21 @@ for _router_mod in [
 import threading as _threading  # noqa: E402
 
 def _auto_seed_if_empty():
-    """Check if the default workspace has data. If not, seed it."""
+    """Check if the default workspace has data. If not, seed it.
+
+    SAFETY: Only seeds the DEMO workspace (axiomsync.ai). Never touches
+    other workspaces. The _DEMO_ONLY_WS guard prevents demo data from being
+    injected into real customer workspaces.
+    """
     import logging, random, traceback
     log = logging.getLogger("auto_seed")
 
     _DEFAULT_WS = os.environ.get("DEFAULT_WORKSPACE", "axiomsync.ai")
+    # Safety guard: only auto-seed the demo workspace, never a customer workspace
+    _DEMO_ONLY_WS = {"axiomsync.ai", "rahul@axiomsync.ai", "demo.axiomsync.ai"}
+    if _DEFAULT_WS not in _DEMO_ONLY_WS:
+        log.info("[AUTO_SEED] DEFAULT_WORKSPACE=%s is not a demo workspace — skipping auto-seed.", _DEFAULT_WS)
+        return
     # Also check the email-format workspace (pre-migration format)
     _LEGACY_WS = "rahul@axiomsync.ai"
     conn = None

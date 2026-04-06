@@ -1,12 +1,17 @@
 """
 Stripe connector — extracts charges, subscriptions, customers, invoices.
 Auth: API key (no OAuth needed).
+Retry: exponential backoff on 429/5xx with Retry-After header support.
 """
 from __future__ import annotations
 
+import logging
+
 import httpx
 
-from .base import BaseConnector, ConnectorError
+from .base import BaseConnector, ConnectorError, _request_with_retry
+
+log = logging.getLogger("connectors.stripe")
 
 _BASE = "https://api.stripe.com/v1"
 _LIMIT = 100  # max per page
@@ -22,22 +27,33 @@ class StripeConnector(BaseConnector):
             raise ConnectorError("Stripe API key is missing.")
 
         headers = {"Authorization": f"Bearer {api_key}"}
-
-        return [
-            {"entity_type": "revenue",   "records": self._fetch_charges(headers)},
-            {"entity_type": "customers", "records": self._fetch_customers(headers)},
-            {"entity_type": "invoices",  "records": self._fetch_invoices(headers)},
-            {"entity_type": "subscriptions", "records": self._fetch_subscriptions(headers)},
+        results = []
+        entities = [
+            ("revenue",       self._fetch_charges),
+            ("customers",     self._fetch_customers),
+            ("invoices",      self._fetch_invoices),
+            ("subscriptions", self._fetch_subscriptions),
         ]
+        for entity_type, fetcher in entities:
+            try:
+                records = fetcher(headers)
+                results.append({"entity_type": entity_type, "records": records})
+                log.info("[stripe] Fetched %d %s records", len(records), entity_type)
+            except Exception as e:
+                log.error("[stripe] Failed to fetch %s: %s", entity_type, e)
+                results.append({"entity_type": entity_type, "records": [], "error": str(e)})
+
+        return results
 
     def validate_credentials(self, credentials: dict) -> bool:
         try:
-            r = httpx.get(
-                f"{_BASE}/account",
-                headers={"Authorization": f"Bearer {credentials.get('api_key','')}"},
-                timeout=10,
-            )
-            return r.status_code == 200
+            with httpx.Client(timeout=10) as client:
+                r = _request_with_retry(
+                    client, "GET", f"{_BASE}/account",
+                    headers={"Authorization": f"Bearer {credentials.get('api_key', '')}"},
+                    max_retries=1,
+                )
+                return r.status_code == 200
         except Exception:
             return False
 
@@ -60,19 +76,13 @@ class StripeConnector(BaseConnector):
     ) -> list[dict]:
         records = []
         params = {"limit": _LIMIT, **(extra or {})}
-        try:
-            with httpx.Client(timeout=30) as client:
-                while True:
-                    r = client.get(url, headers=headers, params=params)
-                    if r.status_code != 200:
-                        raise ConnectorError(
-                            f"Stripe API error {r.status_code} on {url}"
-                        )
-                    data = r.json()
-                    records.extend(data.get("data", []))
-                    if not data.get("has_more"):
-                        break
-                    params["starting_after"] = data["data"][-1]["id"]
-        except httpx.HTTPError as exc:
-            raise ConnectorError(f"Stripe network error: {exc}") from exc
+        with httpx.Client(timeout=30) as client:
+            while True:
+                r = _request_with_retry(client, "GET", url, headers=headers, params=params)
+                data = r.json()
+                batch = data.get("data", [])
+                records.extend(batch)
+                if not data.get("has_more") or not batch:
+                    break
+                params["starting_after"] = batch[-1]["id"]
         return records

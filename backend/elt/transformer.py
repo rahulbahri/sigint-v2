@@ -34,6 +34,65 @@ CONNECTOR_UNIT_CONFIG = {
     "seed":          {"amount_divisor": 1},
 }
 
+# ── Explicit per-connector field mappings ─────────────────────────────────────
+# These bypass the auto-guesser entirely. Keyed by (source, entity_type).
+# Only the fields listed here are extracted; all other source fields are ignored.
+# This prevents mismatches like Stripe's 12 "amount_*" fields all mapping to "amount".
+
+EXPLICIT_FIELD_MAPS: dict[tuple[str, str], dict[str, str]] = {
+    ("stripe", "revenue"): {
+        "id": "source_id", "amount": "amount", "currency": "currency",
+        "created": "period", "customer": "customer_id",
+        "payment_intent": "product_id",
+    },
+    ("stripe", "customers"): {
+        "id": "source_id", "name": "name", "email": "email",
+        "phone": "phone", "created": "created_at",
+    },
+    ("stripe", "invoices"): {
+        "id": "source_id", "amount_due": "amount", "currency": "currency",
+        "customer": "customer_id", "status": "status",
+        "created": "period", "due_date": "due_date",
+    },
+    ("stripe", "subscriptions"): {
+        "id": "source_id", "customer": "customer_id",
+        "created": "period", "status": "status",
+    },
+    ("quickbooks", "invoices"): {
+        "Id": "source_id", "TotalAmt": "amount", "CurrencyRef.value": "currency",
+        "CustomerRef.value": "customer_id", "TxnDate": "period",
+        "DueDate": "due_date",
+    },
+    ("quickbooks", "revenue"): {
+        "Id": "source_id", "TotalAmt": "amount", "CurrencyRef.value": "currency",
+        "CustomerRef.value": "customer_id", "TxnDate": "period",
+    },
+    ("quickbooks", "customers"): {
+        "Id": "source_id", "DisplayName": "name",
+        "PrimaryEmailAddr.Address": "email",
+        "PrimaryPhone.FreeFormNumber": "phone",
+        "CompanyName": "company", "MetaData.CreateTime": "created_at",
+    },
+    ("quickbooks", "expenses"): {
+        "Id": "source_id", "TotalAmt": "amount", "CurrencyRef.value": "currency",
+        "TxnDate": "period", "EntityRef.name": "vendor",
+    },
+    ("xero", "invoices"): {
+        "InvoiceID": "source_id", "Total": "amount",
+        "CurrencyCode": "currency", "Contact.ContactID": "customer_id",
+        "DateString": "period", "DueDateString": "due_date",
+        "Status": "status",
+    },
+    ("xero", "customers"): {
+        "ContactID": "source_id", "Name": "name",
+        "EmailAddress": "email", "FirstName": "company",
+    },
+    ("xero", "revenue"): {
+        "PaymentID": "source_id", "Amount": "amount",
+        "CurrencyCode": "currency", "Date": "period",
+    },
+}
+
 # Mappings below this confidence require human confirmation before use.
 CONFIDENCE_THRESHOLD = 0.80
 
@@ -239,7 +298,11 @@ class Transformer:
             except Exception:
                 pass  # Change detection is non-blocking
             cols   = list(row.keys()) + ["workspace_id"]
-            vals   = list(row.values()) + [self._workspace_id]
+            # Safety: stringify any dict/list values that SQLite can't bind
+            vals   = [
+                json.dumps(v) if isinstance(v, (dict, list)) else v
+                for v in list(row.values())
+            ] + [self._workspace_id]
             ph     = ",".join(["?"] * len(cols))
             update = ",".join(
                 f"{c}=excluded.{c}" for c in cols
@@ -315,13 +378,19 @@ class Transformer:
         raw_records: list[dict],
         confirmed: dict | None,
     ) -> dict[str, str]:
-        """Build {source_field: canonical_field} from DB + heuristics."""
+        """Build {source_field: canonical_field} from DB + explicit + heuristics.
+
+        Priority order:
+          1. User-confirmed mappings (from DB)
+          2. Explicit per-connector mappings (EXPLICIT_FIELD_MAPS)
+          3. Auto-detected heuristic mappings (keyword matching)
+        """
         mapping = {}
         if not raw_records:
             return mapping
         sample = raw_records[0]
 
-        # Load confirmed mappings from DB first
+        # 1. Load confirmed mappings from DB first (highest priority)
         try:
             rows = self._conn.execute(
                 "SELECT source_field, canonical_field FROM field_mappings "
@@ -333,7 +402,16 @@ class Transformer:
         except Exception:
             pass
 
-        # Fill gaps with heuristics (only if confidence meets threshold)
+        # 2. Check explicit per-connector mapping (if defined, use ONLY these)
+        explicit_key = (self._source, entity_type)
+        explicit = EXPLICIT_FIELD_MAPS.get(explicit_key)
+        if explicit:
+            for src_field, can_field in explicit.items():
+                if src_field not in mapping:  # don't override user-confirmed
+                    mapping[src_field] = can_field
+            return mapping  # Skip heuristics entirely when explicit map exists
+
+        # 3. Fill gaps with heuristics (only if confidence meets threshold)
         for k in sample.keys():
             if k not in mapping:
                 cf, confidence = _guess_canonical_field(k, entity_type)

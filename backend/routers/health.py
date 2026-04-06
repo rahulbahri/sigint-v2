@@ -10,7 +10,7 @@ from typing import Optional
 from fastapi import APIRouter, Query, Request
 
 from core.database import get_db
-from core.deps import _get_workspace, _require_workspace
+from core.deps import _require_workspace
 from core.health_score import compute_health_score, _is_on_target, _is_critical, _gap_pct
 from core.intelligence import (
     benchmark_position,
@@ -63,15 +63,7 @@ def get_health_score(
     to_month: Optional[int] = Query(None),
 ):
     """Return the workspace health score with full breakdown."""
-    workspace_id = _get_workspace(request)
-    if not workspace_id:
-        return {
-            "score": 0, "grade": "—", "label": "No Data", "color": "grey",
-            "momentum": 0, "target_achievement": 0, "risk_flags": 0,
-            "kpis_green": 0, "kpis_yellow": 0, "kpis_red": 0, "kpis_grey": 0,
-            "months_of_data": 0, "needs_attention": [], "doing_well": [],
-            "momentum_trend": "stable",
-        }
+    workspace_id = _require_workspace(request)
     kwargs = _parse_weight_and_period_params(
         w_momentum, w_target, w_risk, from_year, from_month, to_year, to_month
     )
@@ -100,7 +92,7 @@ def get_home(
     Aggregated home-screen payload: health score + recent brief + spotlight KPIs.
     Used by the HomeScreen component to avoid multiple round trips.
     """
-    workspace_id = _get_workspace(request)
+    workspace_id = _require_workspace(request)
     conn = get_db()
 
     kwargs = _parse_weight_and_period_params(
@@ -441,7 +433,7 @@ def get_kpi_detail(kpi_key: str, request: Request):
     Return rich detail for a single KPI: definition, causation rules,
     benchmarks, monthly time series, target, and current status.
     """
-    workspace_id = _get_workspace(request)
+    workspace_id = _require_workspace(request)
     conn = get_db()
 
     # KPI definition

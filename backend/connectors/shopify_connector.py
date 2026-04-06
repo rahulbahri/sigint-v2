@@ -4,10 +4,13 @@ Auth: OAuth2 (per-shop token).
 """
 from __future__ import annotations
 
+import logging
 import os
 import httpx
 
-from .base import BaseConnector, ConnectorError
+from .base import BaseConnector, ConnectorError, ConnectorAuthError, _request_with_retry
+
+log = logging.getLogger("connectors.shopify")
 
 _AUTH_PATH  = "/admin/oauth/authorize"
 _TOKEN_PATH = "/admin/oauth/access_token"
@@ -62,11 +65,23 @@ class ShopifyConnector(BaseConnector):
             "Content-Type": "application/json",
         }
         base = f"https://{shop}/admin/api/2024-01"
-        return [
-            {"entity_type": "revenue",   "records": self._fetch_orders(base, headers)},
-            {"entity_type": "customers", "records": self._fetch_customers(base, headers)},
-            {"entity_type": "products",  "records": self._fetch_products(base, headers)},
+
+        entities = [
+            ("revenue",   self._fetch_orders),
+            ("customers", self._fetch_customers),
+            ("products",  self._fetch_products),
         ]
+        results = []
+        for entity_type, fetcher in entities:
+            try:
+                records = fetcher(base, headers)
+                results.append({"entity_type": entity_type, "records": records})
+            except ConnectorAuthError:
+                raise
+            except Exception as exc:
+                log.error("[shopify] Failed to fetch %s: %s", entity_type, exc)
+                results.append({"entity_type": entity_type, "records": [], "error": str(exc)})
+        return results
 
     def _fetch_orders(self, base: str, headers: dict) -> list[dict]:
         return self._paginate_link(f"{base}/orders.json", headers, "orders",
@@ -86,23 +101,20 @@ class ShopifyConnector(BaseConnector):
         """Shopify uses Link header pagination."""
         records = []
         next_url: str | None = url
-        try:
-            with httpx.Client(timeout=30) as client:
-                while next_url:
-                    r = client.get(next_url, headers=headers,
-                                   params=params if next_url == url else None)
-                    if r.status_code != 200:
-                        raise ConnectorError(
-                            f"Shopify error {r.status_code} on {url}: {r.text}"
-                        )
-                    records.extend(r.json().get(key, []))
-                    # Parse Link header for next page
-                    link_header = r.headers.get("Link", "")
-                    next_url = None
-                    for part in link_header.split(","):
-                        if 'rel="next"' in part:
-                            next_url = part.split(";")[0].strip().strip("<>")
-                            break
-        except httpx.HTTPError as exc:
-            raise ConnectorError(f"Shopify network error: {exc}") from exc
+        with httpx.Client(timeout=30) as client:
+            while next_url:
+                # Only pass query params on the first request; subsequent pages
+                # have params baked into the Link URL returned by Shopify.
+                kw = {"headers": headers}
+                if next_url == url:
+                    kw["params"] = params
+                r = _request_with_retry(client, "GET", next_url, **kw)
+                records.extend(r.json().get(key, []))
+                # Parse Link header for next page
+                link_header = r.headers.get("Link", "")
+                next_url = None
+                for part in link_header.split(","):
+                    if 'rel="next"' in part:
+                        next_url = part.split(";")[0].strip().strip("<>")
+                        break
         return records

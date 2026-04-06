@@ -22,7 +22,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from core.database import get_db
-from core.deps import _get_workspace
+from core.deps import _require_workspace
 from core.health_score import compute_health_score
 
 router = APIRouter()
@@ -110,7 +110,7 @@ async def generate_board_pack(request: Request, body: BoardPackRequest):
     except ImportError:
         raise HTTPException(status_code=500, detail="python-pptx not installed")
 
-    workspace_id = _get_workspace(request)
+    workspace_id = _require_workspace(request)
     theme = THEMES.get(body.theme, THEMES["corporate"])
     conn = get_db()
 

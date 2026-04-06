@@ -11,12 +11,17 @@ Credentials required (Render env vars):
 """
 from __future__ import annotations
 
+import logging
 import os
 import xml.etree.ElementTree as ET
 from datetime import datetime, timedelta
 import httpx
 
 from .base import BaseConnector, ConnectorError
+
+log = logging.getLogger("connectors.sage_intacct")
+
+_PAGE_SIZE = 1000
 
 _API_URL   = "https://api.intacct.com/ia/xml/xmlgw.phtml"
 _COMPANY   = os.environ.get("SAGE_COMPANY_ID", "")
@@ -72,7 +77,9 @@ def _post_xml(body: str) -> ET.Element:
     return root
 
 
-def _query_xml(object_name: str, fields: list[str], filters: str = "") -> str:
+def _query_xml(object_name: str, fields: list[str], filters: str = "",
+               offset: int = 0) -> str:
+    """Build a <query> XML fragment with pagination support."""
     fields_xml = "".join(f"<field>{f}</field>" for f in fields)
     filter_section = f"<filter>{filters}</filter>" if filters else ""
     return f"""
@@ -80,7 +87,8 @@ def _query_xml(object_name: str, fields: list[str], filters: str = "") -> str:
       <object>{object_name}</object>
       <select>{fields_xml}</select>
       {filter_section}
-      <pagesize>1000</pagesize>
+      <pagesize>{_PAGE_SIZE}</pagesize>
+      <offset>{offset}</offset>
     </query>"""
 
 
@@ -122,28 +130,71 @@ class SageIntacctConnector(BaseConnector):
             {"entity_type": "customers", "records": self._fetch_customers(cid, csec, comp, uid, upwd)},
         ]
 
+    def _fetch_paginated(self, cid, csec, comp, uid, upwd,
+                         object_name: str, fields: list[str],
+                         control_id: str, filters: str = "",
+                         max_pages: int = 200) -> list[dict]:
+        """Fetch all records for an object using offset-based pagination.
+
+        After each response, checks `numremaining` on the data element.
+        If > 0, queries again with an incremented offset.
+        """
+        all_records: list[dict] = []
+        offset = 0
+        for page in range(max_pages):
+            fn = _query_xml(object_name, fields, filters=filters, offset=offset)
+            xml = _build_request(cid, csec, comp, uid, upwd,
+                                 f"{control_id}_p{page}", fn)
+            root = _post_xml(xml)
+            page_records = self._parse_list(root, object_name)
+            all_records.extend(page_records)
+
+            # Check if there are more records remaining
+            data_elem = root.find(".//data")
+            num_remaining = 0
+            if data_elem is not None:
+                num_remaining = int(data_elem.get("numremaining", "0"))
+
+            log.info("[SageIntacct] %s page %d: fetched %d records "
+                     "(total %d, remaining %d)",
+                     object_name, page + 1, len(page_records),
+                     len(all_records), num_remaining)
+
+            if num_remaining <= 0 or len(page_records) < _PAGE_SIZE:
+                break
+            offset += _PAGE_SIZE
+        else:
+            log.warning("[SageIntacct] %s hit max page limit (%d), "
+                        "some records may be missing",
+                        object_name, max_pages)
+
+        return all_records
+
     def _fetch_invoices(self, cid, csec, comp, uid, upwd) -> list[dict]:
-        fn = _query_xml("ARINVOICE",
-                        ["RECORDNO", "CUSTOMERID", "CUSTOMERNAME", "TOTALDUE",
-                         "TOTALENTERED", "WHENDUE", "WHENCREATED", "STATE"])
-        xml = _build_request(cid, csec, comp, uid, upwd, "get_invoices", fn)
-        root = _post_xml(xml)
-        return self._parse_list(root, "ARINVOICE")
+        return self._fetch_paginated(
+            cid, csec, comp, uid, upwd,
+            object_name="ARINVOICE",
+            fields=["RECORDNO", "CUSTOMERID", "CUSTOMERNAME", "TOTALDUE",
+                     "TOTALENTERED", "WHENDUE", "WHENCREATED", "STATE"],
+            control_id="get_invoices",
+        )
 
     def _fetch_apbills(self, cid, csec, comp, uid, upwd) -> list[dict]:
-        fn = _query_xml("APBILL",
-                        ["RECORDNO", "VENDORID", "VENDORNAME", "TOTALDUE",
-                         "TOTALENTERED", "WHENDUE", "WHENCREATED", "STATE"])
-        xml = _build_request(cid, csec, comp, uid, upwd, "get_apbills", fn)
-        root = _post_xml(xml)
-        return self._parse_list(root, "APBILL")
+        return self._fetch_paginated(
+            cid, csec, comp, uid, upwd,
+            object_name="APBILL",
+            fields=["RECORDNO", "VENDORID", "VENDORNAME", "TOTALDUE",
+                     "TOTALENTERED", "WHENDUE", "WHENCREATED", "STATE"],
+            control_id="get_apbills",
+        )
 
     def _fetch_customers(self, cid, csec, comp, uid, upwd) -> list[dict]:
-        fn = _query_xml("CUSTOMER",
-                        ["CUSTOMERID", "NAME", "WHENCREATED", "STATUS", "TOTALDUE"])
-        xml = _build_request(cid, csec, comp, uid, upwd, "get_customers", fn)
-        root = _post_xml(xml)
-        return self._parse_list(root, "CUSTOMER")
+        return self._fetch_paginated(
+            cid, csec, comp, uid, upwd,
+            object_name="CUSTOMER",
+            fields=["CUSTOMERID", "NAME", "WHENCREATED", "STATUS", "TOTALDUE"],
+            control_id="get_customers",
+        )
 
     @staticmethod
     def _parse_list(root: ET.Element, tag: str) -> list[dict]:

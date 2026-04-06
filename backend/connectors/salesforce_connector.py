@@ -4,10 +4,15 @@ Auth: OAuth2.
 """
 from __future__ import annotations
 
+import logging
 import os
+from urllib.parse import urlparse
+
 import httpx
 
-from .base import BaseConnector, ConnectorError
+from .base import BaseConnector, ConnectorError, ConnectorAuthError, _request_with_retry
+
+log = logging.getLogger("connectors.salesforce")
 
 _AUTH_URL  = "https://login.salesforce.com/services/oauth2/authorize"
 _TOKEN_URL = "https://login.salesforce.com/services/oauth2/token"
@@ -60,34 +65,39 @@ class SalesforceConnector(BaseConnector):
             raise ConnectorError("Salesforce credentials missing access_token or instance_url.")
         headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
         base    = f"{instance_url}/services/data/{_API_VER}"
-        return [
-            {"entity_type": "pipeline",  "records": self._soql(base, headers,
-                "SELECT Id,Name,Amount,StageName,CloseDate,CreatedDate,OwnerId,AccountId,"
-                "Probability,Type,LeadSource FROM Opportunity")},
-            {"entity_type": "customers", "records": self._soql(base, headers,
-                "SELECT Id,Name,Email,Phone,Title,AccountId,CreatedDate,LeadSource,"
-                "Status FROM Contact")},
-            {"entity_type": "companies", "records": self._soql(base, headers,
-                "SELECT Id,Name,Industry,NumberOfEmployees,AnnualRevenue,"
-                "BillingCountry,CreatedDate FROM Account")},
+
+        entities = [
+            ("pipeline", "SELECT Id,Name,Amount,StageName,CloseDate,CreatedDate,OwnerId,AccountId,"
+                         "Probability,Type,LeadSource FROM Opportunity"),
+            ("customers", "SELECT Id,Name,Email,Phone,Title,AccountId,CreatedDate,LeadSource,"
+                          "Status FROM Contact"),
+            ("companies", "SELECT Id,Name,Industry,NumberOfEmployees,AnnualRevenue,"
+                          "BillingCountry,CreatedDate FROM Account"),
         ]
+        results = []
+        for entity_type, query in entities:
+            try:
+                records = self._soql(base, headers, query)
+                results.append({"entity_type": entity_type, "records": records})
+            except ConnectorAuthError:
+                raise
+            except Exception as exc:
+                log.error("[salesforce] Failed to fetch %s: %s", entity_type, exc)
+                results.append({"entity_type": entity_type, "records": [], "error": str(exc)})
+        return results
 
     def _soql(self, base: str, headers: dict, query: str) -> list[dict]:
         records  = []
         next_url = f"{base}/query?q={query}"
-        try:
-            with httpx.Client(timeout=30) as client:
-                while next_url:
-                    r = client.get(next_url, headers=headers)
-                    if r.status_code != 200:
-                        raise ConnectorError(
-                            f"Salesforce query error {r.status_code}: {r.text}"
-                        )
-                    data = r.json()
-                    records.extend(data.get("records", []))
-                    next_path = data.get("nextRecordsUrl")
-                    # nextRecordsUrl is a path, prepend instance base
-                    next_url  = (base.split("/services")[0] + next_path) if next_path else None
-        except httpx.HTTPError as exc:
-            raise ConnectorError(f"Salesforce network error: {exc}") from exc
+        # Derive instance origin (scheme + host) robustly from the base URL
+        parsed = urlparse(base)
+        instance_origin = f"{parsed.scheme}://{parsed.netloc}"
+        with httpx.Client(timeout=30) as client:
+            while next_url:
+                r = _request_with_retry(client, "GET", next_url, headers=headers)
+                data = r.json()
+                records.extend(data.get("records", []))
+                next_path = data.get("nextRecordsUrl")
+                # nextRecordsUrl is an absolute path like /services/data/v59.0/query/...
+                next_url = (instance_origin + next_path) if next_path else None
         return records

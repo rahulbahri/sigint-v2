@@ -5,10 +5,13 @@ Private App tokens start with pat-na1-... or pat-na2-...
 """
 from __future__ import annotations
 
+import logging
 import os
 import httpx
 
-from .base import BaseConnector, ConnectorError
+from .base import BaseConnector, ConnectorError, ConnectorAuthError, _request_with_retry
+
+log = logging.getLogger("connectors.hubspot")
 
 _BASE      = "https://api.hubapi.com"
 _AUTH_URL  = "https://app.hubspot.com/oauth/authorize"
@@ -45,11 +48,23 @@ class HubSpotConnector(BaseConnector):
         if not token:
             raise ConnectorError("HubSpot token missing.")
         headers = {"Authorization": f"Bearer {token}"}
-        return [
-            {"entity_type": "customers", "records": self._fetch_contacts(headers)},
-            {"entity_type": "pipeline",  "records": self._fetch_deals(headers)},
-            {"entity_type": "companies", "records": self._fetch_companies(headers)},
+
+        entities = [
+            ("customers", self._fetch_contacts),
+            ("pipeline",  self._fetch_deals),
+            ("companies", self._fetch_companies),
         ]
+        results = []
+        for entity_type, fetcher in entities:
+            try:
+                records = fetcher(headers)
+                results.append({"entity_type": entity_type, "records": records})
+            except ConnectorAuthError:
+                raise  # auth errors must propagate
+            except Exception as exc:
+                log.error("[hubspot] Failed to fetch %s: %s", entity_type, exc)
+                results.append({"entity_type": entity_type, "records": [], "error": str(exc)})
+        return results
 
     def _fetch_contacts(self, headers: dict) -> list[dict]:
         props = "firstname,lastname,email,company,createdate,hs_lead_status,lifecyclestage"
@@ -66,20 +81,13 @@ class HubSpotConnector(BaseConnector):
     def _hs_paginate(self, url: str, headers: dict, properties: str) -> list[dict]:
         records = []
         params  = {"limit": _LIMIT, "properties": properties}
-        try:
-            with httpx.Client(timeout=30) as client:
-                while True:
-                    r = client.get(url, headers=headers, params=params)
-                    if r.status_code != 200:
-                        raise ConnectorError(
-                            f"HubSpot API error {r.status_code}: {r.text[:200]}"
-                        )
-                    data = r.json()
-                    records.extend(data.get("results", []))
-                    after = data.get("paging", {}).get("next", {}).get("after")
-                    if not after:
-                        break
-                    params["after"] = after
-        except httpx.HTTPError as exc:
-            raise ConnectorError(f"HubSpot network error: {exc}") from exc
+        with httpx.Client(timeout=30) as client:
+            while True:
+                r = _request_with_retry(client, "GET", url, headers=headers, params=params)
+                data = r.json()
+                records.extend(data.get("results", []))
+                after = data.get("paging", {}).get("next", {}).get("after")
+                if not after:
+                    break
+                params["after"] = after
         return records

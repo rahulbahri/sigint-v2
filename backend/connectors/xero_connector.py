@@ -4,10 +4,14 @@ Auth: OAuth2.
 """
 from __future__ import annotations
 
+import logging
 import os
+
 import httpx
 
-from .base import BaseConnector, ConnectorError
+from .base import BaseConnector, ConnectorError, ConnectorAuthError, _request_with_retry
+
+log = logging.getLogger("connectors.xero")
 
 _AUTH_URL  = "https://login.xero.com/identity/connect/authorize"
 _TOKEN_URL = "https://identity.xero.com/connect/token"
@@ -54,6 +58,7 @@ class XeroConnector(BaseConnector):
         return {**tokens, "tenant_id": tenant}
 
     def refresh_token(self, credentials: dict) -> dict:
+        log.info("Refreshing Xero OAuth token")
         r = httpx.post(
             _TOKEN_URL,
             data={
@@ -64,7 +69,9 @@ class XeroConnector(BaseConnector):
             timeout=30,
         )
         if r.status_code != 200:
+            log.error("Xero token refresh failed: %s", r.text[:200])
             raise ConnectorError(f"Xero token refresh failed: {r.text}")
+        log.info("Xero OAuth token refreshed successfully")
         return {**credentials, **r.json()}
 
     def extract(self, workspace_id: str, credentials: dict) -> list[dict]:
@@ -77,12 +84,29 @@ class XeroConnector(BaseConnector):
             "Xero-tenant-id": tenant_id,
             "Accept":         "application/json",
         }
-        return [
-            {"entity_type": "invoices",  "records": self._get(headers, "Invoices")},
-            {"entity_type": "customers", "records": self._get(headers, "Contacts")},
-            {"entity_type": "revenue",   "records": self._get(headers, "Payments")},
-            {"entity_type": "accounts",  "records": self._get(headers, "Accounts")},
+
+        entities = [
+            ("invoices",  "Invoices"),
+            ("customers", "Contacts"),
+            ("revenue",   "Payments"),
+            ("accounts",  "Accounts"),
         ]
+
+        results: list[dict] = []
+        for entity_type, xero_endpoint in entities:
+            try:
+                records = self._get(headers, xero_endpoint)
+                results.append({"entity_type": entity_type, "records": records})
+            except ConnectorAuthError:
+                raise  # auth errors must propagate immediately
+            except Exception as exc:
+                log.error("Xero: failed to fetch %s: %s", xero_endpoint, exc)
+                results.append({
+                    "entity_type": entity_type,
+                    "records": [],
+                    "error": str(exc),
+                })
+        return results
 
     def _fetch_tenant(self, access_token: str) -> str:
         r = httpx.get(
@@ -95,25 +119,19 @@ class XeroConnector(BaseConnector):
         return r.json()[0]["tenantId"]
 
     def _get(self, headers: dict, endpoint: str) -> list[dict]:
+        """Paginated GET with retry."""
         records = []
         page    = 1
-        try:
-            with httpx.Client(timeout=30) as client:
-                while True:
-                    r = client.get(
-                        f"{_BASE}/{endpoint}",
-                        headers=headers,
-                        params={"page": page},
-                    )
-                    if r.status_code != 200:
-                        raise ConnectorError(
-                            f"Xero error {r.status_code} on {endpoint}: {r.text}"
-                        )
-                    batch = r.json().get(endpoint, [])
-                    records.extend(batch)
-                    if len(batch) < _LIMIT:
-                        break
-                    page += 1
-        except httpx.HTTPError as exc:
-            raise ConnectorError(f"Xero network error: {exc}") from exc
+        with httpx.Client(timeout=30) as client:
+            while True:
+                r = _request_with_retry(
+                    client, "GET", f"{_BASE}/{endpoint}",
+                    headers=headers,
+                    params={"page": page},
+                )
+                batch = r.json().get(endpoint, [])
+                records.extend(batch)
+                if len(batch) < _LIMIT:
+                    break
+                page += 1
         return records
