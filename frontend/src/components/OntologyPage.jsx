@@ -1215,10 +1215,17 @@ export default function OntologyPage() {
   const [clusterView, setClusterView] = useState(false)
 
   // ── New: graph analysis modes ──────────────────────────────────────────
-  const [graphMode,   setGraphMode]   = useState('standard') // 'standard' | 'focus' | 'sensitivity'
-  const [focusNode,   setFocusNode]   = useState('')
+  const [graphMode,   setGraphMode]   = useState(() => localStorage.getItem('axiom_ontology_graph_mode') || 'standard') // 'standard' | 'focus' | 'sensitivity'
+  const [focusNode,   setFocusNode]   = useState(() => localStorage.getItem('axiom_ontology_focus') || '')
   const [sensitivity, setSensitivity] = useState({ ...DEFAULT_SENSITIVITY })
   const [scenarios,   setScenarios]   = useState([])
+  useEffect(() => {
+    if (focusNode) localStorage.setItem('axiom_ontology_focus', focusNode)
+    else localStorage.removeItem('axiom_ontology_focus')
+  }, [focusNode])
+  useEffect(() => {
+    localStorage.setItem('axiom_ontology_graph_mode', graphMode)
+  }, [graphMode])
 
   // ── Legend bar filters ─────────────────────────────────────────────────
   const [activeLinkFilters,   setActiveLinkFilters]   = useState(new Set())

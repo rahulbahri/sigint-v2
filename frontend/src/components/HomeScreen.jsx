@@ -9,6 +9,7 @@ import {
   Loader2, AlertCircle, Calendar,
   Flame, Zap, FileText, MessageSquare
 } from 'lucide-react'
+import { fmtKpiValue, fmtKpiRange } from './kpiFormat'
 
 // ── KPI contextual info dictionary ───────────────────────────────────────────
 const KPI_INFO = {
@@ -189,8 +190,8 @@ function KpiSlideOut({ kpi: initialKpi, status: initialStatus, onClose, onNaviga
 
   const info = KPI_INFO[currentKpi?.key] || {}
   const label = formatKpiLabel(currentKpi?.key)
-  const avg    = currentKpi?.avg  != null ? `${currentKpi.avg}${currentKpi.unit || ''}` : '—'
-  const target = currentKpi?.target != null ? `${currentKpi.target}${currentKpi.unit || ''}` : 'Not set'
+  const avg    = fmtKpiValue(currentKpi?.avg, currentKpi?.unit)
+  const target = fmtKpiValue(currentKpi?.target, currentKpi?.unit)
   const sparkColor = currentStatus === 'green' ? '#059669' : currentStatus === 'red' ? '#DC2626' : '#D97706'
   const statusColors = {
     red:   { pill: 'bg-red-100 text-red-700',     label: 'Below Target' },
@@ -234,19 +235,16 @@ function KpiSlideOut({ kpi: initialKpi, status: initialStatus, onClose, onNaviga
   const narrative = () => {
     if (currentKpi?.avg == null || !currentKpi?.target) return `No target has been set for ${label}. Add a target in Settings to track performance.`
     const a = currentKpi.avg, t = currentKpi.target
-    const directionNote = isLowerBetter
-      ? 'This is a "lower is better" metric — a lower value means stronger performance.'
-      : 'This is a "higher is better" metric — a higher value means stronger performance.'
 
     if (isPerformingWell) {
       const absDiff = Math.abs(gapPct)
-      return `${label} is at ${avg} against a target of ${target}. The current value is ${absDiff}% better than the target — this KPI is on track. ${directionNote}`
+      return `${label} is at ${avg} against a target of ${target}. The current value is ${absDiff}% better than the target — this KPI is on track.`
     } else {
       const absDiff = Math.abs(gapPct)
       if (isLowerBetter) {
-        return `${label} is at ${avg}, which is ${absDiff}% above the target of ${target}. Since lower values are better for this metric, this KPI needs to come down. ${directionNote}`
+        return `${label} is at ${avg}, which is ${absDiff}% above the target of ${target}. Since lower values are better for this metric, this KPI needs to come down.`
       } else {
-        return `${label} is at ${avg}, which is ${absDiff}% below the target of ${target}. This KPI needs attention to improve. ${directionNote}`
+        return `${label} is at ${avg}, which is ${absDiff}% below the target of ${target}. This KPI needs attention to improve.`
       }
     }
   }
@@ -330,7 +328,7 @@ function KpiSlideOut({ kpi: initialKpi, status: initialStatus, onClose, onNaviga
           </button>
         </div>
 
-        <div className="flex-1 overflow-y-auto px-5 py-4 space-y-5">
+        <div className="flex-1 overflow-y-auto px-5 py-4 space-y-6">
           {/* Direction guidance + Typical range + Benchmark placeholder */}
           <div className="flex items-center gap-3 flex-wrap">
             {directionLabel && (
@@ -427,7 +425,7 @@ function KpiSlideOut({ kpi: initialKpi, status: initialStatus, onClose, onNaviga
                           <tr key={i} className={i % 2 === 0 ? '' : 'bg-white'}>
                             <td className="px-3 py-1.5 text-slate-600">{row.period || row.date || '—'}</td>
                             <td className="px-3 py-1.5 text-slate-800 font-semibold text-right">
-                              {row.value != null ? `${row.value}${currentKpi.unit || ''}` : '—'}
+                              {fmtKpiValue(row.value, currentKpi?.unit)}
                             </td>
                           </tr>
                         ))}
@@ -1197,8 +1195,8 @@ function KpiCard({ kpi, status, onOpen }) {
   }[status] || { bg: 'bg-slate-50', border: 'border-slate-200', text: 'text-slate-500', hover: 'hover:border-slate-300' }
 
   const label = formatKpiLabel(kpi.key)
-  const avg    = kpi.avg  != null ? `${kpi.avg}${kpi.unit || ''}` : '—'
-  const target = kpi.target != null ? `${kpi.target}${kpi.unit || ''}` : '—'
+  const avg    = fmtKpiValue(kpi.avg, kpi.unit)
+  const target = fmtKpiValue(kpi.target, kpi.unit)
   // Direction-aware gap: positive = performing well, negative = underperforming
   const isLower = kpi.direction === 'lower'
   const gapPct = (kpi.avg != null && kpi.target)
@@ -1859,8 +1857,8 @@ export default function HomeScreen({ onNavigate, onAskAnika }) {
           <div className="space-y-2">
             {topCritical.map(kpi => {
               const kLabel = formatKpiLabel(kpi.key)
-              const kAvg = kpi.avg != null ? `${kpi.avg}${kpi.unit || ''}` : '--'
-              const kTarget = kpi.target != null ? `${kpi.target}${kpi.unit || ''}` : '--'
+              const kAvg = fmtKpiValue(kpi.avg, kpi.unit)
+              const kTarget = fmtKpiValue(kpi.target, kpi.unit)
               const kGapFromApi = kpi.gap_pct
               const kComposite = kpi.composite
               const kRank = kpi.rank
@@ -2089,8 +2087,8 @@ export default function HomeScreen({ onNavigate, onAskAnika }) {
                     </div>
                     {byDomain[dk].kpis.map(kpi => {
                       const kLabel = formatKpiLabel(kpi.key)
-                      const kAvg = kpi.avg != null ? `${kpi.avg}${kpi.unit || ''}` : '--'
-                      const kTarget = kpi.target != null ? `${kpi.target}${kpi.unit || ''}` : '--'
+                      const kAvg = fmtKpiValue(kpi.avg, kpi.unit)
+                      const kTarget = fmtKpiValue(kpi.target, kpi.unit)
                       return (
                         <button
                           key={kpi.key}

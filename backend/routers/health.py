@@ -397,6 +397,23 @@ DATA_REQUIREMENTS = {
 }
 
 
+def _deduplicate_actions(primary: str, candidates: list[str]) -> list[str]:
+    """Remove candidates that substantially overlap with the primary action."""
+    if not primary:
+        return candidates
+    primary_lower = primary.lower()
+    result = []
+    for c in candidates:
+        c_lower = c.lower()
+        if len(c_lower) > 10 and c_lower[:40] in primary_lower:
+            continue
+        first_sentence = c_lower.split('.')[0].strip()
+        if len(first_sentence) > 20 and first_sentence in primary_lower:
+            continue
+        result.append(c)
+    return result
+
+
 def _build_causal_chain(
     kpi_key: str, depth: int = 0, max_depth: int = 3, visited: Optional[set] = None
 ) -> dict:
@@ -582,9 +599,19 @@ def get_kpi_detail(kpi_key: str, request: Request):
         final_root_causes = causation.get("root_causes", [])
 
     if rca.get("contextual_action"):
-        final_actions = [rca["contextual_action"]] + actions[:2]
+        deduped = _deduplicate_actions(rca["contextual_action"], actions[:3])
+        final_actions = [rca["contextual_action"]] + deduped[:2]
     else:
         final_actions = actions
+    # Remove exact duplicates
+    _seen = set()
+    _unique = []
+    for a in final_actions:
+        _norm = a.strip().lower()
+        if _norm not in _seen:
+            _seen.add(_norm)
+            _unique.append(a)
+    final_actions = _unique
 
     return {
         "kpi_key":        kpi_key,
@@ -602,6 +629,7 @@ def get_kpi_detail(kpi_key: str, request: Request):
         "downstream_impact": causation.get("downstream_impact", []),
         "corrective_actions": final_actions,
         "root_cause_analysis": rca,
+        "data_grounded": rca.get("data_grounded", False),
         "benchmarks":        benchmark,
         "benchmark_position": bench_pos,
         "causal_chain":      causal_chain,
