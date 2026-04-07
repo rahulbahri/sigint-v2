@@ -10,6 +10,16 @@ from core.deps import _get_workspace, _require_workspace
 
 router = APIRouter()
 
+# ─── Model Window Defaults ────────────────────────────────────────────────────
+
+STAGE_DEFAULT_WINDOWS = {
+    "seed": 18,
+    "series_a": 36,
+    "series_b": 48,
+    "series_c": 60,
+}
+VALID_WINDOW_RANGE = (6, 120)  # months
+
 # Explicit allowlist — table names used in the workspace data-reset endpoint.
 # Never derive this from user input; only these tables may be cleared.
 _WORKSPACE_DATA_TABLES = (
@@ -33,6 +43,17 @@ def get_company_settings(request: Request):
 async def update_company_settings(request: Request):
     workspace_id = _get_workspace(request)
     body = await request.json()
+
+    # Validate model_window_months if present
+    if "model_window_months" in body:
+        try:
+            mw = int(body["model_window_months"])
+        except (ValueError, TypeError):
+            raise HTTPException(400, "model_window_months must be an integer.")
+        lo, hi = VALID_WINDOW_RANGE
+        if mw < lo or mw > hi:
+            raise HTTPException(400, f"model_window_months must be between {lo} and {hi}.")
+
     conn = get_db()
     for k, v in body.items():
         conn.execute(
@@ -48,6 +69,31 @@ async def update_company_settings(request: Request):
            workspace_id=workspace_id)
 
     return {"status": "ok"}
+
+
+@router.get("/api/company-settings/model-window", tags=["Settings"])
+def get_model_window(request: Request):
+    """Return the configured forecast model window in months, with source info."""
+    workspace_id = _get_workspace(request)
+    conn = get_db()
+    rows = conn.execute(
+        "SELECT key, value FROM company_settings WHERE workspace_id=? AND key IN ('model_window_months', 'company_stage')",
+        [workspace_id],
+    ).fetchall()
+    conn.close()
+
+    settings = {r["key"]: r["value"] for r in rows}
+    stage = settings.get("company_stage", "series_b")
+
+    if "model_window_months" in settings:
+        try:
+            months = int(settings["model_window_months"])
+            return {"model_window_months": months, "source": "custom", "stage": stage}
+        except (ValueError, TypeError):
+            pass
+
+    default = STAGE_DEFAULT_WINDOWS.get(stage, 36)
+    return {"model_window_months": default, "source": "stage_default", "stage": stage}
 
 
 _ALLOWED_LOGO_MIME = {"image/png", "image/jpeg", "image/jpg", "image/svg+xml",

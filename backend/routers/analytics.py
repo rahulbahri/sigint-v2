@@ -10,7 +10,7 @@ import pandas as pd
 from datetime import datetime
 from typing import Optional, List
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, File, HTTPException, Request, UploadFile
 from fastapi.responses import StreamingResponse, HTMLResponse
 from pydantic import BaseModel
 
@@ -2089,6 +2089,376 @@ def export_integration_spec():
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={"Content-Disposition": f"attachment; filename={fname}"},
     )
+
+
+# ─── Financial Model Export ──────────────────────────────────────────────────
+
+@router.get("/api/export/financial-model.xlsx", tags=["Export"])
+def export_financial_model(request: Request):
+    """
+    Generate a structured Excel financial model with live formulas,
+    editable Assumptions sheet, P&L, scenarios, and confidence bands.
+    """
+    from core.excel_model import ModelWorkbookBuilder
+    from core.database import _audit
+
+    workspace_id = _require_workspace(request)
+    conn = get_db()
+
+    # ── Gather monthly data ──────────────────────────────────────────────
+    rows = conn.execute(
+        "SELECT year, month, data_json FROM monthly_data WHERE workspace_id=? "
+        "ORDER BY year ASC, month ASC",
+        [workspace_id],
+    ).fetchall()
+
+    monthly_data = []
+    for r in rows:
+        try:
+            kpis = json.loads(r["data_json"])
+            # Strip metadata keys
+            clean = {k: v for k, v in kpis.items() if not k.startswith("_") and v is not None}
+            monthly_data.append((int(r["year"]), int(r["month"]), clean))
+        except (json.JSONDecodeError, TypeError):
+            continue
+
+    # ── Gather forecast data ─────────────────────────────────────────────
+    forecast_data = None
+    model_row = conn.execute(
+        "SELECT * FROM markov_models WHERE workspace_id=? ORDER BY id DESC LIMIT 1",
+        [workspace_id],
+    ).fetchone()
+
+    if model_row:
+        # Check for a recent forecast run
+        run_row = conn.execute(
+            "SELECT trajectories, causal_paths FROM forecast_runs WHERE model_id=? ORDER BY id DESC LIMIT 1",
+            [model_row["id"]],
+        ).fetchone()
+        if run_row and run_row["trajectories"]:
+            try:
+                forecast_data = {
+                    "trajectories": json.loads(run_row["trajectories"]),
+                    "kpis": json.loads(model_row["kpis"]),
+                }
+            except (json.JSONDecodeError, TypeError):
+                pass
+
+    # ── Gather scenarios ─────────────────────────────────────────────────
+    scenario_rows = conn.execute(
+        "SELECT name, levers_json FROM saved_scenarios WHERE workspace_id=? ORDER BY created_at DESC LIMIT 3",
+        [workspace_id],
+    ).fetchall()
+    scenarios = [{"name": s["name"], "levers_json": s["levers_json"]} for s in scenario_rows]
+
+    # ── Gather settings ──────────────────────────────────────────────────
+    settings_rows = conn.execute(
+        "SELECT key, value FROM company_settings WHERE workspace_id=?",
+        [workspace_id],
+    ).fetchall()
+    settings = {r["key"]: r["value"] for r in settings_rows}
+
+    # ── Gather targets ───────────────────────────────────────────────────
+    target_rows = conn.execute(
+        "SELECT kpi_key, target_value, unit, direction FROM kpi_targets WHERE workspace_id=?",
+        [workspace_id],
+    ).fetchall()
+    targets = {
+        r["kpi_key"]: {"target_value": r["target_value"], "unit": r["unit"], "direction": r["direction"]}
+        for r in target_rows
+    }
+
+    conn.close()
+
+    # ── Build the workbook ───────────────────────────────────────────────
+    builder = ModelWorkbookBuilder(monthly_data, forecast_data, scenarios, settings, targets)
+    wb = builder.build()
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+
+    version = datetime.utcnow().strftime('%Y%m%d%H%M%S')
+    fname = f"axiom-financial-model-{version}.xlsx"
+
+    # ── Build assumption snapshot for Phase 3 diff engine ──────────────
+    _snapshot_keys = (
+        "revenue", "cogs", "opex", "headcount", "customers", "mrr", "arr",
+        "ar", "sm_allocated", "revenue_growth", "gross_margin", "operating_margin",
+        "ebitda_margin", "nrr", "churn_rate", "burn_multiple", "dso",
+        "revenue_growth_rate", "gross_margin_target",
+    )
+    assumption_snapshot = {}
+    if monthly_data:
+        latest_kpis = monthly_data[-1][2]
+        for k in _snapshot_keys:
+            v = latest_kpis.get(k)
+            if v is not None:
+                try:
+                    assumption_snapshot[k] = round(float(v), 6)
+                except (ValueError, TypeError):
+                    pass
+    # Include any settings-based assumptions
+    for sk in ("revenue_growth_rate", "gross_margin_target"):
+        sv = settings.get(sk)
+        if sv is not None and sk not in assumption_snapshot:
+            try:
+                assumption_snapshot[sk] = round(float(sv), 6)
+            except (ValueError, TypeError):
+                pass
+
+    # ── Record export version ────────────────────────────────────────────
+    conn = get_db()
+    try:
+        conn.execute(
+            "INSERT INTO model_exports (version, filename, assumption_snapshot, months_of_data, "
+            "forecast_kpis, scenarios_included, workspace_id) VALUES (?,?,?,?,?,?,?)",
+            (version, fname, json.dumps(assumption_snapshot) if assumption_snapshot else None,
+             len(monthly_data),
+             len(forecast_data["kpis"]) if forecast_data else 0,
+             len(scenarios), workspace_id),
+        )
+        conn.commit()
+    except Exception:
+        pass
+    finally:
+        conn.close()
+
+    _audit("export_financial_model", "export", fname,
+           f"Financial model exported: {len(monthly_data)} months, {len(scenarios)} scenarios",
+           workspace_id=workspace_id)
+
+    return StreamingResponse(
+        buf,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f"attachment; filename={fname}"},
+    )
+
+
+# ─── Financial Model Import + Diff Engine ────────────────────────────────────
+
+@router.post("/api/import/financial-model", tags=["Import"])
+async def import_financial_model(request: Request, file: UploadFile = File(...)):
+    """
+    Parse an uploaded financial model .xlsx, detect changed assumptions
+    vs. the last export snapshot, and return a diff report.
+
+    Does NOT apply changes — the user must confirm via /apply.
+    """
+    import openpyxl
+
+    workspace_id = _require_workspace(request)
+
+    fname = (file.filename or "").lower()
+    if not fname.endswith(".xlsx"):
+        raise HTTPException(400, "Please upload an .xlsx file exported from the platform.")
+
+    contents = await file.read()
+    if len(contents) > 10 * 1024 * 1024:
+        raise HTTPException(413, "File too large. Maximum 10 MB.")
+
+    try:
+        wb = openpyxl.load_workbook(io.BytesIO(contents), data_only=False)
+    except Exception as e:
+        raise HTTPException(400, f"Could not open Excel file: {e}")
+
+    # Read Assumptions sheet
+    if "Assumptions" not in wb.sheetnames:
+        raise HTTPException(400,
+            "Sheet 'Assumptions' not found. Please upload a file exported from 'Export Financial Model'.")
+
+    ws = wb["Assumptions"]
+    imported_values = {}
+
+    # Parse Assumptions layout: Row 4 = headers, Row 5+ = parameter rows
+    # Column 1 = Label, Column 2 = Unit, Column 3 = Description, Column 4+ = monthly values
+    from core.excel_model import ASSUMPTION_PARAMS
+
+    param_labels = {label: key for key, label, _, _, _ in ASSUMPTION_PARAMS}
+    # Map ASSUMPTION_PARAMS keys back to source KPI keys for snapshot comparison
+    _param_to_kpi = {}
+    for key, label, _, _, source_kpi in ASSUMPTION_PARAMS:
+        _param_to_kpi[key] = source_kpi or key  # e.g., "revenue_growth_rate" -> "revenue_growth"
+
+    for r in range(5, ws.max_row + 1):
+        label = ws.cell(row=r, column=1).value
+        if not label:
+            continue
+        param_key = param_labels.get(str(label).strip())
+        if not param_key:
+            continue
+
+        # Read the last monthly value (rightmost non-empty data column)
+        last_val = None
+        for c in range(ws.max_column, 3, -1):
+            cell_val = ws.cell(row=r, column=c).value
+            if cell_val is not None and not str(cell_val).startswith("="):
+                try:
+                    last_val = round(float(cell_val), 6)
+                except (ValueError, TypeError):
+                    pass
+                break
+        if last_val is not None:
+            imported_values[param_key] = last_val
+
+    # Find the latest export snapshot for this workspace
+    conn = get_db()
+    export_row = conn.execute(
+        "SELECT version, assumption_snapshot, exported_at FROM model_exports "
+        "WHERE workspace_id=? ORDER BY id DESC LIMIT 1",
+        [workspace_id],
+    ).fetchone()
+    conn.close()
+
+    if not export_row or not export_row["assumption_snapshot"]:
+        return {
+            "status": "no_baseline",
+            "message": "No previous export found. Cannot compute diff. The imported values are shown below.",
+            "imported_values": imported_values,
+            "changes": [],
+            "scenario_mapping": {},
+        }
+
+    baseline = json.loads(export_row["assumption_snapshot"])
+    version = export_row["version"]
+    exported_at = export_row["exported_at"]
+
+    # Compute diff (map ASSUMPTION_PARAMS keys to KPI keys for snapshot lookup)
+    changes = []
+    for key, imported_val in imported_values.items():
+        kpi_key = _param_to_kpi.get(key, key)
+        baseline_val = baseline.get(kpi_key) or baseline.get(key)
+        if baseline_val is None:
+            continue
+        try:
+            delta = round(imported_val - float(baseline_val), 6)
+        except (ValueError, TypeError):
+            continue
+        if abs(delta) > 0.001:
+            changes.append({
+                "param": key,
+                "exported": float(baseline_val),
+                "imported": imported_val,
+                "delta": delta,
+            })
+
+    # Map changes to scenario levers
+    _PARAM_TO_LEVER = {
+        "revenue_growth": "revenue_growth",
+        "revenue_growth_rate": "revenue_growth",
+        "gross_margin": "gross_margin_adj",
+        "gross_margin_target": "gross_margin_adj",
+        "churn_rate": "churn_adj",
+        "headcount": "headcount_delta",
+        "opex": "cost_reduction",
+        "opex_ratio": "cost_reduction",
+        "nrr": "expansion_adj",
+    }
+    scenario_mapping = {}
+    for ch in changes:
+        lever = _PARAM_TO_LEVER.get(ch["param"])
+        if lever:
+            # Use delta as the lever value (in pp or absolute units)
+            scenario_mapping[lever] = round(ch["delta"], 4)
+
+    from core.database import _audit
+    _audit("import_financial_model", "import", file.filename or "unknown",
+           f"Financial model imported: {len(changes)} changes detected vs export {version}",
+           workspace_id=workspace_id)
+
+    return {
+        "status": "diff_computed",
+        "export_version": version,
+        "exported_at": exported_at,
+        "imported_values": imported_values,
+        "changes": changes,
+        "scenario_mapping": scenario_mapping,
+        "message": f"{len(changes)} assumption(s) changed since export {version}." if changes
+                   else "No changes detected since last export.",
+    }
+
+
+@router.post("/api/import/financial-model/apply", tags=["Import"])
+async def apply_financial_model_changes(request: Request):
+    """
+    Apply imported assumption changes by creating a new saved scenario
+    and optionally triggering a forecast re-run.
+    """
+    workspace_id = _require_workspace(request)
+    body = await request.json()
+
+    scenario_mapping = body.get("scenario_mapping", {})
+    scenario_name = body.get("scenario_name", "Imported from Excel")
+    run_forecast = body.get("run_forecast", False)
+
+    if not scenario_mapping:
+        raise HTTPException(400, "No changes to apply.")
+
+    # Create a saved scenario
+    conn = get_db()
+    cur = conn.execute(
+        "INSERT INTO saved_scenarios (workspace_id, name, levers_json, notes) VALUES (?,?,?,?)",
+        (workspace_id, scenario_name, json.dumps(scenario_mapping),
+         f"Auto-created from re-imported financial model. Changes: {json.dumps(scenario_mapping)}"),
+    )
+    scenario_id = cur.lastrowid
+    conn.commit()
+    conn.close()
+
+    result = {
+        "status": "applied",
+        "scenario_id": scenario_id,
+        "scenario_name": scenario_name,
+        "levers_applied": scenario_mapping,
+    }
+
+    # Optionally run forecast with the imported overrides
+    if run_forecast:
+        try:
+            from routers.scenarios import _LEVER_TO_KPI
+            from routers.forecast import _project_scenario
+
+            conn = get_db()
+            model_row = conn.execute(
+                "SELECT current_states, thresholds FROM markov_models "
+                "WHERE workspace_id=? ORDER BY id DESC LIMIT 1",
+                [workspace_id],
+            ).fetchone()
+            conn.close()
+
+            if model_row:
+                current_values = json.loads(model_row["current_states"])
+                value_ranges = json.loads(model_row["thresholds"])
+
+                overrides = {}
+                for lever_id, lever_value in scenario_mapping.items():
+                    target_kpi = _LEVER_TO_KPI.get(lever_id)
+                    if not target_kpi or target_kpi not in value_ranges:
+                        continue
+                    current = current_values.get(target_kpi, 0)
+                    target = current + float(lever_value)
+                    vr = value_ranges[target_kpi]
+                    percentiles = [vr.get("p10", current), vr.get("p25", current),
+                                   vr.get("p50", current), vr.get("p75", current),
+                                   vr.get("p90", current)]
+                    best_idx = min(range(5), key=lambda i: abs(target - percentiles[i]))
+                    overrides[target_kpi] = best_idx
+
+                fc_result = _project_scenario(90, overrides, 400, workspace_id)
+                if isinstance(fc_result, dict) and "trajectories" in fc_result:
+                    result["forecast"] = {
+                        "trajectories": fc_result["trajectories"],
+                        "overrides_applied": overrides,
+                    }
+        except Exception:
+            pass  # Forecast is optional; don't fail the apply
+
+    from core.database import _audit
+    _audit("apply_imported_model", "scenario", scenario_name,
+           f"Applied imported model changes: {len(scenario_mapping)} levers",
+           workspace_id=workspace_id)
+
+    return result
 
 
 # ─── KPI Annotations CRUD ───────────────────────────────────────────────────

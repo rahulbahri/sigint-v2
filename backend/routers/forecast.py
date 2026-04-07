@@ -64,6 +64,7 @@ def _init_forecast_tables():
     for migration in [
         "ALTER TABLE markov_models ADD COLUMN regime_data TEXT DEFAULT NULL",
         "ALTER TABLE markov_models ADD COLUMN workspace_id TEXT DEFAULT ''",
+        "ALTER TABLE markov_models ADD COLUMN seasonality_data TEXT DEFAULT NULL",
     ]:
         try:
             conn.execute(migration)
@@ -96,19 +97,32 @@ def _init_forecast_tables():
 _init_forecast_tables()
 
 
-def _mrk_monthly_history(workspace_id: str = ""):
+def _mrk_monthly_history(workspace_id: str = "", months_back: int = None):
     conn = get_db()
+    params = []
+    where_parts = []
+
     if workspace_id:
-        rows = conn.execute(
-            "SELECT year, month, data_json FROM monthly_data "
-            "WHERE workspace_id=? ORDER BY year ASC, month ASC",
-            [workspace_id],
-        ).fetchall()
-    else:
-        rows = conn.execute(
-            "SELECT year, month, data_json FROM monthly_data ORDER BY year ASC, month ASC"
-        ).fetchall()
+        where_parts.append("workspace_id=?")
+        params.append(workspace_id)
+
+    if months_back and months_back > 0:
+        from datetime import datetime
+        now = datetime.utcnow()
+        total_months_back = now.year * 12 + now.month - months_back
+        cutoff_year = total_months_back // 12
+        cutoff_month = total_months_back % 12
+        if cutoff_month <= 0:
+            cutoff_month += 12
+            cutoff_year -= 1
+        where_parts.append("(year > ? OR (year = ? AND month >= ?))")
+        params.extend([cutoff_year, cutoff_year, cutoff_month])
+
+    where_clause = (" WHERE " + " AND ".join(where_parts)) if where_parts else ""
+    query = f"SELECT year, month, data_json FROM monthly_data{where_clause} ORDER BY year ASC, month ASC"
+    rows = conn.execute(query, params).fetchall()
     conn.close()
+
     result = {}
     for r in rows:
         try:
@@ -142,20 +156,33 @@ def _mrk_causal_pairs():
         return []
 
 
-def _mrk_monthly_history_dated(workspace_id: str = ""):
+def _mrk_monthly_history_dated(workspace_id: str = "", months_back: int = None):
     """Returns dict {(year, month): {kpi: float}} sorted chronologically."""
     conn = get_db()
+    params = []
+    where_parts = []
+
     if workspace_id:
-        rows = conn.execute(
-            "SELECT year, month, data_json FROM monthly_data "
-            "WHERE workspace_id=? ORDER BY year ASC, month ASC",
-            [workspace_id],
-        ).fetchall()
-    else:
-        rows = conn.execute(
-            "SELECT year, month, data_json FROM monthly_data ORDER BY year ASC, month ASC"
-        ).fetchall()
+        where_parts.append("workspace_id=?")
+        params.append(workspace_id)
+
+    if months_back and months_back > 0:
+        from datetime import datetime as _dt
+        now = _dt.utcnow()
+        total_months_back = now.year * 12 + now.month - months_back
+        cutoff_year = total_months_back // 12
+        cutoff_month = total_months_back % 12
+        if cutoff_month <= 0:
+            cutoff_month += 12
+            cutoff_year -= 1
+        where_parts.append("(year > ? OR (year = ? AND month >= ?))")
+        params.extend([cutoff_year, cutoff_year, cutoff_month])
+
+    where_clause = (" WHERE " + " AND ".join(where_parts)) if where_parts else ""
+    query = f"SELECT year, month, data_json FROM monthly_data{where_clause} ORDER BY year ASC, month ASC"
+    rows = conn.execute(query, params).fetchall()
     conn.close()
+
     result = {}
     for r in rows:
         try:
@@ -305,6 +332,46 @@ def _build_deduped_causal_map(causal_pairs, kpis):
     return causal_map
 
 
+def _detect_seasonality(dated_history: dict, kpis: list, min_months: int = 24) -> dict:
+    """
+    Detect seasonal patterns in KPI time series using autocorrelation at lag 12.
+
+    Returns {kpi: {"seasonal": bool, "strength": float}} for KPIs with 24+ months
+    of data. Strength is the autocorrelation coefficient at lag 12.
+    """
+    result = {}
+    for kpi in kpis:
+        # Build chronologically ordered series for this KPI
+        values = []
+        for key in sorted(dated_history.keys()):
+            v = dated_history[key].get(kpi)
+            if v is not None and np.isfinite(v):
+                values.append(v)
+
+        if len(values) < min_months:
+            continue
+
+        arr = np.array(values, dtype=float)
+        # Demean the series
+        mean = np.mean(arr)
+        demeaned = arr - mean
+        var = np.sum(demeaned ** 2)
+        if var < 1e-10:
+            # Constant series — no seasonality
+            result[kpi] = {"seasonal": False, "strength": 0.0}
+            continue
+
+        # Autocorrelation at lag 12
+        lag = 12
+        if len(demeaned) <= lag:
+            continue
+        autocov = np.sum(demeaned[:-lag] * demeaned[lag:])
+        r = float(autocov / var)
+        result[kpi] = {"seasonal": r > 0.3, "strength": round(r, 4)}
+
+    return result
+
+
 def _set_build_status(workspace_id: str, status: str, message: str = ""):
     """Persist build status to DB so any worker can read it."""
     try:
@@ -352,8 +419,27 @@ def _get_build_status(workspace_id: str):
 
 
 def _build_markov_task(workspace_id: str = ""):
-    history       = _mrk_monthly_history(workspace_id)
-    dated_history = _mrk_monthly_history_dated(workspace_id)
+    # ── Read configured model window ──────────────────────────────────────
+    from routers.settings import STAGE_DEFAULT_WINDOWS
+    months_back = None
+    try:
+        conn = get_db()
+        _cfg_rows = conn.execute(
+            "SELECT key, value FROM company_settings WHERE workspace_id=? "
+            "AND key IN ('model_window_months', 'company_stage')",
+            [workspace_id],
+        ).fetchall()
+        conn.close()
+        _cfg = {r["key"]: r["value"] for r in _cfg_rows}
+        if "model_window_months" in _cfg:
+            months_back = int(_cfg["model_window_months"])
+        elif "company_stage" in _cfg:
+            months_back = STAGE_DEFAULT_WINDOWS.get(_cfg["company_stage"], 36)
+    except Exception:
+        pass  # graceful fallback: use all data
+
+    history       = _mrk_monthly_history(workspace_id, months_back=months_back)
+    dated_history = _mrk_monthly_history_dated(workspace_id, months_back=months_back)
     if len(history) < 2:
         msg = (
             "Not enough monthly data to train the forecast model. "
@@ -410,23 +496,30 @@ def _build_markov_task(workspace_id: str = ""):
     except Exception:
         import traceback; traceback.print_exc()
 
+    seasonality_data = None
+    try:
+        seasonality_data = _detect_seasonality(dated_history, kpis)
+    except Exception:
+        pass
+
     now = datetime.utcnow().isoformat()
     conn = get_db()
     try:
         conn.execute("DELETE FROM markov_models WHERE workspace_id=?", [workspace_id])
         conn.execute(
             "INSERT INTO markov_models (kpis, thresholds, self_matrices, cross_matrices, "
-            "current_states, upstream_kpis, days_back, trained_at, regime_data, workspace_id) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?)",
+            "current_states, upstream_kpis, days_back, trained_at, regime_data, workspace_id, seasonality_data) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
             (json.dumps(kpis),
              json.dumps(value_ranges),
              json.dumps(mean_deltas),
              json.dumps(std_deltas),
              json.dumps(current_values),
              json.dumps(upstream_kpis),
-             365, now,
+             (months_back or 12) * 30, now,
              json.dumps(regime_data) if regime_data else None,
-             workspace_id)
+             workspace_id,
+             json.dumps(seasonality_data) if seasonality_data else None)
         )
         conn.commit()
         print(f"[Forecast] Model trained: {len(kpis)} KPIs (workspace={workspace_id!r})")
@@ -770,4 +863,5 @@ def forecast_model(request: Request):
         "trained_at":     row["trained_at"],
         "days_back":      row["days_back"],
         "regime_data":    json.loads(row["regime_data"]) if row["regime_data"] else None,
+        "seasonality_data": json.loads(row["seasonality_data"]) if row["seasonality_data"] else None,
     }

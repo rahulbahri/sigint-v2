@@ -89,6 +89,13 @@ const KPI_TABLE = [
 ]
 
 const CHANGELOG = [
+  { date: '2026-04-07', item: 'Phase 4 Scenario-Forecast Bridge: GET /api/scenarios/trained-coefficients returns company-calibrated or static fallback coefficients. POST /api/scenarios/run-forecast translates lever values to Monte Carlo overrides via percentile mapping. ScenarioPlanner shows calibration badge + "Run Through Model" button with p10/p50/p90 visualization.' },
+  { date: '2026-04-07', item: 'Phase 3 Formula-Aware Import: POST /api/import/financial-model parses Assumptions sheet (data_only=False), diffs against stored assumption_snapshot, maps changes to scenario levers. POST /api/import/financial-model/apply creates saved scenario + optional forecast re-run. Re-import UI added to CSVUpload page with diff table.' },
+  { date: '2026-04-07', item: 'Phase 2 Financial Model Export: GET /api/export/financial-model.xlsx generates 7-sheet workbook with live formulas. Assumptions (editable), Actuals (locked), Forecast (formula/p50 hybrid), P&L (full formula chain), Scenarios (CAUSAL_MAP formulas), Confidence Bands (p10-p90), Dashboard (charts). Version tracking in model_exports table.' },
+  { date: '2026-04-07', item: 'Export buttons added to ForecastPage (requires trained model) and ScenarioPlanner. core/excel_model.py (ModelWorkbookBuilder, CellMap, FormulaTranslator pattern). 23 tests covering all sheets.' },
+  { date: '2026-04-07', item: 'Phase 1 Financial Ingestion: Configurable forecast model window (6-120 months) with stage-aware defaults (Seed 18mo, A 36mo, B 48mo, C+ 60mo). UI control in Company Settings.' },
+  { date: '2026-04-07', item: 'XLSX upload fix: Excel files now properly parsed via pd.read_excel() instead of pd.read_csv(). Multi-sheet workbooks auto-detected (year/quarter/month-named sheets concatenated).' },
+  { date: '2026-04-07', item: 'Seasonality detection: autocorrelation at lag 12 computed during model training. Requires 24+ months data. Badge shown on Forecast Page per KPI.' },
   { date: '2026-03-24', item: 'DevDocs tab added — this page' },
   { date: '2026-03-24', item: 'Benchmarking added — industry peer comparison by company stage (Seed / Series A / Series B / Series C+) for 18 KPIs; stage selector in sidebar saved to localStorage' },
   { date: '2026-03-24', item: 'Heatmap year-aware columns: dynamic YYYY-MM format, year-band header row, fixes year collision bug in multi-year data' },
@@ -111,6 +118,16 @@ const DECISIONS = [
   { decision: 'TextChip components use dotted underline only', rationale: 'No colour change on hover — the dotted underline is the sole click signal. Keeps uniform text colour throughout the Executive Brief narrative.' },
   { decision: 'Status distribution (red/yellow/green counts) computed from filteredFingerprint', rationale: 'Simple count of KPIs by fy_status. Displayed in the sidebar and Executive Brief header. No composite score — just raw counts for clarity.' },
   { decision: 'Benchmarks stored as a Python dict (not DB table)', rationale: 'Static reference data — no user-modifiable content. Easier to update inline. Source: OpenView, Bessemer, SaaS Capital reports.' },
+  { decision: 'Model window stored as company_settings key, not schema column', rationale: 'company_settings is a flexible key-value store. No migration needed. Validated at 6-120 months in PUT endpoint.' },
+  { decision: 'Seasonality uses autocorrelation at lag 12, not FFT', rationale: 'Simpler, interpretable, no scipy.signal dependency. r > 0.3 threshold is conservative — avoids false positives on noisy data.' },
+  { decision: 'Multi-sheet XLSX falls back to first sheet for unknown names', rationale: 'Auto-detection only fires for year/quarter/month patterns. Prevents misinterpreting category sheets (Revenue, Expenses) as time periods.' },
+  { decision: 'Financial model export uses hybrid formula/value approach', rationale: 'P&L sheet uses pure formulas (Revenue-COGS=GP). Forecast sheet uses p50 hard values for most KPIs because Monte Carlo is stochastic and cannot be encoded as Excel formulas. Assumptions sheet is editable so users can override growth rates.' },
+  { decision: 'Scenario sheet uses CAUSAL_MAP coefficients as Excel formulas', rationale: 'Mirrors frontend ScenarioPlanner.jsx additive model: Output = Base + sum(lever * coeff). Coefficients are industry averages, not company-calibrated. Phase 4 will replace with trained model coefficients.' },
+  { decision: 'model_exports table tracks export versions, not sheet checksums', rationale: 'Checksums would require hashing every cell on every sheet. Version timestamp + assumption snapshot is sufficient for Phase 3 diff engine.' },
+  { decision: 'Scenario-Forecast bridge uses percentile mapping for overrides', rationale: 'Forecast _project_scenario() expects state_idx (0-4 mapping to p10-p90). Lever values in pp are translated to target values, then mapped to the nearest percentile position in the trained model value_ranges.' },
+  { decision: 'Trained coefficients merge with static fallback per-KPI', rationale: 'If ontology has edges for gross_margin but not burn_multiple, gross_margin uses calibrated coefficients while burn_multiple falls back to industry averages. Avoids all-or-nothing behavior.' },
+  { decision: 'Import diff uses ASSUMPTION_PARAMS key-to-KPI mapping', rationale: 'Assumptions sheet uses param keys (revenue_growth_rate) while snapshot uses KPI keys (revenue_growth). _param_to_kpi dict translates between the two for accurate diffing.' },
+  { decision: 'Apply creates a saved_scenario, not direct data modification', rationale: 'Non-destructive: the imported changes become a scenario that can be viewed, compared, or deleted. Original data is never modified by re-import.' },
 ]
 
 export default function DevDocs() {
@@ -440,7 +457,7 @@ cd "/Users/rahulbahri/Signal-platform V2/signals-intelligence-v2/frontend"
               { table: 'kpi_targets', cols: 'id, kpi_id (= key string), target_value, unit, direction', desc: 'User-configurable targets. Read at query time and merged into fingerprint.' },
               { table: 'projection_uploads', cols: 'id, filename, uploaded_at, status', desc: 'Same structure as uploads but for plan/projection files.' },
               { table: 'projection_monthly_data', cols: 'id, upload_id, year, month, data_json', desc: 'Plan data. Joined with monthly_data in the bridge endpoint to compute gaps.' },
-              { table: 'markov_models', cols: 'id, kpis, thresholds, self_matrices, cross_matrices, trained_at, regime_data', desc: 'Serialised Markov chain parameters. One row = one trained model.' },
+              { table: 'markov_models', cols: 'id, kpis, thresholds, self_matrices, cross_matrices, trained_at, regime_data, seasonality_data, days_back', desc: 'Serialised Markov chain parameters. One row = one trained model. days_back reflects configured model window. seasonality_data contains per-KPI autocorrelation results.' },
               { table: 'forecast_runs', cols: 'id, model_id, horizon_days, overrides, n_samples, result_json, created_at', desc: 'Results of each /api/forecast/project call.' },
               { table: 'ontology_nodes', cols: 'id, kpi_key, name, domain, influence_score', desc: 'Knowledge graph nodes — one per KPI.' },
               { table: 'ontology_edges', cols: 'id, source_key, target_key, correlation, edge_type', desc: 'Knowledge graph edges — causal/correlation relationships.' },

@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import axios from 'axios'
-import { Upload, Building2, Check, AlertCircle, Sliders, RotateCcw } from 'lucide-react'
+import { Upload, Building2, Check, AlertCircle, Sliders, RotateCcw, Calendar } from 'lucide-react'
 
 const STAGES = [
   { id: 'seed',     label: 'Seed',     desc: 'Pre-revenue or early traction' },
@@ -25,6 +25,11 @@ export default function CompanySettings({ onSave }) {
   const [critWeights, setCritWeights] = useState({ ...DEFAULT_CW })
   const [cwSaved, setCwSaved]         = useState(false)
 
+  // Model window
+  const STAGE_DEFAULTS = { seed: 18, series_a: 36, series_b: 48, series_c: 60 }
+  const [modelWindow, setModelWindow]       = useState(null) // null until loaded
+  const [modelWindowSource, setModelWindowSource] = useState('stage_default')
+
   // Load current settings on mount
   useEffect(() => {
     axios.get('/api/company-settings')
@@ -44,18 +49,29 @@ export default function CompanySettings({ onSave }) {
         }
       })
       .catch(() => {})
+    // Fetch model window
+    axios.get('/api/company-settings/model-window')
+      .then(r => {
+        setModelWindow(r.data.model_window_months)
+        setModelWindowSource(r.data.source)
+      })
+      .catch(() => {})
   }, [])
 
   async function handleSave() {
     setSaving(true)
     setStatus(null)
     try {
-      await axios.put('/api/company-settings', {
+      const payload = {
         company_name: companyName,
         industry,
         company_stage: stage,
         criticality_weights: JSON.stringify(critWeights),
-      })
+      }
+      if (modelWindowSource === 'custom' && modelWindow) {
+        payload.model_window_months = modelWindow
+      }
+      await axios.put('/api/company-settings', payload)
       localStorage.setItem('axiom_stage', stage)
       setStatus('ok')
       if (onSave) onSave({ company_name: companyName, industry, company_stage: stage })
@@ -201,6 +217,77 @@ export default function CompanySettings({ onSave }) {
             </button>
           ))}
         </div>
+      </div>
+
+      {/* Forecast Model Window */}
+      <div className="bg-white rounded-xl border border-slate-200 p-5 space-y-4">
+        <div className="flex items-center justify-between">
+          <div>
+            <h3 className="text-sm font-semibold text-slate-700 flex items-center gap-2">
+              <Calendar size={15} className="text-[#0055A4]"/> Forecast Model Window
+            </h3>
+            <p className="text-xs text-slate-500 mt-1">
+              How many months of historical data to use when training the forecast model.
+              More history improves seasonal detection but may include stale patterns.
+            </p>
+          </div>
+          {modelWindowSource === 'custom' && (
+            <button
+              onClick={() => {
+                const def = STAGE_DEFAULTS[stage] || 36
+                setModelWindow(def)
+                setModelWindowSource('stage_default')
+              }}
+              className="flex items-center gap-1 text-[10px] font-medium text-slate-400 hover:text-slate-600 transition-colors"
+              title="Reset to stage default"
+            >
+              <RotateCcw size={11}/> Use Stage Default
+            </button>
+          )}
+        </div>
+
+        {modelWindow !== null && (
+          <>
+            <div className="flex items-center gap-4">
+              <input
+                type="range"
+                min={6} max={120} step={6}
+                value={modelWindow}
+                onChange={e => {
+                  setModelWindow(Number(e.target.value))
+                  setModelWindowSource('custom')
+                }}
+                className="flex-1 h-1.5 rounded-full appearance-none cursor-pointer"
+                style={{
+                  background: `linear-gradient(to right, #0055A4 0%, #0055A4 ${((modelWindow - 6) / 114) * 100}%, #e2e8f0 ${((modelWindow - 6) / 114) * 100}%, #e2e8f0 100%)`,
+                }}
+              />
+              <span className="text-sm font-bold text-[#0055A4] tabular-nums w-24 text-right">
+                {modelWindow} mo
+                <span className="text-[10px] text-slate-400 font-normal ml-1">
+                  ({(modelWindow / 12).toFixed(1)} yr)
+                </span>
+              </span>
+            </div>
+
+            <div className="flex items-center justify-between text-[10px] text-slate-400">
+              <span>6 months</span>
+              <span>
+                {modelWindowSource === 'stage_default'
+                  ? `Stage default for ${STAGES.find(s => s.id === stage)?.label || stage}`
+                  : 'Custom override'}
+              </span>
+              <span>10 years</span>
+            </div>
+
+            {modelWindow < 24 && (
+              <p className="text-[11px] text-amber-600 bg-amber-50 rounded-lg px-3 py-2">
+                24+ months recommended for seasonal pattern detection. Current window ({modelWindow} months)
+                may miss seasonal trends.
+              </p>
+            )}
+          </>
+        )}
       </div>
 
       {/* Composite Criticality Weights */}

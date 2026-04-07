@@ -22,6 +22,162 @@ function downloadTemplate(content, filename) {
   URL.revokeObjectURL(url)
 }
 
+// ── Re-import Financial Model Sub-Component ─────────────────────────────────
+
+function ReimportModelSection() {
+  const [uploading, setUploading] = useState(false)
+  const [diffResult, setDiffResult] = useState(null)
+  const [diffError, setDiffError] = useState(null)
+  const [applying, setApplying] = useState(false)
+  const [applyResult, setApplyResult] = useState(null)
+  const modelImportRef = useRef()
+
+  async function handleModelImport(file) {
+    if (!file || !file.name.toLowerCase().endsWith('.xlsx')) {
+      setDiffError('Please select an .xlsx file exported from Export Financial Model.')
+      return
+    }
+    setUploading(true); setDiffResult(null); setDiffError(null); setApplyResult(null)
+    const fd = new FormData(); fd.append('file', file)
+    try {
+      const r = await axios.post('/api/import/financial-model', fd)
+      setDiffResult(r.data)
+    } catch (e) {
+      setDiffError(e.response?.data?.detail || 'Import failed')
+    }
+    setUploading(false)
+  }
+
+  async function handleApply() {
+    if (!diffResult?.scenario_mapping || Object.keys(diffResult.scenario_mapping).length === 0) return
+    setApplying(true)
+    try {
+      const r = await axios.post('/api/import/financial-model/apply', {
+        scenario_mapping: diffResult.scenario_mapping,
+        scenario_name: `Excel Import ${new Date().toLocaleDateString()}`,
+        run_forecast: true,
+      })
+      setApplyResult(r.data)
+    } catch (e) {
+      setDiffError(e.response?.data?.detail || 'Apply failed')
+    }
+    setApplying(false)
+  }
+
+  return (
+    <div className="card p-6 border border-blue-100 bg-blue-50/30 space-y-4">
+      <div>
+        <div className="flex items-center gap-2 mb-1">
+          <span className="w-1 h-5 bg-[#0055A4] rounded-full"/>
+          <h2 className="text-slate-800 font-semibold text-base">Re-import Financial Model</h2>
+        </div>
+        <p className="text-slate-500 text-xs pl-3">
+          Upload a previously exported financial model with edited assumptions. The platform detects what changed and creates a scenario from your adjustments.
+        </p>
+      </div>
+
+      <div className="flex flex-wrap gap-3">
+        <button
+          onClick={() => { setDiffResult(null); setDiffError(null); setApplyResult(null); modelImportRef.current?.click() }}
+          disabled={uploading}
+          className="flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-medium
+                     border border-[#0055A4] text-[#0055A4] bg-white hover:bg-blue-50 transition-all disabled:opacity-50"
+        >
+          <Upload size={14}/>
+          {uploading ? 'Analyzing...' : 'Upload Edited Model (.xlsx)'}
+        </button>
+        <input ref={modelImportRef} type="file" accept=".xlsx" className="hidden"
+          onChange={e => handleModelImport(e.target.files[0])}/>
+      </div>
+
+      {diffError && (
+        <div className="flex items-center gap-2 px-4 py-3 bg-red-50 rounded-xl border border-red-200">
+          <AlertCircle size={15} className="text-red-500 shrink-0"/>
+          <span className="text-red-700 text-sm">{diffError}</span>
+        </div>
+      )}
+
+      {diffResult && (
+        <div className="space-y-3">
+          {/* Status badge */}
+          <div className={`flex items-center gap-2 px-4 py-3 rounded-xl border ${
+            diffResult.changes?.length > 0
+              ? 'bg-amber-50 border-amber-200'
+              : 'bg-emerald-50 border-emerald-200'
+          }`}>
+            {diffResult.changes?.length > 0
+              ? <AlertTriangle size={15} className="text-amber-600 shrink-0"/>
+              : <CheckCircle size={15} className="text-emerald-600 shrink-0"/>}
+            <span className={`text-sm font-medium ${diffResult.changes?.length > 0 ? 'text-amber-700' : 'text-emerald-700'}`}>
+              {diffResult.message}
+            </span>
+          </div>
+
+          {/* Changes table */}
+          {diffResult.changes?.length > 0 && (
+            <div className="bg-white border border-slate-200 rounded-xl overflow-hidden">
+              <table className="w-full text-xs">
+                <thead>
+                  <tr className="bg-slate-50 text-slate-600 text-left">
+                    <th className="px-4 py-2.5 font-semibold">Parameter</th>
+                    <th className="px-4 py-2.5 font-semibold text-right">Exported</th>
+                    <th className="px-4 py-2.5 font-semibold text-right">Imported</th>
+                    <th className="px-4 py-2.5 font-semibold text-right">Change</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {diffResult.changes.map(ch => (
+                    <tr key={ch.param} className="border-t border-slate-100">
+                      <td className="px-4 py-2 font-medium text-slate-700">{ch.param}</td>
+                      <td className="px-4 py-2 text-right text-slate-500 tabular-nums">{ch.exported?.toFixed(2)}</td>
+                      <td className="px-4 py-2 text-right text-slate-700 font-medium tabular-nums">{ch.imported?.toFixed(2)}</td>
+                      <td className={`px-4 py-2 text-right font-bold tabular-nums ${
+                        ch.delta > 0 ? 'text-emerald-600' : 'text-red-500'
+                      }`}>
+                        {ch.delta > 0 ? '+' : ''}{ch.delta?.toFixed(2)}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          {/* Scenario mapping */}
+          {Object.keys(diffResult.scenario_mapping || {}).length > 0 && !applyResult && (
+            <div className="flex items-center gap-3">
+              <button
+                onClick={handleApply}
+                disabled={applying}
+                className="flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-medium
+                           bg-[#0055A4] hover:bg-[#003d80] text-white transition-all disabled:opacity-50"
+              >
+                <GitBranch size={14}/>
+                {applying ? 'Creating Scenario...' : 'Apply as Scenario'}
+              </button>
+              <span className="text-[10px] text-slate-400">
+                Creates a scenario in Scenario Planner with these lever adjustments
+              </span>
+            </div>
+          )}
+
+          {/* Apply success */}
+          {applyResult && (
+            <div className="flex items-center gap-2 px-4 py-3 bg-emerald-50 rounded-xl border border-emerald-200">
+              <CheckCircle size={15} className="text-emerald-600 shrink-0"/>
+              <span className="text-emerald-700 text-sm font-medium">
+                Scenario "{applyResult.scenario_name}" created.
+                {applyResult.forecast ? ' Forecast updated with imported assumptions.' : ''}
+              </span>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+
 export default function CSVUpload({ onUploaded }) {
 
   // ── KPI Export / Import state ─────────────────────────────────────────────
@@ -227,6 +383,9 @@ export default function CSVUpload({ onUploaded }) {
           <p>After re-uploading, refresh the dashboard to see the updated signals.</p>
         </div>
       </div>
+
+      {/* ══ Section 0b: Re-import Financial Model ══════════════════════════ */}
+      <ReimportModelSection />
 
       {/* ══ Section 1: Actuals Data ═══════════════════════════════════════ */}
       <div className="space-y-5">

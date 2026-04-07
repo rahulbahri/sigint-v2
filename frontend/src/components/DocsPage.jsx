@@ -143,10 +143,12 @@ const SECTIONS = [
       'P10 (lower band) is the pessimistic scenario — only 10% of simulations landed below this.',
       'Use the KPI selector to focus on the metrics most critical to your current quarter.',
       'If P50 falls below target in the next 30 days, escalate immediately in Variance Command.',
+      'Seasonal badge next to each KPI indicates whether a 12-month cycle was detected (requires 24+ months of data).',
     ],
     tips: [
       { type: 'warning', text: 'Forecasts are only as accurate as your historical data. Fewer than 6 months of data produces wide confidence bands — treat them as directional, not precise.' },
       { type: 'info',    text: 'The simulation reruns automatically after each data sync. Manual refresh is available via the refresh icon.' },
+      { type: 'info',    text: 'Model Window: Configure how many months of historical data the forecast model uses in Company Settings. Stage-aware defaults: Seed 18mo, Series A 36mo, Series B 48mo, Series C+ 60mo.' },
     ],
   },
   {
@@ -184,7 +186,32 @@ const SECTIONS = [
     ],
     tips: [
       { type: 'info',    text: 'Saved scenarios are preserved indefinitely. Build a library of rejected scenarios — they often become relevant again.' },
-      { type: 'warning', text: 'Scenario Planner uses simplified linear models. For complex non-linear effects, treat its output as directional guidance only.' },
+      { type: 'warning', text: 'Scenario Planner uses linear sensitivity models. When a trained forecast model exists, coefficients are calibrated to your company data (green badge). Otherwise, industry averages are used (amber badge).' },
+      { type: 'info',    text: 'Click "Run Through Model" to feed your scenario into the Monte Carlo forecast engine and see probabilistic outcomes (p10/p50/p90) instead of point estimates.' },
+      { type: 'info',    text: 'Click "Export to Excel" to download a financial model with your scenarios as live formulas. Edit assumptions in Excel and see impact cascade.' },
+    ],
+  },
+  {
+    id: 'financial-model-export',
+    title: 'Financial Model Export',
+    icon: FileSpreadsheet,
+    category: 'analysis',
+    purpose: 'Download a structured Excel financial model with live formulas, editable assumptions, and scenario comparison.',
+    when: 'Before board meetings, when sharing models with advisors, or when a CFO wants to iterate on assumptions in Excel.',
+    steps: [
+      'Train the forecast model in Forward Signals (requires 6+ months of historical data).',
+      'Click "Export Financial Model" on the Forward Signals page, or "Export to Excel" on the Scenario Planner.',
+      'The downloaded .xlsx workbook contains 7 sheets: Assumptions, Actuals, Forecast, P&L, Scenarios, Confidence Bands, and Dashboard.',
+      'Open in Excel. The Assumptions sheet has yellow-highlighted editable cells. Change growth rates, margin targets, or headcount assumptions.',
+      'Formulas in the P&L and Scenarios sheets update automatically when you modify assumptions.',
+      'Confidence Bands shows Monte Carlo simulation results (p10 through p90) for probabilistic context.',
+      'The Dashboard sheet includes auto-generated charts for revenue trends.',
+    ],
+    tips: [
+      { type: 'info',    text: 'Assumptions sheet is the only editable sheet. All other sheets are protected to prevent accidental formula breakage.' },
+      { type: 'info',    text: 'P&L formulas are real Excel formulas (e.g., Gross Profit = Revenue - COGS). They update when you change Assumptions.' },
+      { type: 'warning', text: 'Forecast values for most KPIs are Monte Carlo p50 medians (hard values), not formulas. This is because stochastic simulation cannot be represented in Excel formulas. For probabilistic analysis, refer to the Confidence Bands sheet.' },
+      { type: 'info',    text: 'Each export is version-tracked. The platform records when you exported and can detect changes when you re-import (coming in a future update).' },
     ],
   },
   {
@@ -282,9 +309,10 @@ const SECTIONS = [
       'Click "Confirm Upload" — data is ingested immediately and KPIs update within seconds.',
     ],
     tips: [
-      { type: 'info',    text: 'Multi-year historical uploads (3–5 years) produce significantly more accurate forecasts and seasonal patterns. Upload as much history as you have.' },
+      { type: 'info',    text: 'Multi-year historical uploads (3-5 years) produce significantly more accurate forecasts and seasonal patterns. Upload as much history as you have.' },
       { type: 'warning', text: 'Date column must use YYYY-MM format. Any other date format will fail validation with an error message showing the first offending row.' },
       { type: 'info',    text: 'Uploading data for a period that already has data from a connected source will create a duplicate warning in Data Quality. Resolve by selecting which source to trust.' },
+      { type: 'info',    text: 'Excel (.xlsx) files are fully supported. Multi-sheet workbooks are auto-detected: year-named sheets (e.g. "2022", "2023") are concatenated chronologically. Quarter-named ("Q1 2024") and month-named ("Jan 2024") sheets are also supported.' },
     ],
   },
   {
@@ -544,7 +572,7 @@ export default function DocsPage() {
   const GROUPS = [
     { label: 'Start here',   ids: ['getting-started'] },
     { label: 'Intelligence', ids: ['executive-brief', 'variance-command', 'decision-log'] },
-    { label: 'Analysis',     ids: ['performance-fingerprint', 'trend-explorer', 'forward-signals', 'plan-vs-actual', 'scenario-planner'] },
+    { label: 'Analysis',     ids: ['performance-fingerprint', 'trend-explorer', 'forward-signals', 'plan-vs-actual', 'scenario-planner', 'financial-model-export'] },
     { label: 'Data',         ids: ['data-sources', 'data-gaps', 'data-quality', 'field-mappings', 'manual-upload'] },
     { label: 'Settings',     ids: ['kpi-targets', 'slack-alerts', 'admin-panel'] },
   ]

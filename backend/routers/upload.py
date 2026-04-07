@@ -18,6 +18,112 @@ from core.kpi_defs import normalize_columns, aggregate_monthly
 
 router = APIRouter()
 
+
+# ── Multi-Sheet XLSX Parser ──────────────────────────────────────────────────
+
+import re as _re
+
+# Patterns for recognising year/period-named sheets
+_YEAR_PAT = _re.compile(r"^(20\d{2})$")                     # "2023"
+_QUARTER_PAT = _re.compile(r"^Q([1-4])\s*(20\d{2})$", _re.I) # "Q1 2024"
+_MONTH_PAT = _re.compile(                                      # "Jan 2024", "January 2024"
+    r"^(Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|"
+    r"Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)"
+    r"\s*(20\d{2})$", _re.I,
+)
+_MONTH_ABBR = {
+    "jan": 1, "january": 1, "feb": 2, "february": 2, "mar": 3, "march": 3,
+    "apr": 4, "april": 4, "may": 5, "jun": 6, "june": 6, "jul": 7, "july": 7,
+    "aug": 8, "august": 8, "sep": 9, "september": 9, "oct": 10, "october": 10,
+    "nov": 11, "november": 11, "dec": 12, "december": 12,
+}
+
+
+def _parse_excel_upload(content: bytes) -> pd.DataFrame:
+    """
+    Parse an uploaded Excel file, handling multi-sheet workbooks.
+
+    Strategies:
+    1. Single sheet: read as-is (standard path)
+    2. Year-named sheets ("2022", "2023"): concat with date column
+    3. Quarter-named sheets ("Q1 2024"): concat with date column
+    4. Month-named sheets ("Jan 2024"): concat with date column
+    5. Unknown names: read first sheet, ignore others
+    """
+    xls = pd.ExcelFile(io.BytesIO(content))
+    sheets = xls.sheet_names
+
+    if len(sheets) <= 1:
+        return pd.read_excel(io.BytesIO(content))
+
+    # ── Try year-named sheets ────────────────────────────────────────────
+    year_matches = {}
+    for name in sheets:
+        m = _YEAR_PAT.match(name.strip())
+        if m:
+            year_matches[name] = int(m.group(1))
+
+    if len(year_matches) >= 2:
+        frames = []
+        for sheet_name, year in sorted(year_matches.items(), key=lambda x: x[1]):
+            df = pd.read_excel(io.BytesIO(content), sheet_name=sheet_name)
+            # If no date column, synthesise monthly dates for each row
+            lower_cols = {c.lower().replace(" ", "_") for c in df.columns}
+            if not (lower_cols & {"date", "transaction_date", "month", "period"}):
+                n_rows = len(df)
+                if n_rows <= 12:
+                    # Assume each row is a month (Jan..Dec or subset)
+                    df.insert(0, "date", [f"{year}-{i+1:02d}-01" for i in range(n_rows)])
+                else:
+                    # Assume daily/transaction data — assign year prefix
+                    df.insert(0, "date", [f"{year}-01-01"] * n_rows)
+            frames.append(df)
+        return pd.concat(frames, ignore_index=True)
+
+    # ── Try quarter-named sheets ─────────────────────────────────────────
+    quarter_matches = {}
+    for name in sheets:
+        m = _QUARTER_PAT.match(name.strip())
+        if m:
+            quarter_matches[name] = (int(m.group(2)), int(m.group(1)))
+
+    if len(quarter_matches) >= 2:
+        frames = []
+        for sheet_name, (year, q) in sorted(quarter_matches.items(), key=lambda x: (x[1][0], x[1][1])):
+            df = pd.read_excel(io.BytesIO(content), sheet_name=sheet_name)
+            lower_cols = {c.lower().replace(" ", "_") for c in df.columns}
+            if not (lower_cols & {"date", "transaction_date", "month", "period"}):
+                start_month = (q - 1) * 3 + 1
+                n_rows = len(df)
+                if n_rows <= 3:
+                    df.insert(0, "date", [f"{year}-{start_month + i:02d}-01" for i in range(n_rows)])
+                else:
+                    df.insert(0, "date", [f"{year}-{start_month:02d}-01"] * n_rows)
+            frames.append(df)
+        return pd.concat(frames, ignore_index=True)
+
+    # ── Try month-named sheets ───────────────────────────────────────────
+    month_matches = {}
+    for name in sheets:
+        m = _MONTH_PAT.match(name.strip())
+        if m:
+            month_num = _MONTH_ABBR[m.group(1).lower()]
+            month_matches[name] = (int(m.group(2)), month_num)
+
+    if len(month_matches) >= 2:
+        frames = []
+        for sheet_name, (year, mo) in sorted(month_matches.items(), key=lambda x: (x[1][0], x[1][1])):
+            df = pd.read_excel(io.BytesIO(content), sheet_name=sheet_name)
+            lower_cols = {c.lower().replace(" ", "_") for c in df.columns}
+            if not (lower_cols & {"date", "transaction_date", "month", "period"}):
+                df.insert(0, "date", [f"{year}-{mo:02d}-01"] * len(df))
+            frames.append(df)
+        return pd.concat(frames, ignore_index=True)
+
+    # ── Fallback: read first sheet only ──────────────────────────────────
+    return pd.read_excel(io.BytesIO(content), sheet_name=0)
+
+
 @router.post("/api/upload", tags=["Data Ingestion"])
 async def upload_csv(request: Request, file: UploadFile = File(...)):
     """
@@ -48,9 +154,14 @@ async def upload_csv(request: Request, file: UploadFile = File(...)):
     if len(content) > 10 * 1024 * 1024:
         raise HTTPException(413, "File too large. Maximum upload size is 10 MB.")
     try:
-        df = pd.read_csv(io.StringIO(content.decode("utf-8", errors="replace")))
+        if _ext in (".xlsx", ".xls"):
+            df = _parse_excel_upload(content)
+        else:
+            df = pd.read_csv(io.StringIO(content.decode("utf-8", errors="replace")))
+    except HTTPException:
+        raise
     except Exception as e:
-        raise HTTPException(400, "Could not parse file. Please ensure it is a valid CSV with column headers.")
+        raise HTTPException(400, "Could not parse file. Please ensure it is a valid CSV or Excel file with column headers.")
 
     # ── Detect accidental KPI-export upload ────────────────────────────────
     # The exported axiom_kpi_data file has columns Year, Month, revenue_growth, ...

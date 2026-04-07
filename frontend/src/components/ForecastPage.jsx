@@ -6,7 +6,7 @@ import {
 } from 'recharts'
 import {
   TrendingUp, TrendingDown, Minus, Zap, Play, RefreshCw,
-  ChevronRight, Info, AlertCircle, X, Plus, RotateCcw
+  ChevronRight, Info, AlertCircle, X, Plus, RotateCcw, Download
 } from 'lucide-react'
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -168,6 +168,27 @@ function RegimeBadge({ regime }) {
         Month {regime.months_in} of {regime.months_in}
       </span>
     </div>
+  )
+}
+
+function SeasonalityBadge({ seasonalityData, kpi }) {
+  if (!seasonalityData || !kpi) return null
+  const info = seasonalityData[kpi]
+  if (!info) return null
+  const isSeasonal = info.seasonal
+  const strength = info.strength
+  return (
+    <span
+      className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium ${
+        isSeasonal
+          ? 'bg-blue-50 text-blue-700 border border-blue-200'
+          : 'bg-slate-50 text-slate-400 border border-slate-200'
+      }`}
+      title={`Autocorrelation at 12-month lag: r=${strength?.toFixed(3) ?? 'N/A'}. ${isSeasonal ? 'Strong seasonal pattern detected.' : 'No significant seasonal pattern.'}`}
+    >
+      <span className={`w-1 h-1 rounded-full ${isSeasonal ? 'bg-blue-500' : 'bg-slate-300'}`} />
+      {isSeasonal ? 'Seasonal' : 'Non-seasonal'}
+    </span>
   )
 }
 
@@ -481,6 +502,18 @@ export default function ForecastPage() {
               : <><RefreshCw size={12} />Build / Retrain</>
             }
           </button>
+
+          <button
+            onClick={() => { window.location.href = '/api/export/financial-model.xlsx' }}
+            disabled={model?.status !== 'ready'}
+            className="mt-2 w-full flex items-center justify-center gap-2 py-2 rounded-lg
+                       text-xs font-medium border border-emerald-200 bg-emerald-50
+                       hover:bg-emerald-100 text-emerald-700 disabled:opacity-40
+                       disabled:cursor-not-allowed transition-all"
+            title={model?.status !== 'ready' ? 'Train the model first' : 'Download Excel financial model with live formulas'}
+          >
+            <Download size={12} /> Export Financial Model
+          </button>
         </div>
 
         {/* Projection Settings */}
@@ -677,9 +710,12 @@ export default function ForecastPage() {
                   <p className="text-xs text-slate-400 mt-0.5">
                     {nSamples} simulated paths · showing likely range (p10–p90) and most probable outcome (median)
                   </p>
-                  {result?.regime_data?.available && (
-                    <RegimeBadge regime={result.regime_data} />
-                  )}
+                  <div className="flex items-center gap-2 mt-1">
+                    {result?.regime_data?.available && (
+                      <RegimeBadge regime={result.regime_data} />
+                    )}
+                    <SeasonalityBadge seasonalityData={model?.seasonality_data} kpi={selectedKpi} />
+                  </div>
                 </div>
                 <div className="flex items-center gap-4 text-[11px] text-slate-400 flex-shrink-0">
                   <span className="flex items-center gap-1.5">

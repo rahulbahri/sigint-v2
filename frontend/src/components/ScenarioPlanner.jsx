@@ -1,7 +1,7 @@
 import { useState, useMemo, useEffect, useCallback } from 'react'
 import {
   Sliders, TrendingUp, TrendingDown, Minus,
-  RefreshCw, BookMarked, ChevronDown, ChevronUp, Info,
+  RefreshCw, BookMarked, ChevronDown, ChevronUp, Info, Download,
 } from 'lucide-react'
 import axios from 'axios'
 
@@ -130,12 +130,13 @@ function deltaIcon(delta, direction) {
 }
 
 // ── Project impact from levers ────────────────────────────────────────────────
-function projectImpact(baseValues, leverValues) {
+function projectImpact(baseValues, leverValues, coefficients) {
+  const activeMap = coefficients || CAUSAL_MAP
   const result = {}
   for (const kpi of OUTPUT_KPIS) {
     const base    = baseValues[kpi.key]
     if (base == null) { result[kpi.key] = null; continue }
-    const impacts = CAUSAL_MAP[kpi.key] || {}
+    const impacts = activeMap[kpi.key] || {}
     let totalDelta = 0
     for (const [lever, coef] of Object.entries(impacts)) {
       totalDelta += (leverValues[lever] || 0) * coef
@@ -158,6 +159,14 @@ export default function ScenarioPlanner({ fingerprint, authToken, onNavigateToDe
   const [loadingScenarios, setLoadingScenarios] = useState(false)
   const [showSavedList, setShowSavedList]     = useState(false)
 
+  // Trained coefficients + Monte Carlo bridge
+  const [trainedCoeffs, setTrainedCoeffs]     = useState(null)
+  const [isCalibrated, setIsCalibrated]       = useState(false)
+  const [mcResult, setMcResult]               = useState(null)
+  const [mcRunning, setMcRunning]             = useState(false)
+  const [mcError, setMcError]                 = useState(null)
+  const [showMcPanel, setShowMcPanel]         = useState(false)
+
   const headers = authToken ? { Authorization: `Bearer ${authToken}` } : {}
 
   const loadSavedScenarios = useCallback(async () => {
@@ -171,6 +180,16 @@ export default function ScenarioPlanner({ fingerprint, authToken, onNavigateToDe
 
   useEffect(() => { loadSavedScenarios() }, [])
 
+  // Fetch trained coefficients on mount
+  useEffect(() => {
+    axios.get('/api/scenarios/trained-coefficients', { headers })
+      .then(r => {
+        if (r.data?.coefficients) setTrainedCoeffs(r.data.coefficients)
+        setIsCalibrated(!!r.data?.calibrated)
+      })
+      .catch(() => {})
+  }, [])
+
   // Base case values from fingerprint
   const baseValues = useMemo(() => {
     const map = {}
@@ -181,8 +200,35 @@ export default function ScenarioPlanner({ fingerprint, authToken, onNavigateToDe
     return map
   }, [fingerprint])
 
-  // Projected values
-  const projected = useMemo(() => projectImpact(baseValues, levers), [baseValues, levers])
+  // Projected values (using trained coefficients if available)
+  const projected = useMemo(
+    () => projectImpact(baseValues, levers, trainedCoeffs),
+    [baseValues, levers, trainedCoeffs]
+  )
+
+  // Run Through Model handler
+  async function runThroughModel() {
+    setMcRunning(true)
+    setMcError(null)
+    setMcResult(null)
+    try {
+      const activeLevers = {}
+      for (const l of LEVERS) {
+        if (levers[l.id] !== 0) activeLevers[l.id] = levers[l.id]
+      }
+      const r = await axios.post('/api/scenarios/run-forecast', {
+        levers: activeLevers,
+        horizon_days: 90,
+        n_samples: 400,
+      }, { headers })
+      setMcResult(r.data)
+      setShowMcPanel(true)
+    } catch (err) {
+      setMcError(err.response?.data?.detail || 'Failed to run forecast. Train the model in Forward Signals first.')
+    } finally {
+      setMcRunning(false)
+    }
+  }
 
   // Any lever is non-zero
   const hasChanges = LEVERS.some(l => levers[l.id] !== 0)
@@ -237,6 +283,16 @@ export default function ScenarioPlanner({ fingerprint, authToken, onNavigateToDe
             Adjust business levers and see the projected impact on your KPIs.
             Projections use causal relationships between assumptions and outcomes.
           </p>
+          <div className="flex items-center gap-2 mt-1.5">
+            <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium border ${
+              isCalibrated
+                ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                : 'bg-amber-50 text-amber-700 border-amber-200'
+            }`}>
+              <span className={`w-1 h-1 rounded-full ${isCalibrated ? 'bg-emerald-500' : 'bg-amber-500'}`} />
+              {isCalibrated ? 'Calibrated to your data' : 'Industry estimates'}
+            </span>
+          </div>
         </div>
         <button
           onClick={() => setShowInfo(v => !v)}
@@ -511,9 +567,96 @@ export default function ScenarioPlanner({ fingerprint, authToken, onNavigateToDe
             </button>
           )}
 
+          {/* Run Through Model */}
+          {hasChanges && (
+            <button
+              onClick={runThroughModel}
+              disabled={mcRunning}
+              className="mt-3 w-full flex items-center justify-center gap-2 px-4 py-2.5
+                         bg-[#0055A4] text-white rounded-xl text-[12px] font-bold
+                         hover:bg-[#003d80] disabled:opacity-50 transition-all"
+              title="Run this scenario through the Monte Carlo forecast model for probabilistic results"
+            >
+              {mcRunning
+                ? <><div className="w-3 h-3 rounded-full border-2 border-white border-t-transparent animate-spin" /> Running Model...</>
+                : <><TrendingUp size={13}/> Run Through Model</>
+              }
+            </button>
+          )}
+
+          {mcError && (
+            <p className="text-[11px] text-red-500 mt-2 bg-red-50 rounded-lg px-3 py-2">{mcError}</p>
+          )}
+
+          {/* Monte Carlo Results Panel */}
+          {showMcPanel && mcResult?.trajectories && (
+            <div className="mt-3 bg-slate-50 border border-slate-200 rounded-xl p-4 space-y-3">
+              <div className="flex items-center justify-between">
+                <h4 className="text-[11px] font-bold text-slate-600 uppercase tracking-wider">
+                  Probabilistic Impact (Monte Carlo)
+                </h4>
+                <button onClick={() => setShowMcPanel(false)} className="text-slate-400 hover:text-slate-600">
+                  <ChevronUp size={14} />
+                </button>
+              </div>
+              <p className="text-[10px] text-slate-400">
+                {mcResult.n_samples} simulated paths over {Math.round(mcResult.horizon_days / 30)} months.
+                Showing p10 (pessimistic) / p50 (median) / p90 (optimistic) at the horizon.
+              </p>
+              <div className="space-y-1.5">
+                {OUTPUT_KPIS.map(kpi => {
+                  const traj = mcResult.trajectories[kpi.key]
+                  if (!traj || traj.length < 2) return null
+                  const last = traj[traj.length - 1]
+                  const p10 = last?.p10, p50 = last?.p50, p90 = last?.p90
+                  if (p50 == null) return null
+                  return (
+                    <div key={kpi.key} className="flex items-center gap-2 text-[11px]">
+                      <span className="w-32 text-slate-600 font-medium truncate">{kpi.name}</span>
+                      <span className="text-red-400 w-14 text-right tabular-nums">{fmt(p10, kpi.unit)}</span>
+                      <div className="flex-1 h-1.5 bg-slate-200 rounded-full relative mx-1">
+                        <div
+                          className="absolute h-full bg-gradient-to-r from-red-200 via-blue-300 to-emerald-200 rounded-full"
+                          style={{
+                            left: `${Math.max(0, Math.min(100, ((p10 - (p10 - 5)) / ((p90 + 5) - (p10 - 5))) * 100))}%`,
+                            right: `${Math.max(0, 100 - Math.min(100, ((p90 - (p10 - 5)) / ((p90 + 5) - (p10 - 5))) * 100))}%`,
+                          }}
+                        />
+                        <div
+                          className="absolute w-2 h-2 bg-[#0055A4] rounded-full -top-[1px]"
+                          style={{
+                            left: `${Math.max(0, Math.min(98, ((p50 - (p10 - 5)) / ((p90 + 5) - (p10 - 5))) * 100))}%`,
+                          }}
+                        />
+                      </div>
+                      <span className="font-bold text-[#0055A4] w-14 text-right tabular-nums">{fmt(p50, kpi.unit)}</span>
+                      <span className="text-emerald-500 w-14 text-right tabular-nums">{fmt(p90, kpi.unit)}</span>
+                    </div>
+                  )
+                }).filter(Boolean)}
+              </div>
+              <div className="flex items-center gap-4 text-[9px] text-slate-400 pt-1 border-t border-slate-200">
+                <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-red-300" /> P10</span>
+                <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-[#0055A4]" /> P50 (Median)</span>
+                <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-emerald-300" /> P90</span>
+              </div>
+            </div>
+          )}
+
+          <button
+            onClick={() => { window.location.href = '/api/export/financial-model.xlsx' }}
+            className="mt-3 w-full flex items-center justify-center gap-2 px-4 py-2
+                       border border-emerald-300 text-emerald-700 rounded-xl text-[11px] font-semibold
+                       bg-emerald-50 hover:bg-emerald-100 transition-all"
+            title="Download Excel financial model with live formulas and scenario comparison"
+          >
+            <Download size={12}/> Export to Excel
+          </button>
+
           <p className="text-[10px] text-slate-400 mt-3 leading-relaxed">
-            Projections are directional estimates based on calibrated causal sensitivity coefficients.
-            Use &ldquo;Push to Decision Log&rdquo; to record the reasoning behind this scenario.
+            {isCalibrated
+              ? 'Coefficients calibrated from your historical data. Run Through Model for full Monte Carlo simulation.'
+              : 'Using industry-average coefficients. Train the forecast model in Forward Signals for company-specific calibration.'}
           </p>
         </div>
       </div>

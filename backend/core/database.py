@@ -425,6 +425,17 @@ def init_db():
             workspace_id TEXT DEFAULT '',
             PRIMARY KEY (key, workspace_id)
         );
+        CREATE TABLE IF NOT EXISTS model_exports (
+            id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+            version             TEXT NOT NULL,
+            filename            TEXT NOT NULL,
+            assumption_snapshot TEXT,
+            months_of_data      INTEGER,
+            forecast_kpis       INTEGER,
+            scenarios_included  INTEGER,
+            exported_at         TEXT DEFAULT (datetime('now')),
+            workspace_id        TEXT DEFAULT ''
+        );
         CREATE TABLE IF NOT EXISTS financial_line_items (
             id              INTEGER PRIMARY KEY AUTOINCREMENT,
             workspace_id    TEXT NOT NULL,
