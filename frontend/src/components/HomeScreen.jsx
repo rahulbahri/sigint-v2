@@ -2055,12 +2055,15 @@ export default function HomeScreen({ onNavigate, onAskAnika }) {
                       <span className="text-[10px] font-bold text-emerald-600 uppercase tracking-wider">Improved ({data.period_comparison.improved.length})</span>
                     </div>
                     <div className="flex flex-wrap gap-1.5">
-                      {data.period_comparison.improved.map(kpi => (
-                        <button key={kpi.key} onClick={() => setSlideOut({ kpi: { key: kpi.key }, status: 'green' })}
-                          className="text-[10px] font-medium text-emerald-700 bg-emerald-50 px-2 py-1 rounded-lg hover:bg-emerald-100 transition-colors cursor-pointer">
-                          {formatKpiLabel(kpi.key)} <span className="font-bold">{kpi.delta > 0 ? '+' : ''}{kpi.delta?.toFixed?.(1) ?? kpi.delta}%</span>
-                        </button>
-                      ))}
+                      {data.period_comparison.improved.map(kpi => {
+                        const pct = kpi.delta_pct ?? (kpi.prev ? Math.max(-999, Math.min(999, (kpi.delta / Math.abs(kpi.prev)) * 100)) : kpi.delta)
+                        return (
+                          <button key={kpi.key} onClick={() => setSlideOut({ kpi: { key: kpi.key }, status: 'green' })}
+                            className="text-[10px] font-medium text-emerald-700 bg-emerald-50 px-2 py-1 rounded-lg hover:bg-emerald-100 transition-colors cursor-pointer">
+                            {formatKpiLabel(kpi.key)} <span className="font-bold">{pct > 0 ? '+' : ''}{pct?.toFixed?.(1) ?? pct}%</span>
+                          </button>
+                        )
+                      })}
                     </div>
                   </div>
                 )}
@@ -2071,12 +2074,15 @@ export default function HomeScreen({ onNavigate, onAskAnika }) {
                       <span className="text-[10px] font-bold text-red-600 uppercase tracking-wider">Deteriorated ({data.period_comparison.deteriorated.length})</span>
                     </div>
                     <div className="flex flex-wrap gap-1.5">
-                      {data.period_comparison.deteriorated.map(kpi => (
-                        <button key={kpi.key} onClick={() => setSlideOut({ kpi: { key: kpi.key }, status: 'red' })}
-                          className="text-[10px] font-medium text-red-700 bg-red-50 px-2 py-1 rounded-lg hover:bg-red-100 transition-colors cursor-pointer">
-                          {formatKpiLabel(kpi.key)} <span className="font-bold">{kpi.delta > 0 ? '+' : ''}{kpi.delta?.toFixed?.(1) ?? kpi.delta}%</span>
-                        </button>
-                      ))}
+                      {data.period_comparison.deteriorated.map(kpi => {
+                        const pct = kpi.delta_pct ?? (kpi.prev ? Math.max(-999, Math.min(999, (kpi.delta / Math.abs(kpi.prev)) * 100)) : kpi.delta)
+                        return (
+                          <button key={kpi.key} onClick={() => setSlideOut({ kpi: { key: kpi.key }, status: 'red' })}
+                            className="text-[10px] font-medium text-red-700 bg-red-50 px-2 py-1 rounded-lg hover:bg-red-100 transition-colors cursor-pointer">
+                            {formatKpiLabel(kpi.key)} <span className="font-bold">{pct > 0 ? '+' : ''}{pct?.toFixed?.(1) ?? pct}%</span>
+                          </button>
+                        )
+                      })}
                     </div>
                   </div>
                 )}

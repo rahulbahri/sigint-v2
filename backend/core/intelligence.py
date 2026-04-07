@@ -373,12 +373,16 @@ def period_comparison(
         if pct_change < 0.5:
             continue
 
+        # Percentage change (capped at ±999% to prevent absurd display values)
+        delta_pct = round(max(-999, min(999, (delta / abs_prev) * 100 * (1 if delta >= 0 else 1))), 1)
+
         entry = {
             "key":   kpi_key,
             "name":  name,
             "prev":  round(prev_val, 2),
             "curr":  round(curr_val, 2),
             "delta": delta,
+            "delta_pct": delta_pct,
             "unit":  unit,
             "prev_period": prev_pd,
             "curr_period": curr_pd,
