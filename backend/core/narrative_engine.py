@@ -207,6 +207,14 @@ def analyze_root_causes(
                 rejected.append(f"{cause_text} (data shows {imp['name']} is improving +{imp['delta_pct']:.1f}%)")
                 break
 
+    # Pre-compute downstream impact (used in both narrative and action generation)
+    downstream = ALL_CAUSATION_RULES.get(kpi_key, {}).get("downstream_impact", [])
+    at_risk_downstream = []
+    for ds in downstream:
+        ds_trend = _compute_trend(ds, time_series, directions.get(ds, "higher"))
+        if ds_trend["is_deteriorating"]:
+            at_risk_downstream.append((ds, ds_trend["delta_pct"]))
+
     # Build narrative
     narrative_parts = []
     kpi_name = _friendly(kpi_key)
@@ -247,14 +255,7 @@ def analyze_root_causes(
     else:
         # DATA-DRIVEN SELF-ANALYSIS FALLBACK:
         # No upstream parent is deteriorating. Analyze the KPI's own behavior
-        # and its downstream impact to provide actionable context.
-        downstream = ALL_CAUSATION_RULES.get(kpi_key, {}).get("downstream_impact", [])
-        at_risk_downstream = []
-        for ds in downstream:
-            ds_trend = _compute_trend(ds, time_series, directions.get(ds, "higher"))
-            if ds_trend["is_deteriorating"]:
-                at_risk_downstream.append((ds, ds_trend["delta_pct"]))
-
+        # and its downstream impact (pre-computed above) to provide actionable context.
         if at_risk_downstream:
             ds_names = ", ".join(f"{_friendly(d)} ({dp:+.1f}%)" for d, dp in at_risk_downstream[:3])
             narrative_parts.append(
@@ -286,7 +287,7 @@ def analyze_root_causes(
         template_actions = _CORRECTIVE_ACTIONS.get(top_cause["kpi"], [])
         if template_actions:
             action += template_actions[0]
-    elif at_risk_downstream if 'at_risk_downstream' in dir() else False:
+    elif at_risk_downstream:
         action = (
             f"Address {kpi_name} urgently — it is a primary driver affecting "
             f"{len(at_risk_downstream)} downstream KPIs. "
@@ -298,6 +299,10 @@ def analyze_root_causes(
         template_actions = _CORRECTIVE_ACTIONS.get(kpi_key, [])
         action = template_actions[0] if template_actions else f"Review {kpi_name} drivers manually."
 
+    # Build validated root causes: template causes that don't contradict data
+    rejected_texts = {r.split(" (data")[0] for r in rejected}
+    validated_root_causes = [c for c in template_causes if c not in rejected_texts]
+
     return {
         "kpi": kpi_key,
         "kpi_name": kpi_name,
@@ -308,6 +313,7 @@ def analyze_root_causes(
             for c in confirmed[:5]
         ],
         "rejected_hypotheses": rejected[:3],
+        "validated_root_causes": validated_root_causes,
         "cause_chain": [
             {"kpi": c["kpi"], "name": c["name"], "hop": c["hop"],
              "delta_pct": c["delta_pct"], "is_deteriorating": c["is_deteriorating"],
@@ -317,6 +323,7 @@ def analyze_root_causes(
         "narrative": " ".join(narrative_parts),
         "contextual_action": action,
         "data_grounded": len(confirmed) > 0,
+        "at_risk_downstream": len(at_risk_downstream),
     }
 
 

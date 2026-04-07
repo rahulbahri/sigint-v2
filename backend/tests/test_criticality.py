@@ -171,9 +171,14 @@ class TestComposite:
         }
         return kpi_avgs, targets, directions, time_series
 
-    def test_returns_all_scored_kpis(self):
+    def test_returns_only_off_target_kpis(self):
+        """On-target KPIs (gross_margin: 72 vs target 70, higher is better) are excluded."""
         results = compute_composite_criticality(*self._make_data())
-        assert len(results) == 3
+        keys = [r["key"] for r in results]
+        assert "gross_margin" not in keys  # 72 >= 70, on target, excluded
+        assert "revenue_growth" in keys    # 5 < 8, below target, included
+        assert "dso" in keys               # 60 > 35, above target (lower is better), included
+        assert len(results) == 2
 
     def test_sorted_by_composite_desc(self):
         results = compute_composite_criticality(*self._make_data())
@@ -183,14 +188,7 @@ class TestComposite:
     def test_ranks_assigned(self):
         results = compute_composite_criticality(*self._make_data())
         ranks = [r["rank"] for r in results]
-        assert ranks == [1, 2, 3]
-
-    def test_critical_kpi_ranks_higher(self):
-        """revenue_growth (big gap + deteriorating + growth domain) should rank above gross_margin (on target)."""
-        results = compute_composite_criticality(*self._make_data())
-        rg_rank = next(r["rank"] for r in results if r["key"] == "revenue_growth")
-        gm_rank = next(r["rank"] for r in results if r["key"] == "gross_margin")
-        assert rg_rank < gm_rank
+        assert ranks == [1, 2]
 
     def test_dso_high_criticality(self):
         """DSO: big gap + deteriorating + cashflow domain (highest urgency) → top ranked."""
@@ -198,11 +196,29 @@ class TestComposite:
         dso = next(r for r in results if r["key"] == "dso")
         assert dso["composite"] > 60  # Should be high
 
-    def test_gross_margin_low_criticality(self):
-        """gross_margin: on target + improving → low composite."""
+    def test_on_target_higher_is_better_excluded(self):
+        """A higher-is-better KPI above target must not appear in criticality ranking."""
+        kpi_avgs = {"growth_efficiency": 13.07}
+        targets = {"growth_efficiency": 3.00}
+        directions = {"growth_efficiency": "higher"}
+        ts = {"growth_efficiency": [10, 11, 12, 13, 13, 13.07]}
+        results = compute_composite_criticality(kpi_avgs, targets, directions, ts)
+        assert len(results) == 0
+
+    def test_on_target_lower_is_better_excluded(self):
+        """A lower-is-better KPI below target must not appear in criticality ranking."""
+        kpi_avgs = {"churn_rate": 2.0}
+        targets = {"churn_rate": 5.0}
+        directions = {"churn_rate": "lower"}
+        ts = {"churn_rate": [3, 2.8, 2.5, 2.3, 2.1, 2.0]}
+        results = compute_composite_criticality(kpi_avgs, targets, directions, ts)
+        assert len(results) == 0
+
+    def test_gap_pct_never_negative(self):
+        """gap_pct in results must always be >= 0 (never shows as 'above target' negative)."""
         results = compute_composite_criticality(*self._make_data())
-        gm = next(r for r in results if r["key"] == "gross_margin")
-        assert gm["composite"] < 50
+        for r in results:
+            assert r["gap_pct"] >= 0, f"{r['key']} has negative gap_pct: {r['gap_pct']}"
 
     def test_breakdown_included(self):
         results = compute_composite_criticality(*self._make_data())

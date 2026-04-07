@@ -257,7 +257,11 @@ function KpiSlideOut({ kpi: initialKpi, status: initialStatus, onClose, onNaviga
     if (!currentKpi?.key) return
     setDetailLoading(true)
     axios.get(`/api/kpi-detail/${currentKpi.key}`)
-      .then(r => setDetail(r.data))
+      .then(r => {
+        setDetail(r.data)
+        // Override status from API's direction-aware computation (never trust the prop)
+        if (r.data?.status) setCurrentStatus(r.data.status)
+      })
       .catch(() => setDetail(null))
       .finally(() => setDetailLoading(false))
   }, [currentKpi?.key])
@@ -1897,7 +1901,7 @@ export default function HomeScreen({ onNavigate, onAskAnika }) {
               return (
                 <button
                   key={kpi.key}
-                  onClick={() => setSlideOut({ kpi, status: 'red' })}
+                  onClick={() => setSlideOut({ kpi, status: kpi.status || 'red' })}
                   className="w-full text-left bg-white rounded-xl p-3 border border-red-200 hover:border-red-300 hover:shadow-md transition-all group cursor-pointer"
                 >
                   <div className="flex items-center gap-2.5">
@@ -2077,7 +2081,7 @@ export default function HomeScreen({ onNavigate, onAskAnika }) {
                       {data.period_comparison.deteriorated.map(kpi => {
                         const pct = kpi.delta_pct ?? (kpi.prev ? Math.max(-999, Math.min(999, (kpi.delta / Math.abs(kpi.prev)) * 100)) : kpi.delta)
                         return (
-                          <button key={kpi.key} onClick={() => setSlideOut({ kpi: { key: kpi.key }, status: 'red' })}
+                          <button key={kpi.key} onClick={() => setSlideOut({ kpi: { key: kpi.key }, status: kpi.status || 'red' })}
                             className="text-[10px] font-medium text-red-700 bg-red-50 px-2 py-1 rounded-lg hover:bg-red-100 transition-colors cursor-pointer">
                             {formatKpiLabel(kpi.key)} <span className="font-bold">{pct > 0 ? '+' : ''}{pct?.toFixed?.(1) ?? pct}%</span>
                           </button>
@@ -2130,7 +2134,7 @@ export default function HomeScreen({ onNavigate, onAskAnika }) {
                       return (
                         <button
                           key={kpi.key}
-                          onClick={() => setSlideOut({ kpi, status: 'red' })}
+                          onClick={() => setSlideOut({ kpi, status: kpi.status || 'red' })}
                           className="flex items-center gap-3 w-full text-left px-3 py-2 rounded-lg hover:bg-white transition-colors group"
                         >
                           <span className="text-[9px] font-bold text-red-500 bg-red-100 w-5 h-5 rounded-full flex items-center justify-center flex-shrink-0">

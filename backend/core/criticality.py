@@ -270,11 +270,12 @@ def compute_composite_criticality(
             1,
         )
 
-        # Raw gap_pct for display (signed: positive = below target)
+        # Raw gap_pct for display (always non-negative: how far below target)
+        # A KPI above target (for higher-is-better) has gap_pct = 0, not negative
         if dirn == "higher":
-            raw_gap = round((1 - avg / tval) * 100, 1) if tval != 0 else 0.0
+            raw_gap = round(max(0.0, (1 - avg / tval) * 100), 1) if tval != 0 else 0.0
         else:
-            raw_gap = round((avg / tval - 1) * 100, 1) if tval != 0 else 0.0
+            raw_gap = round(max(0.0, (avg / tval - 1) * 100), 1) if tval != 0 else 0.0
 
         domain = get_kpi_domain(key)
         results.append({
@@ -291,6 +292,10 @@ def compute_composite_criticality(
             "avg":           avg,
             "target":        tval,
         })
+
+    # Exclude KPIs that are on or above target — they are NOT critical
+    # gap_score == 0 means the KPI meets or exceeds its target (direction-aware)
+    results = [r for r in results if r["gap_score"] > 0.0]
 
     # Sort by composite descending (most critical first)
     results.sort(key=lambda x: x["composite"], reverse=True)

@@ -433,18 +433,11 @@ def compute_health_score(
             "Your business health is in the critical zone — immediate corrective action is needed across revenue, retention, and efficiency metrics."
         )
 
-    top_drags = [{"key": k, "name": _friendly_name(k), "gap_pct": round((1 - p) * 100, 1)} for k, p in red_kpis[:3]]
-    top_wins  = [{"key": k, "name": _friendly_name(k), "gap_pct": round((p - 1) * 100, 1)} for k, p in green_kpis[:3]]
-
+    # top_drags and primary_action are populated AFTER composite_ranked is computed (below)
+    # to ensure narrative text matches the critical card ranking
+    top_drags = []
+    top_wins  = [{"key": k, "name": _friendly_name(k), "gap_pct": round(max(0.0, (p - 1) * 100), 1)} for k, p in green_kpis[:3]]
     primary_action = ""
-    if red_kpis:
-        worst_key = red_kpis[0][0]
-        worst_name = _friendly_name(worst_key)
-        worst_gap = round((1 - red_kpis[0][1]) * 100, 1)
-        primary_action = (
-            f"Your most critical metric is {worst_name} which is {worst_gap}% below target. "
-            f"Investigate root causes and develop a 30-day recovery plan."
-        )
 
     # ── Data sufficiency assessment ──────────────────────────────────────────
     total_kpis_expected = len(targets)
@@ -524,6 +517,21 @@ def compute_health_score(
     )
     domain_groups = group_by_domain(composite_ranked)
 
+    # Build top_drags from composite_ranked (already filtered to off-target only)
+    # This ensures the narrative "KPIs requiring most urgency" matches the critical cards
+    top_drags = [
+        {"key": r["key"], "name": _friendly_name(r["key"]), "gap_pct": r["gap_pct"]}
+        for r in composite_ranked[:3]
+    ]
+    if composite_ranked:
+        worst = composite_ranked[0]
+        worst_name = _friendly_name(worst["key"])
+        worst_gap = worst["gap_pct"]
+        primary_action = (
+            f"Your most critical metric is {worst_name} which is {worst_gap}% below target. "
+            f"Investigate root causes and develop a 30-day recovery plan."
+        )
+
     return {
         "score":              score,
         "grade":              grade,
@@ -539,7 +547,7 @@ def compute_health_score(
         "months_of_data":     len(rows),
         "needs_attention":    [k for k, _ in (red_kpis + yellow_kpis)],
         "needs_attention_ranked": [
-            {"key": k, "gap_pct": round((1 - p) * 100, 1), "rank": i + 1}
+            {"key": k, "gap_pct": round(max(0.0, (1 - p) * 100), 1), "rank": i + 1}
             for i, (k, p) in enumerate(red_kpis)
         ],
         "doing_well":         [k for k, _ in green_kpis],

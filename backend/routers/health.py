@@ -268,6 +268,24 @@ def get_home(
             spot["domain_score"] = cr["domain_score"]
             spot["domain"]       = cr["domain"]
             spot["domain_label"] = cr["domain_label"]
+            # Use composite gap_pct if legacy one is missing or negative
+            if not spot.get("gap_pct") or spot["gap_pct"] < 0:
+                spot["gap_pct"] = cr["gap_pct"]
+
+        # Compute direction-aware status from actual data
+        _avg = spot.get("avg")
+        _tval = targets_map.get(k, {}).get("target")
+        _dirn = targets_map.get(k, {}).get("direction", "higher")
+        if _avg is not None and _tval is not None:
+            from core.health_score import _is_on_target, _is_critical
+            if _is_on_target(_avg, _tval, _dirn):
+                spot["status"] = "green"
+            elif _is_critical(_avg, _tval, _dirn):
+                spot["status"] = "red"
+            else:
+                spot["status"] = "yellow"
+        else:
+            spot["status"] = "grey"
 
         # P1.1: Benchmark positioning
         bench = benchmark_position(
@@ -596,7 +614,8 @@ def get_kpi_detail(kpi_key: str, request: Request):
         # Prepend data-driven causes, append static as fallback context
         final_root_causes = driven_causes + [f"[Template] {c}" for c in causation.get("root_causes", [])[:1]]
     else:
-        final_root_causes = causation.get("root_causes", [])
+        # Use validated root causes (template causes with data-contradicted ones removed)
+        final_root_causes = rca.get("validated_root_causes", causation.get("root_causes", []))
 
     # ── AI-powered company-specific actions ──────────────────────────────────
     # Generate actions grounded in actual data using Claude API.
