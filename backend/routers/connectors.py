@@ -568,6 +568,19 @@ async def connector_oauth_callback(
         elif source == "quickbooks":
             credentials = connector.exchange_code(code, redirect_uri)
             credentials["realmId"] = realmId
+        elif source == "salesforce":
+            # PKCE: retrieve code_verifier stored during auth-url generation
+            _cv_row = conn.execute(
+                "SELECT value FROM company_settings WHERE key='sf_code_verifier' AND workspace_id=?",
+                [workspace_id],
+            ).fetchone()
+            _code_verifier = (_cv_row[0] if _cv_row and not isinstance(_cv_row, dict)
+                              else _cv_row["value"] if _cv_row else "")
+            credentials = connector.exchange_code(code, redirect_uri, code_verifier=_code_verifier)
+            # Clean up the temporary verifier
+            conn.execute("DELETE FROM company_settings WHERE key='sf_code_verifier' AND workspace_id=?",
+                         [workspace_id])
+            conn.commit()
         else:
             credentials = connector.exchange_code(code, redirect_uri)
     except ConnectorError as ce:

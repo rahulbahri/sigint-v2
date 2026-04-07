@@ -35,14 +35,18 @@ class SalesforceConnector(BaseConnector):
             f"&state={state}"
         )
 
-    def exchange_code(self, code: str, redirect_uri: str) -> dict:
-        r = httpx.post(_TOKEN_URL, data={
+    def exchange_code(self, code: str, redirect_uri: str, **kwargs) -> dict:
+        data = {
             "grant_type":    "authorization_code",
             "code":          code,
             "client_id":     os.environ["SALESFORCE_CLIENT_ID"],
             "client_secret": os.environ["SALESFORCE_CLIENT_SECRET"],
             "redirect_uri":  redirect_uri,
-        }, timeout=30)
+        }
+        # PKCE support: newer Salesforce orgs require code_verifier
+        if kwargs.get("code_verifier"):
+            data["code_verifier"] = kwargs["code_verifier"]
+        r = httpx.post(_TOKEN_URL, data=data, timeout=30)
         if r.status_code != 200:
             raise ConnectorError(f"Salesforce token exchange failed: {r.text}")
         return r.json()   # includes instance_url
@@ -69,8 +73,8 @@ class SalesforceConnector(BaseConnector):
         entities = [
             ("pipeline", "SELECT Id,Name,Amount,StageName,CloseDate,CreatedDate,OwnerId,AccountId,"
                          "Probability,Type,LeadSource FROM Opportunity"),
-            ("customers", "SELECT Id,Name,Email,Phone,Title,AccountId,CreatedDate,LeadSource,"
-                          "Status FROM Contact"),
+            ("customers", "SELECT Id,Name,Email,Phone,Title,AccountId,CreatedDate,LeadSource"
+                          " FROM Contact"),
             ("companies", "SELECT Id,Name,Industry,NumberOfEmployees,AnnualRevenue,"
                           "BillingCountry,CreatedDate FROM Account"),
         ]
