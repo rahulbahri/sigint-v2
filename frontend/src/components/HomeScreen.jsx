@@ -460,8 +460,18 @@ function KpiSlideOut({ kpi: initialKpi, status: initialStatus, onClose, onNaviga
                       <div className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${sc.pill}`}>
                         {label}
                       </div>
+                      {detail.data_grounded && (
+                        <span className="text-[8px] font-medium px-1.5 py-0.5 rounded-full bg-emerald-50 text-emerald-600 border border-emerald-200">
+                          Data confirmed
+                        </span>
+                      )}
+                      {!detail.data_grounded && (
+                        <span className="text-[8px] font-medium px-1.5 py-0.5 rounded-full bg-slate-50 text-slate-400 border border-slate-200">
+                          Expert hypothesis
+                        </span>
+                      )}
                       {detail.root_causes && detail.root_causes.length > 0 && (
-                        <span className="text-[9px] text-slate-400">--- {detail.root_causes.slice(0, 2).join(', ')}</span>
+                        <span className="text-[9px] text-slate-400">{detail.root_causes.slice(0, 2).map(r => r.replace('[Template] ', '')).join(', ')}</span>
                       )}
                     </div>
                     {/* Downstream tree */}
@@ -486,8 +496,18 @@ function KpiSlideOut({ kpi: initialKpi, status: initialStatus, onClose, onNaviga
                               >
                                 {nodeLabel}
                               </button>
+                              {typeof node === 'object' && node.confidence && (
+                                <span className={`text-[8px] font-medium px-1 py-0.5 rounded-full ${
+                                  node.confidence === 'granger_confirmed' ? 'bg-emerald-50 text-emerald-600' :
+                                  node.confidence === 'directionally_supported' ? 'bg-blue-50 text-blue-600' :
+                                  'bg-slate-50 text-slate-400'
+                                }`}>
+                                  {node.confidence === 'granger_confirmed' ? 'Confirmed' :
+                                   node.confidence === 'directionally_supported' ? 'Directional' : 'Hypothesis'}
+                                </span>
+                              )}
                               {nodeCauses.length > 0 && (
-                                <span className="text-[9px] text-slate-400">--- {nodeCauses.slice(0, 2).join(', ')}</span>
+                                <span className="text-[9px] text-slate-400">{nodeCauses.slice(0, 2).map(r => r.replace('[Template] ', '')).join(', ')}</span>
                               )}
                             </div>
                             {/* Second-hop children */}
@@ -552,7 +572,19 @@ function KpiSlideOut({ kpi: initialKpi, status: initialStatus, onClose, onNaviga
               {/* Recommended Actions */}
               {detail.corrective_actions && detail.corrective_actions.length > 0 && (
                 <div>
-                  <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400 mb-1">Recommended Actions</p>
+                  <div className="flex items-center gap-2 mb-1">
+                    <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400">Recommended Actions</p>
+                    {detail.actions_source === 'ai_generated' && (
+                      <span className="text-[8px] font-medium px-1.5 py-0.5 rounded-full bg-violet-50 text-violet-600 border border-violet-200">
+                        AI-generated
+                      </span>
+                    )}
+                    {detail.actions_source === 'data_driven_context' && (
+                      <span className="text-[8px] font-medium px-1.5 py-0.5 rounded-full bg-emerald-50 text-emerald-600 border border-emerald-200">
+                        Data-driven
+                      </span>
+                    )}
+                  </div>
                   <ul className="space-y-1">
                     {detail.corrective_actions.map((action, i) => (
                       <li key={i} className="flex items-start gap-2 text-[12px] text-slate-600 leading-relaxed">

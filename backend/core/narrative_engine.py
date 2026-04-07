@@ -10,13 +10,29 @@ KPI trends. For each red/yellow KPI, the engine:
   4. Walks the causal chain up to 3 hops for root cause tracing
   5. Weights edges by Granger p-value when ontology data is available
   6. Generates narratives with actual numbers, not template text
+  7. Uses Claude API to generate company-specific corrective actions
+     grounded in the actual data context (not generic templates)
 
 Pure-functional: no DB access. All data passed as arguments.
 """
 from __future__ import annotations
+
+import logging
+import os
+import threading
+import time
 from typing import Any, Optional
 
 from core.kpi_defs import ALL_CAUSATION_RULES, KPI_DEFS, EXTENDED_ONTOLOGY_METRICS
+
+log = logging.getLogger("narrative_engine")
+
+# ── AI action cache (thread-safe, TTL-based) ────────────────────────────────
+# Caches Claude-generated actions per (kpi_key, data_hash) for 1 hour to
+# avoid repeated API calls for the same KPI state.
+_AI_ACTION_CACHE: dict[str, dict] = {}
+_AI_CACHE_LOCK = threading.Lock()
+_AI_CACHE_TTL = 3600  # 1 hour
 
 # ── Reverse causation map ────────────────────────────────────────────────────
 # For each KPI, lists its upstream parents (KPIs whose downstream_impact includes it).
@@ -312,6 +328,165 @@ def analyze_root_causes(
         "contextual_action": action,
         "data_grounded": len(confirmed) > 0,
     }
+
+
+# ── AI-powered action generation ─────────────────────────────────────────────
+
+def generate_ai_actions(
+    kpi_key: str,
+    kpi_name: str,
+    unit: str,
+    direction: str,
+    current_value: float | None,
+    target_value: float | None,
+    time_series: list[dict],
+    confirmed_causes: list[dict],
+    downstream_impact: list[str],
+    stage: str = "series_a",
+    company_name: str = "",
+    benchmark: dict | None = None,
+    template_actions: list[str] | None = None,
+) -> list[str]:
+    """Generate company-specific corrective actions using Claude API.
+
+    Uses the full data context (actual values, confirmed causal chain,
+    trend direction, benchmark position, company stage) to produce
+    actionable, grounded recommendations -- not generic templates.
+
+    Returns a list of 3 action strings, or falls back to template_actions
+    if the Claude API is unavailable.
+    """
+    api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+    if not api_key:
+        log.warning("[AI Actions] ANTHROPIC_API_KEY not set, falling back to templates")
+        return template_actions or []
+
+    # Check cache first
+    cache_key = f"{kpi_key}:{current_value}:{target_value}:{stage}"
+    with _AI_CACHE_LOCK:
+        cached = _AI_ACTION_CACHE.get(cache_key)
+        if cached and time.time() < cached["expires_at"]:
+            log.info("[AI Actions] Cache hit for %s", kpi_key)
+            return cached["actions"]
+
+    # Build the data context for Claude
+    trend_desc = "stable"
+    if len(time_series) >= 3:
+        recent = [r["value"] for r in time_series[-3:] if r.get("value") is not None]
+        prior = [r["value"] for r in time_series[-6:-3] if r.get("value") is not None]
+        if recent and prior:
+            r_avg = sum(recent) / len(recent)
+            p_avg = sum(prior) / len(prior)
+            if p_avg:
+                delta = ((r_avg - p_avg) / abs(p_avg)) * 100
+                if direction == "higher":
+                    trend_desc = f"improving ({delta:+.1f}%)" if delta > 2 else f"declining ({delta:+.1f}%)" if delta < -2 else "stable"
+                else:
+                    trend_desc = f"improving ({delta:+.1f}%)" if delta < -2 else f"worsening ({delta:+.1f}%)" if delta > 2 else "stable"
+
+    cause_context = ""
+    if confirmed_causes:
+        cause_lines = []
+        for c in confirmed_causes[:3]:
+            conf = "statistically confirmed by Granger causality" if c.get("confidence") == "granger_confirmed" else "directionally supported by trend data"
+            cause_lines.append(f"  - {c['name']}: {abs(c['delta_pct']):.1f}% deterioration ({conf})")
+        cause_context = "Confirmed upstream causes (verified against actual data):\n" + "\n".join(cause_lines)
+    else:
+        cause_context = "No upstream KPI deterioration confirmed -- issue may be direct/external."
+
+    downstream_context = ""
+    if downstream_impact:
+        ds_names = ", ".join(_friendly(d) for d in downstream_impact[:5])
+        downstream_context = f"Downstream KPIs at risk if not addressed: {ds_names}"
+
+    benchmark_context = ""
+    if benchmark:
+        p50 = benchmark.get("p50")
+        quartile = benchmark.get("quartile", "")
+        if p50 is not None:
+            benchmark_context = f"Peer benchmark (median for {stage.replace('_', ' ')}): {p50}. Company is in the {quartile} quartile."
+
+    pct_off = ""
+    if current_value is not None and target_value is not None and target_value != 0:
+        gap = ((current_value - target_value) / abs(target_value)) * 100
+        pct_off = f" ({gap:+.1f}% vs target)"
+
+    prompt = f"""You are a senior CFO analyst. Generate exactly 3 specific, actionable corrective actions for a {stage.replace('_', ' ')} stage company{f' ({company_name})' if company_name else ''}.
+
+KPI: {kpi_name}
+Current value: {current_value}{pct_off}
+Target: {target_value}
+Unit: {unit}
+Direction: {direction} is better
+Trend (3-month): {trend_desc}
+
+{cause_context}
+
+{downstream_context}
+
+{benchmark_context}
+
+Rules:
+- Each action must be specific and operational (not generic advice like "improve efficiency")
+- Reference the ACTUAL numbers and confirmed causes above
+- If upstream causes are confirmed, the first action must address the root cause, not the symptom
+- If no upstream causes, focus on direct operational levers for this specific KPI
+- Each action should be 1-2 sentences max
+- Actions must be different from each other (no repetition)
+- Format: just the 3 actions, one per line, numbered 1-3. No other text."""
+
+    try:
+        import httpx
+        resp = httpx.post(
+            "https://api.anthropic.com/v1/messages",
+            headers={
+                "x-api-key": api_key,
+                "anthropic-version": "2023-06-01",
+                "content-type": "application/json",
+            },
+            json={
+                "model": "claude-3-5-haiku-20241022",
+                "max_tokens": 300,
+                "messages": [{"role": "user", "content": prompt}],
+            },
+            timeout=15,
+        )
+        if resp.status_code != 200:
+            log.error("[AI Actions] Claude API error %d: %s", resp.status_code, resp.text[:200])
+            return template_actions or []
+
+        text = resp.json().get("content", [{}])[0].get("text", "")
+        # Parse numbered lines
+        actions = []
+        for line in text.strip().split("\n"):
+            line = line.strip()
+            if not line:
+                continue
+            # Remove leading number/bullet
+            for prefix in ["1.", "2.", "3.", "1)", "2)", "3)", "-", "*"]:
+                if line.startswith(prefix):
+                    line = line[len(prefix):].strip()
+                    break
+            if line:
+                actions.append(line)
+
+        if not actions:
+            log.warning("[AI Actions] Claude returned empty actions, falling back to templates")
+            return template_actions or []
+
+        # Cache the result
+        with _AI_CACHE_LOCK:
+            _AI_ACTION_CACHE[cache_key] = {
+                "actions": actions[:3],
+                "expires_at": time.time() + _AI_CACHE_TTL,
+            }
+
+        log.info("[AI Actions] Generated %d actions for %s", len(actions), kpi_key)
+        return actions[:3]
+
+    except Exception as e:
+        log.error("[AI Actions] Failed: %s, falling back to templates", e)
+        return template_actions or []
 
 
 # ── Batch enrichment for /api/home ───────────────────────────────────────────

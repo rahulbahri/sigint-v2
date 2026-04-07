@@ -598,11 +598,61 @@ def get_kpi_detail(kpi_key: str, request: Request):
     else:
         final_root_causes = causation.get("root_causes", [])
 
-    if rca.get("contextual_action"):
+    # ── AI-powered company-specific actions ──────────────────────────────────
+    # Generate actions grounded in actual data using Claude API.
+    # Falls back to template actions if API is unavailable.
+    from core.narrative_engine import generate_ai_actions as _gen_ai_actions
+
+    _company_stage = "series_a"  # default
+    _company_name = ""
+    try:
+        _stage_conn = get_db()
+        for _cs in _stage_conn.execute(
+            "SELECT key, value FROM company_settings WHERE workspace_id=? AND key IN ('funding_stage','company_name')",
+            [workspace_id],
+        ).fetchall():
+            _k = _cs[0] if not isinstance(_cs, dict) else _cs["key"]
+            _v = _cs[1] if not isinstance(_cs, dict) else _cs["value"]
+            if _k == "funding_stage" and _v:
+                _company_stage = _v
+            elif _k == "company_name" and _v:
+                _company_name = _v
+        _stage_conn.close()
+    except Exception:
+        pass
+
+    ai_actions = _gen_ai_actions(
+        kpi_key=kpi_key,
+        kpi_name=kpi_def.get("name", kpi_key),
+        unit=unit,
+        direction=direction,
+        current_value=avg,
+        target_value=target_value,
+        time_series=time_series,
+        confirmed_causes=rca.get("confirmed_causes", []),
+        downstream_impact=causation.get("downstream_impact", []),
+        stage=_company_stage,
+        company_name=_company_name,
+        benchmark=benchmark,
+        template_actions=actions,  # fallback if AI unavailable
+    )
+
+    # If AI generated actions, use them. Prepend contextual_action if data-grounded.
+    if ai_actions and ai_actions != actions:
+        if rca.get("contextual_action") and rca.get("data_grounded"):
+            deduped = _deduplicate_actions(rca["contextual_action"], ai_actions)
+            final_actions = [rca["contextual_action"]] + deduped[:2]
+        else:
+            final_actions = ai_actions[:3]
+        _actions_source = "ai_generated"
+    elif rca.get("contextual_action"):
         deduped = _deduplicate_actions(rca["contextual_action"], actions[:3])
         final_actions = [rca["contextual_action"]] + deduped[:2]
+        _actions_source = "data_driven_context"
     else:
         final_actions = actions
+        _actions_source = "template"
+
     # Remove exact duplicates
     _seen = set()
     _unique = []
@@ -628,6 +678,7 @@ def get_kpi_detail(kpi_key: str, request: Request):
         "root_causes":       final_root_causes,
         "downstream_impact": causation.get("downstream_impact", []),
         "corrective_actions": final_actions,
+        "actions_source": _actions_source,
         "root_cause_analysis": rca,
         "data_grounded": rca.get("data_grounded", False),
         "benchmarks":        benchmark,
