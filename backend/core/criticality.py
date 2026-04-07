@@ -175,9 +175,38 @@ def _trend_score(
     return min(max(score, 0.0), 100.0)
 
 
-def _impact_score(kpi_key: str) -> float:
-    """Return pre-computed causal impact score (0–100), or 30 if unknown."""
-    return _IMPACT_SCORES.get(kpi_key, 30.0)
+def _impact_score(kpi_key: str, ontology_edges: dict = None) -> float:
+    """
+    Return causal impact score (0–100), weighted by Granger confidence.
+
+    Base score = downstream node count (pre-computed).
+    If ontology_edges are provided, weight by statistical confidence:
+    - Granger-confirmed edges (p<0.05) count as full weight (1.0)
+    - Expert-prior edges count as half weight (0.5)
+    """
+    base = _IMPACT_SCORES.get(kpi_key, 30.0)
+    if not ontology_edges:
+        return base
+
+    # Count confirmed vs expert-prior edges for this KPI
+    confirmed = 0
+    expert = 0
+    for (src, tgt), edge in ontology_edges.items():
+        if src == kpi_key:
+            tier = edge.get("confidence_tier", "expert_prior")
+            if tier == "granger_confirmed":
+                confirmed += 1
+            else:
+                expert += 1
+
+    total_edges = confirmed + expert
+    if total_edges == 0:
+        return base
+
+    # Weight: confirmed edges at 1.0, expert-prior at 0.5
+    confidence_ratio = (confirmed * 1.0 + expert * 0.5) / total_edges
+    # Scale the base score by confidence (0.5–1.0 range, never below half the base)
+    return round(base * max(0.5, confidence_ratio), 1)
 
 
 def _domain_score(kpi_key: str) -> float:
@@ -217,6 +246,7 @@ def compute_composite_criticality(
     directions: dict[str, str],
     time_series_by_kpi: dict[str, list[float]],
     weights: dict[str, float] | None = None,
+    ontology_edges: dict = None,
 ) -> list[dict]:
     """
     Compute composite criticality score for all KPIs that have both data and targets.
@@ -228,6 +258,7 @@ def compute_composite_criticality(
     directions : dict — "higher" or "lower" per KPI
     time_series_by_kpi : dict — ordered list of values per KPI
     weights : dict   — optional override {gap, trend, impact, domain} summing to 1.0
+    ontology_edges : dict — {(src, tgt): {confidence_tier, granger_pval, ...}} for Granger weighting
 
     Returns
     -------
@@ -262,7 +293,7 @@ def compute_composite_criticality(
 
         g = _gap_score(avg, tval, dirn)
         t = _trend_score(ts, dirn)
-        i = _impact_score(key)
+        i = _impact_score(key, ontology_edges)
         d = _domain_score(key)
 
         composite = round(

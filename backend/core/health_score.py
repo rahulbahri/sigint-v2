@@ -194,6 +194,7 @@ def compute_health_score(
     from_period: Optional[tuple] = None,
     to_period: Optional[tuple] = None,
     criticality_weights: Optional[dict] = None,
+    ontology_edges: dict = None,
 ) -> dict:
     """
     Main entry point. Pulls data from DB and returns full health score breakdown.
@@ -514,6 +515,7 @@ def compute_health_score(
     composite_ranked = compute_composite_criticality(
         kpi_avgs, targets, directions, time_series,
         weights=criticality_weights,
+        ontology_edges=ontology_edges,
     )
     domain_groups = group_by_domain(composite_ranked)
 

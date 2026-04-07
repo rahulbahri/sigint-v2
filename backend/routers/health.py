@@ -108,6 +108,26 @@ def get_home(
         if cw_domain is not None: crit_w["domain"] = cw_domain
         kwargs["criticality_weights"] = crit_w
 
+    # Load ontology edges for Granger-weighted criticality scoring
+    _ont_edges_tuples = {}
+    try:
+        _edge_rows = conn.execute(
+            "SELECT source, target, granger_pval, confidence_tier, strength, direction "
+            "FROM ontology_edges"
+        ).fetchall()
+        for _er in _edge_rows:
+            _src = _er["source"] if isinstance(_er, dict) else _er[0]
+            _tgt = _er["target"] if isinstance(_er, dict) else _er[1]
+            _ont_edges_tuples[(_src, _tgt)] = {
+                "granger_pval": _er["granger_pval"] if isinstance(_er, dict) else _er[2],
+                "confidence_tier": _er["confidence_tier"] if isinstance(_er, dict) else _er[3],
+                "strength": _er["strength"] if isinstance(_er, dict) else _er[4],
+                "direction": (_er["direction"] if isinstance(_er, dict) else _er[5]) if len(_er) > 5 else "positive",
+            }
+    except Exception:
+        pass
+    kwargs["ontology_edges"] = _ont_edges_tuples
+
     health = compute_health_score(conn, workspace_id, **kwargs)
 
     has_period_filter = from_year is not None or to_year is not None
@@ -202,18 +222,23 @@ def get_home(
 
     # Load ontology edges for Granger-weighted narrative engine
     ontology_edges_map = {}
+    ontology_edges_tuples = {}  # {(src, tgt): {...}} for criticality + validation
     try:
         edge_rows = conn.execute(
-            "SELECT source, target, granger_pval, confidence_tier, strength "
+            "SELECT source, target, granger_pval, confidence_tier, strength, direction "
             "FROM ontology_edges"
         ).fetchall()
         for er in edge_rows:
-            edge_key = f"{er['source']}->{er['target']}" if isinstance(er, dict) else f"{er[0]}->{er[1]}"
-            ontology_edges_map[edge_key] = {
+            src = er["source"] if isinstance(er, dict) else er[0]
+            tgt = er["target"] if isinstance(er, dict) else er[1]
+            edge_data = {
                 "granger_pval": er["granger_pval"] if isinstance(er, dict) else er[2],
                 "confidence_tier": er["confidence_tier"] if isinstance(er, dict) else er[3],
                 "strength": er["strength"] if isinstance(er, dict) else er[4],
+                "direction": (er["direction"] if isinstance(er, dict) else er[5]) if len(er) > 5 else "positive",
             }
+            ontology_edges_map[f"{src}->{tgt}"] = edge_data
+            ontology_edges_tuples[(src, tgt)] = edge_data
     except Exception:
         pass  # Table may not exist or be empty
 
@@ -310,6 +335,20 @@ def get_home(
         rca = root_cause_analyses.get(k)
         if rca:
             spot["root_cause_analysis"] = rca
+
+        # Causal consistency validation (top-down + bottom-up)
+        try:
+            from core.narrative_engine import validate_causal_consistency
+            _targets_for_val = {kk: vv.get("target") for kk, vv in targets_map.items() if vv.get("target") is not None}
+            causal_val = validate_causal_consistency(
+                k, spot.get("status", "grey"),
+                _kpi_avgs_for_engine, _targets_for_val,
+                _directions_for_engine, _ts_for_engine,
+                ontology_edges=ontology_edges_tuples,
+            )
+            spot["causal_validation"] = causal_val
+        except Exception:
+            pass  # Graceful degradation — don't block rendering
 
         needs_enriched.append(spot)
 

@@ -439,6 +439,44 @@ function KpiSlideOut({ kpi: initialKpi, status: initialStatus, onClose, onNaviga
                 </div>
               )}
 
+              {/* Causal Consistency (top-down + bottom-up validation) */}
+              {currentKpi?.causal_validation?.flags?.length > 0 && (
+                <div className="space-y-1.5">
+                  <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400 mb-1">Causal Validation</p>
+                  {currentKpi.causal_validation.flags.map((flag, i) => {
+                    const upstream = currentKpi.causal_validation.upstream_check?.verdict
+                    const isWarning = upstream === 'orphan_issue' || upstream === 'lagging_indicator'
+                    return (
+                      <div key={i} className={`flex items-start gap-2 text-[11px] px-3 py-2 rounded-lg ${
+                        isWarning ? 'bg-amber-50 text-amber-700 border border-amber-200' : 'bg-blue-50 text-blue-700 border border-blue-200'
+                      }`}>
+                        <Info size={11} className="mt-0.5 flex-shrink-0" />
+                        <span>{flag}</span>
+                      </div>
+                    )
+                  })}
+                  {currentKpi.causal_validation.granger_confidence && (
+                    <div className="flex items-center gap-2 text-[10px] text-slate-400">
+                      <span className={`px-1.5 py-0.5 rounded text-[9px] font-medium ${
+                        currentKpi.causal_validation.granger_confidence.confidence_label === 'high' ? 'bg-emerald-100 text-emerald-700' :
+                        currentKpi.causal_validation.granger_confidence.confidence_label === 'moderate' ? 'bg-blue-100 text-blue-700' :
+                        currentKpi.causal_validation.granger_confidence.confidence_label === 'low' ? 'bg-slate-100 text-slate-500' :
+                        'bg-slate-50 text-slate-400'
+                      }`}>
+                        {currentKpi.causal_validation.granger_confidence.confidence_label === 'high' ? 'Statistically confirmed' :
+                         currentKpi.causal_validation.granger_confidence.confidence_label === 'moderate' ? 'Partially confirmed' :
+                         currentKpi.causal_validation.granger_confidence.confidence_label === 'low' ? 'Domain expertise only' :
+                         'Unverified'}
+                      </span>
+                      <span>
+                        {currentKpi.causal_validation.granger_confidence.confirmed_edges} confirmed,
+                        {' '}{currentKpi.causal_validation.granger_confidence.expert_prior_edges} assumed causal edges
+                      </span>
+                    </div>
+                  )}
+                </div>
+              )}
+
               {/* Root Causes */}
               {detail.root_causes && detail.root_causes.length > 0 && (
                 <div>

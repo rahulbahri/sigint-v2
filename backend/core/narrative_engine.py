@@ -97,6 +97,158 @@ def _compute_trend(kpi_key: str, time_series: dict, direction: str,
     }
 
 
+# ── Causal consistency validation (top-down + bottom-up) ───────────────────
+
+def validate_causal_consistency(
+    kpi_key: str,
+    kpi_status: str,               # "green", "yellow", "red", "grey"
+    kpi_avgs: dict,
+    targets: dict,
+    directions: dict,
+    time_series: dict,
+    ontology_edges: dict = None,   # {(src, tgt): {strength, granger_pval, confidence_tier, direction}}
+) -> dict:
+    """
+    Walk the causal graph both directions and validate whether this KPI's
+    status is consistent with its upstream parents and downstream children.
+
+    Returns a structured consistency report with verdicts and flags.
+    """
+    from core.health_score import _is_on_target, _is_critical
+
+    ontology_edges = ontology_edges or {}
+    flags = []
+
+    # ── Bottom-up: check parents ──────────────────────────────────────────
+    parents = _REVERSE_MAP.get(kpi_key, [])
+    deteriorating_parents = []
+    healthy_parents = []
+    unavailable_parents = []
+
+    for parent in parents:
+        trend = _compute_trend(parent, time_series, directions.get(parent, "higher"))
+        if not trend["available"]:
+            unavailable_parents.append(parent)
+            continue
+        if trend["is_deteriorating"]:
+            deteriorating_parents.append({
+                "key": parent, "name": _friendly(parent),
+                "delta_pct": trend["delta_pct"],
+            })
+        else:
+            healthy_parents.append({"key": parent, "name": _friendly(parent)})
+
+    # Determine upstream verdict
+    kpi_is_off_target = kpi_status in ("red", "yellow")
+    if kpi_is_off_target and not deteriorating_parents and parents:
+        upstream_verdict = "orphan_issue"
+        flags.append(
+            f"No upstream KPI is deteriorating. {_friendly(kpi_key)}'s issue appears "
+            f"self-contained or driven by factors outside the KPI framework."
+        )
+    elif kpi_is_off_target and deteriorating_parents:
+        upstream_verdict = "consistent"
+        top_parent = deteriorating_parents[0]
+        flags.append(
+            f"Upstream cause confirmed: {top_parent['name']} deteriorated {top_parent['delta_pct']:+.1f}%."
+        )
+    elif not kpi_is_off_target and deteriorating_parents:
+        upstream_verdict = "lagging_indicator"
+        names = ", ".join(p["name"] for p in deteriorating_parents[:2])
+        flags.append(
+            f"Watch: upstream drivers ({names}) are deteriorating but {_friendly(kpi_key)} "
+            f"is still on target. Impact may be delayed."
+        )
+    else:
+        upstream_verdict = "no_parents" if not parents else "consistent"
+
+    # ── Top-down: check children ──────────────────────────────────────────
+    children = ALL_CAUSATION_RULES.get(kpi_key, {}).get("downstream_impact", [])
+    affected_children = []
+    unaffected_children = []
+
+    for child in children:
+        avg_c = kpi_avgs.get(child)
+        tgt_c = targets.get(child)
+        dir_c = directions.get(child, "higher")
+        if avg_c is None or tgt_c is None:
+            continue
+        if _is_critical(avg_c, tgt_c, dir_c) or not _is_on_target(avg_c, tgt_c, dir_c):
+            affected_children.append({"key": child, "name": _friendly(child)})
+        else:
+            unaffected_children.append({"key": child, "name": _friendly(child)})
+
+    # Determine downstream verdict
+    if kpi_is_off_target and affected_children:
+        downstream_verdict = "propagating"
+        names = ", ".join(c["name"] for c in affected_children[:3])
+        flags.append(f"Impact is propagating downstream: {names} also off-target.")
+    elif kpi_is_off_target and children and not affected_children:
+        downstream_verdict = "contained"
+        flags.append(
+            f"Despite being off-target, downstream KPIs are stable. "
+            f"The impact may be delayed or the causal link may be weaker than expected."
+        )
+    elif not children:
+        downstream_verdict = "no_downstream"
+    else:
+        downstream_verdict = "stable"
+
+    # ── Granger confidence ────────────────────────────────────────────────
+    confirmed_edges = 0
+    expert_prior_edges = 0
+    pvalues = []
+
+    # Check edges where this KPI is either source or target
+    for (src, tgt), edge in ontology_edges.items():
+        if src == kpi_key or tgt == kpi_key:
+            tier = edge.get("confidence_tier", "expert_prior")
+            if tier == "granger_confirmed":
+                confirmed_edges += 1
+                pv = edge.get("granger_pval")
+                if pv is not None:
+                    pvalues.append(float(pv))
+            else:
+                expert_prior_edges += 1
+
+    avg_pval = round(sum(pvalues) / len(pvalues), 4) if pvalues else None
+    if confirmed_edges >= 2 and avg_pval and avg_pval < 0.01:
+        confidence_label = "high"
+    elif confirmed_edges >= 1:
+        confidence_label = "moderate"
+    elif expert_prior_edges > 0:
+        confidence_label = "low"
+    else:
+        confidence_label = "unverified"
+
+    # Overall consistency
+    is_consistent = upstream_verdict in ("consistent", "no_parents") and \
+                    downstream_verdict in ("propagating", "stable", "no_downstream")
+
+    return {
+        "consistent": is_consistent,
+        "upstream_check": {
+            "total_parents": len(parents),
+            "deteriorating_parents": deteriorating_parents,
+            "healthy_parents": healthy_parents,
+            "verdict": upstream_verdict,
+        },
+        "downstream_check": {
+            "total_children": len(children),
+            "affected_children": affected_children,
+            "unaffected_children": unaffected_children,
+            "verdict": downstream_verdict,
+        },
+        "granger_confidence": {
+            "confirmed_edges": confirmed_edges,
+            "expert_prior_edges": expert_prior_edges,
+            "avg_pvalue": avg_pval,
+            "confidence_label": confidence_label,
+        },
+        "flags": flags,
+    }
+
+
 # ── Cause chain walking ─────────────────────────────────────────────────────
 
 def _walk_cause_chain(
