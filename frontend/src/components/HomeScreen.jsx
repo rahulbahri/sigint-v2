@@ -835,7 +835,8 @@ function ScoreBreakdownModal({ health, onClose, onWeightsApply }) {
 
           <div className="space-y-3">
             {components.map(({ key, label, value, Icon, desc, rationale, formula, wKey }) => {
-              const c = value >= 70 ? '#059669' : value >= 50 ? '#D97706' : '#DC2626'
+              const safeValue = value ?? 0
+              const c = safeValue >= 70 ? '#059669' : safeValue >= 50 ? '#D97706' : '#DC2626'
               const isExpanded = expandedComponent === key
               const detail = key === 'momentum' ? cd.momentum : key === 'target' ? cd.target_achievement : cd.risk
               return (
@@ -848,12 +849,12 @@ function ScoreBreakdownModal({ health, onClose, onWeightsApply }) {
                     <div className="flex items-center gap-2">
                       <Icon size={14} style={{ color: c }} />
                       <span className="text-slate-700 text-[12px] font-bold flex-1">{label}</span>
-                      <span className="text-[13px] font-extrabold tabular-nums" style={{ color: c }}>{value.toFixed(0)}</span>
+                      <span className="text-[13px] font-extrabold tabular-nums" style={{ color: c }}>{safeValue.toFixed(0)}</span>
                       <span className="text-[10px] text-slate-400 font-medium">/ 100</span>
                       <ChevronDown size={12} className={`text-slate-400 transition-transform ${isExpanded ? 'rotate-180' : ''}`} />
                     </div>
                     <div className="h-1.5 bg-slate-100 rounded-full overflow-hidden mt-2">
-                      <div className="h-full rounded-full transition-all duration-700" style={{ width: `${value}%`, backgroundColor: c }} />
+                      <div className="h-full rounded-full transition-all duration-700" style={{ width: `${safeValue}%`, backgroundColor: c }} />
                     </div>
                   </button>
 
@@ -1275,7 +1276,7 @@ function ScoreBar({ label, value, weight, Icon, onClick }) {
           <span className="text-slate-600 text-[11px] font-medium group-hover:text-slate-800 transition-colors">{label}</span>
           <div className="flex items-center gap-1.5">
             <span className="text-slate-400 text-[10px]">{weight}</span>
-            <span className="text-[11px] font-bold" style={{ color }}>{value.toFixed(0)}</span>
+            <span className="text-[11px] font-bold" style={{ color }}>{(value ?? 0).toFixed(0)}</span>
           </div>
         </div>
         <div className="h-1.5 bg-slate-100 rounded-full overflow-hidden">
@@ -1304,10 +1305,14 @@ function healthNarrative(health) {
 
   const {
     score, color, momentum_trend,
-    kpis_green = 0, kpis_yellow = 0, kpis_red = 0, kpis_grey = 0,
-    target_achievement = 0, momentum = 0, risk_flags = 0,
-    red_kpis_detail = [], yellow_kpis_detail = []
+    kpis_green: _kg = 0, kpis_yellow: _ky = 0, kpis_red: _kr = 0, kpis_grey: _kgr = 0,
+    target_achievement: _ta = 0, momentum: _mom = 0, risk_flags: _rf = 0,
+    red_kpis_detail: _rkd = [], yellow_kpis_detail: _ykd = []
   } = health
+  // Null-safe: API may return null for these fields, which bypasses destructuring defaults
+  const kpis_green = _kg ?? 0, kpis_yellow = _ky ?? 0, kpis_red = _kr ?? 0, kpis_grey = _kgr ?? 0
+  const target_achievement = _ta ?? 0, momentum = _mom ?? 0, risk_flags = _rf ?? 0
+  const red_kpis_detail = _rkd ?? [], yellow_kpis_detail = _ykd ?? []
 
   const total = kpis_green + kpis_yellow + kpis_red + kpis_grey
   const tracked = kpis_green + kpis_yellow + kpis_red
