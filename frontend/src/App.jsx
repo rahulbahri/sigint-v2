@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, lazy, Suspense } from 'react'
+import { useState, useEffect, useMemo, lazy, Suspense, Component } from 'react'
 import axios from 'axios'
 import {
   LayoutDashboard, Fingerprint, TrendingUp,
@@ -45,6 +45,32 @@ const DocsPage          = lazy(() => import('./components/DocsPage.jsx'))
 const DataHealthPage    = lazy(() => import('./components/DataHealthPage.jsx'))
 const BoardPackGenerator= lazy(() => import('./components/BoardPackGenerator.jsx'))
 const TutorialPage      = lazy(() => import('./components/TutorialPage.jsx'))
+
+// ── Error boundary — catches React render crashes ───────────────────────────
+class ErrorBoundary extends Component {
+  constructor(props) { super(props); this.state = { hasError: false, error: null } }
+  static getDerivedStateFromError(error) { return { hasError: true, error } }
+  componentDidCatch(error, info) { console.error('[ErrorBoundary]', error, info?.componentStack) }
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div style={{ minHeight: '100vh', background: '#0f172a', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 40 }}>
+          <div style={{ background: '#1e293b', borderRadius: 16, padding: 32, maxWidth: 500, color: '#e2e8f0', fontFamily: 'Inter, system-ui, sans-serif' }}>
+            <h2 style={{ fontSize: 18, fontWeight: 700, marginBottom: 8 }}>Something went wrong</h2>
+            <p style={{ fontSize: 13, color: '#94a3b8', marginBottom: 16 }}>The app encountered an error during render. This is usually temporary.</p>
+            <pre style={{ fontSize: 11, color: '#f87171', background: '#0f172a', borderRadius: 8, padding: 12, overflow: 'auto', maxHeight: 120, marginBottom: 16 }}>
+              {String(this.state.error?.message || this.state.error)}
+            </pre>
+            <button onClick={() => window.location.reload()} style={{ background: '#6366f1', color: 'white', border: 'none', borderRadius: 8, padding: '8px 20px', fontSize: 13, fontWeight: 600, cursor: 'pointer' }}>
+              Reload Page
+            </button>
+          </div>
+        </div>
+      )
+    }
+    return this.props.children
+  }
+}
 
 // ── Suspense fallback ────────────────────────────────────────────────────────
 const PageLoader = () => (
@@ -177,7 +203,7 @@ function kpiStatus(avg, target, direction) {
   return r >= 0.98 ? 'green' : r >= 0.90 ? 'yellow' : 'red'
 }
 
-export default function App() {
+function AppInner() {
   const [tab, setTab]                             = useState('home')
   const [sidebarOpen, setSidebarOpen]             = useState(false)
   const [summary, setSummary]                     = useState(null)
@@ -946,4 +972,8 @@ export default function App() {
       {showLegal && <LegalPage onClose={() => setShowLegal(false)} />}
     </div>
   )
+}
+
+export default function App() {
+  return <ErrorBoundary><AppInner /></ErrorBoundary>
 }
