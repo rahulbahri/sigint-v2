@@ -322,8 +322,8 @@ def analyze_root_causes(
 
 # ── Data-grounded action generation (native, no API calls) ──────────────────
 
-def _compute_trend(time_series: list[dict], direction: str) -> dict:
-    """Compute 3-month vs prior 3-month trend from time series."""
+def _compute_action_trend(time_series: list[dict], direction: str) -> dict:
+    """Compute 3-month vs prior 3-month trend for action generation."""
     result = {"desc": "stable", "delta_pct": 0.0, "direction": "flat"}
     if len(time_series) < 3:
         return result
@@ -404,7 +404,7 @@ def generate_ai_actions(
         template_actions = []
 
     actions = []
-    trend = _compute_trend(time_series, direction)
+    trend = _compute_action_trend(time_series, direction)
     gap_pct = None
     if current_value is not None and target_value is not None and target_value != 0:
         gap_pct = ((current_value - target_value) / abs(target_value)) * 100
