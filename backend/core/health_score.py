@@ -53,7 +53,7 @@ def _compute_momentum(time_series_by_kpi: dict, directions: dict) -> float:
                 declining += 1
     total = improving + declining
     if total == 0:
-        return 50.0  # no signal
+        return None  # insufficient data for momentum calculation
     # normalise: improving/(improving+declining) → 0-100
     return round((improving / total) * 100, 1)
 
@@ -67,7 +67,7 @@ def _compute_target_achievement(
     Returns 0-100.
     """
     if not targets:
-        return 50.0  # no targets set
+        return None  # no targets set -- cannot compute achievement
     green = 0
     scored = 0
     for key, tval in targets.items():
@@ -77,12 +77,12 @@ def _compute_target_achievement(
         if avg is None:
             continue
         scored += 1
-        direction = "higher"  # default; overridden below via directions dict
+        direction = "higher"  # Note: this function is legacy; _with_directions variant is used
         pct = avg / tval if tval else 0
         if pct >= 0.98:
             green += 1
     if scored == 0:
-        return 50.0
+        return None  # no scoreable KPIs
     return round((green / scored) * 100, 1)
 
 
@@ -140,7 +140,7 @@ def _compute_target_achievement_with_directions(
 ) -> float:
     """Target achievement with direction awareness."""
     if not targets:
-        return 50.0
+        return None  # no targets set
     green = 0
     scored = 0
     for key, tval in targets.items():
@@ -154,7 +154,7 @@ def _compute_target_achievement_with_directions(
         if _is_on_target(avg, tval, direction):
             green += 1
     if scored == 0:
-        return 50.0
+        return None  # no scoreable KPIs
     return round((green / scored) * 100, 1)
 
 
@@ -181,7 +181,7 @@ def _compute_risk_flags(
         if _is_critical(avg, tval, direction):
             red += 1
     if scored == 0:
-        return 70.0  # no targets = moderate score
+        return None  # no targets -- cannot assess risk
     return round(max(0.0, (1 - red / scored) * 100), 1)
 
 
@@ -316,6 +316,27 @@ def compute_health_score(
                 "avg": round(avg, 2), "target": tval, "direction": dirn,
             })
     risk_kpis.sort(key=lambda x: x["key"])
+
+    # Guard: if any component is None (insufficient data), return honest response
+    if momentum is None or target_achieve is None or risk is None:
+        return {
+            "score": None,
+            "grade": "Insufficient Data",
+            "label": "Set KPI targets and add more data to enable health scoring",
+            "color": "grey",
+            "insufficient_data": True,
+            "momentum": momentum,
+            "momentum_trend": "",
+            "target_achievement": target_achieve,
+            "risk_flags": risk,
+            "needs_attention": needs_attention if 'needs_attention' in dir() else [],
+            "doing_well": doing_well if 'doing_well' in dir() else [],
+            "kpis_green": 0, "kpis_yellow": 0, "kpis_red": 0,
+            "composite_ranked": composite_ranked if 'composite_ranked' in dir() else [],
+            "domain_groups": domain_groups if 'domain_groups' in dir() else [],
+            "target_kpis": target_kpis if 'target_kpis' in dir() else [],
+            "risk_kpis": risk_kpis if 'risk_kpis' in dir() else [],
+        }
 
     # Weighted composite
     raw_score = (momentum * w_momentum) + (target_achieve * w_target) + (risk * w_risk)

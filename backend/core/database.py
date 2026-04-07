@@ -425,6 +425,21 @@ def init_db():
             workspace_id TEXT DEFAULT '',
             PRIMARY KEY (key, workspace_id)
         );
+        CREATE TABLE IF NOT EXISTS financial_line_items (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            workspace_id    TEXT NOT NULL,
+            statement_type  TEXT NOT NULL,
+            line_item       TEXT NOT NULL,
+            category        TEXT,
+            period          TEXT NOT NULL,
+            amount          REAL,
+            source          TEXT DEFAULT 'manual',
+            is_projection   INTEGER DEFAULT 0,
+            scenario_id     TEXT,
+            created_at      TEXT DEFAULT (datetime('now')),
+            updated_at      TEXT DEFAULT (datetime('now')),
+            UNIQUE(workspace_id, statement_type, line_item, period, scenario_id)
+        );
         CREATE TABLE IF NOT EXISTS audit_log (
             id          INTEGER PRIMARY KEY AUTOINCREMENT,
             event_type  TEXT NOT NULL,

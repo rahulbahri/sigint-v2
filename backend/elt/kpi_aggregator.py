@@ -1089,10 +1089,20 @@ def _compute_month_kpis(
     if total_rev > 0:
         _safe_set(kpis, "gross_margin", (total_rev - cogs) / total_rev * 100)
         _safe_set(kpis, "operating_margin", (total_rev - cogs - opex) / total_rev * 100)
-        ebitda = (total_rev - cogs - opex) * 1.15
+        # EBITDA proxy: operating income (D&A not available from connectors).
+        # SaaS companies typically have minimal D&A so this is a close approximation.
+        # Will compute accurately when income statement D&A data is available.
+        ebitda = total_rev - cogs - opex
+        kpis["_ebitda_is_proxy"] = True
         _safe_set(kpis, "ebitda_margin", ebitda / total_rev * 100)
         _safe_set(kpis, "opex_ratio", opex / total_rev * 100)
-        _safe_set(kpis, "contribution_margin", (total_rev - cogs - opex * 0.3) / total_rev * 100)
+        # Contribution margin = (Revenue - Variable Costs) / Revenue.
+        # Variable costs = COGS + S&M spend. When S&M unavailable, uses COGS only.
+        _sm_alloc = mkt.get("total_spend", 0.0) if mkt else 0.0
+        _variable_costs = cogs + _sm_alloc
+        _safe_set(kpis, "contribution_margin", (total_rev - _variable_costs) / total_rev * 100)
+        if _sm_alloc == 0:
+            kpis["_contribution_margin_is_proxy"] = True
 
         if recurring_rev > 0:
             _safe_set(kpis, "revenue_quality", recurring_rev / total_rev * 100)
@@ -1116,7 +1126,15 @@ def _compute_month_kpis(
         cust_ids = rev.get("customer_ids", set())
         if cust_ids:
             n_cust = len(cust_ids)
-            _safe_set(kpis, "customer_concentration", min(100.0 / max(n_cust, 1) * 2.5, 100.0))
+            # HHI (Herfindahl-Hirschman Index): sum of squared revenue shares.
+            # Real concentration metric (no arbitrary multipliers).
+            _cust_amts = rev.get("customer_amounts", {})
+            if _cust_amts and total_rev > 0:
+                _hhi = sum((amt / total_rev * 100) ** 2 for amt in _cust_amts.values())
+                _safe_set(kpis, "customer_concentration", min(_hhi / 100, 100.0))
+            else:
+                _safe_set(kpis, "customer_concentration", min(100.0 / max(n_cust, 1), 100.0))
+                kpis["_customer_concentration_is_proxy"] = True
 
     # Store internals for derived KPIs (prefixed with _ to remove later)
     if total_rev > 0:
@@ -1312,8 +1330,9 @@ def _compute_month_kpis(
 
         # Cash conversion cycle = DSO + DIO - DPO
         dso_val = kpis.get("dso", 0)
-        # DIO: approximate from COGS (assume 15-day inventory cycle for SaaS)
-        dio = (cogs / total_rev * 30) if total_rev > 0 and cogs > 0 else 5.0
+        # DIO: Use balance sheet inventory if available. For SaaS (no inventory), defaults to 0.
+        _inventory = bal.get("inventory", 0.0) if bal else 0.0
+        dio = (_inventory / (cogs / 30)) if cogs > 0 and _inventory > 0 else 0.0
         # DPO: (total_expenses / 365) * 30 - days to pay vendors
         dpo = (total_exp / total_rev * 30) if total_rev > 0 else 30.0
         if dso_val > 0:
@@ -1425,29 +1444,13 @@ def _compute_month_kpis(
     if features_used > 0:
         _safe_set(kpis, "feature_adoption", features_used / _TOTAL_FEATURES * 100)
 
-    # ── Automation rate (trend-based proxy) ──────────────────────────────
-    if prev and prev.get("support_volume") and kpis.get("support_volume"):
-        sv_prev = prev["support_volume"]
-        sv_curr = kpis["support_volume"]
-        if sv_prev > 0:
-            # Declining support volume per customer implies improving automation
-            improvement = max(0, (sv_prev - sv_curr) / sv_prev * 100)
-            base_rate = prev.get("automation_rate", 40)
-            _safe_set(kpis, "automation_rate", min(base_rate + improvement, 95))
-    elif ticket_count > 0 and n_active > 0:
-        # Initial estimate based on ticket volume ratio
-        _safe_set(kpis, "automation_rate", max(20, 80 - (ticket_count / max(n_active, 1)) * 20))
-
-    # ── Organic traffic & brand awareness (marketing-derived proxies) ────
-    if mkt_leads > 0:
-        organic_share = _safe_ratio(mkt_conv, mkt_leads, min_denom=1) or 0.2
-        if prev and prev.get("organic_traffic") is not None:
-            _safe_set(kpis, "organic_traffic", prev["organic_traffic"] * 1.01)
-        else:
-            _safe_set(kpis, "organic_traffic", organic_share * 100)
-    if mkt_leads > 0 and mkt_spend > 0:
-        cpl_val = kpis.get("cpl", 100)
-        _safe_set(kpis, "brand_awareness", 100 - min(cpl_val, 180) * 0.5)
+    # ── Removed fabricated proxies ────────────────────────────────────────
+    # automation_rate: Removed — no real data source (was guessing from ticket counts).
+    #   Re-add when product analytics integration provides actual automation metrics.
+    # organic_traffic: Removed — was incrementing 1% per month unconditionally.
+    #   Re-add when Google Analytics or similar integration is available.
+    # brand_awareness: Removed — was using arbitrary formula (100 - CPL * 0.5).
+    #   Re-add when brand survey or awareness measurement tool is integrated.
 
     # ── Health score (composite meta-KPI) ────────────────────────────────
     # Lightweight composite: avg of normalised sub-scores

@@ -767,7 +767,18 @@ def calc_revenue_growth(monthly_kpi_df: pd.DataFrame) -> pd.DataFrame:
     # proxy revenue from gross_margin + opex
     monthly_kpi_df = monthly_kpi_df.copy()
     return monthly_kpi_df
-# ─── Industry Benchmarks (SaaS — OpenView / Bessemer / SaaS Capital) ────────
+# ─── Industry Benchmarks ────────────────────────────────────────────────────
+# Source: Axiom estimates based on publicly available SaaS benchmark reports
+# (OpenView SaaS Benchmarks, Bessemer Cloud Index, SaaS Capital metrics).
+# These are approximate values and may not reflect current market conditions.
+# Last reviewed: 2024. Use as directional guidance, not precise targets.
+# Company-specific targets should be set in Company Settings.
+
+BENCHMARK_METADATA = {
+    "source": "Axiom estimates based on industry SaaS benchmark reports",
+    "disclaimer": "Approximate values for directional guidance. Set company-specific targets in Settings.",
+    "last_reviewed": "2024",
+}
 
 BENCHMARKS = {
     "revenue_growth": {

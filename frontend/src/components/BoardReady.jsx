@@ -9,6 +9,7 @@ import {
   Target, AlertCircle, BarChart3, Layers, ArrowUpRight,
   ArrowDownRight, Info, X, Maximize2, ExternalLink,
 } from 'lucide-react'
+import { fmtKpiValue } from './kpiFormat'
 
 // ── Slide-in animation ──────────────────────────────────────────────────────
 const PANEL_ANIM = `
@@ -249,36 +250,39 @@ function detectSignals(fingerprint) {
   return signals.slice(0, 5)
 }
 
-// ── Domain story builder ──────────────────────────────────────────────────────
+// ── Domain story builder (data-driven, references actual KPI values) ─────────
 function buildDomainStory(domain, kpis) {
   if (!kpis.length) return null
   const red    = kpis.filter(k => k.fy_status === 'red')
   const yellow = kpis.filter(k => k.fy_status === 'yellow')
   const green  = kpis.filter(k => k.fy_status === 'green')
-  const stories = {
-    growth: () => {
-      if (green.length === kpis.length) return `Growth metrics are firing on all cylinders — ${kpis.length}/${kpis.length} KPIs on target. Top-line momentum is genuine and broad-based, not concentrated in a single metric. The pipeline and conversion economics support continued expansion.`
-      if (red.length >= kpis.length / 2) return `Growth is under significant strain — ${red.length} of ${kpis.length} KPIs are critical. The growth engine is constrained; without intervention, the gap between current trajectory and targets will widen. Diagnose whether this is a pipeline, conversion, or retention issue.`
-      return `Growth presents a mixed picture: ${green.length} KPIs on track, but ${red.length + yellow.length} are dragging the aggregate. The growth engine has the right components but isn't firing consistently — focus effort on the highest-leverage bottleneck, not the longest list of issues.`
-    },
-    retention: () => {
-      if (red.length === 0 && yellow.length === 0) return `Retention health is genuinely strong — the customer base is stable and expanding. Strong NRR dynamics mean existing customers are funding a portion of growth, reducing reliance on new sales and compressing the effective CAC.`
-      if (red.length > 0) return `Retention is the most consequential risk in this dataset. ${red.length} KPI${red.length > 1 ? 's are' : ' is'} critical, and churn dynamics at this level will compound against revenue within 2–3 quarters. A 1% improvement in monthly churn has a larger NPV impact than most growth initiatives.`
-      return `Retention is in the watch zone — no critical failures yet, but ${yellow.length} metric${yellow.length > 1 ? 's are' : ' is'} trending adversely. Proactive intervention at the watch stage costs a fraction of what remediation costs once customers begin churning. The window to act is now.`
-    },
-    efficiency: () => {
-      if (green.length === kpis.length) return `Operational efficiency is a demonstrable strength. The business generates output at or above target relative to its cost structure — this creates operating leverage that becomes increasingly valuable as scale increases.`
-      if (red.length > 0) return `Efficiency metrics signal that costs are growing faster than the value they generate. ${red.length} KPI${red.length > 1 ? 's need' : ' needs'} structural intervention — incremental optimisation will not close the gap. Review the cost architecture at the program level, not the line item level.`
-      return `Efficiency is in transition. The operating model has the right structure but margins and burn aren't improving at the rate expected at this growth stage. The operating leverage story needs to be built deliberately — it typically doesn't emerge without intentional choices.`
-    },
-    cashflow: () => {
-      if (green.length === kpis.length) return `Cash position is healthy and the trajectory is positive. Strong runway and cash generation give the business the strategic flexibility to pursue growth without short-term capital pressure — a significant strategic advantage.`
-      if (red.length > 0) return `Cash dynamics are a board-level concern requiring direct attention. ${red.length} KPI${red.length > 1 ? 's require' : ' requires'} immediate review — runway and free cash generation should be stress-tested against multiple scenarios at the next board session.`
-      return `Cash generation is adequate but the trajectory warrants monitoring. Key metrics are in the yellow zone — not critical, but the margin of safety is narrowing. Revisit budget assumptions and ensure contingency plans are current.`
-    },
-    other: () => `${kpis.length} additional KPIs tracked: ${green.length} on target, ${yellow.length} watch, ${red.length} critical.`,
+
+  // Find worst KPI by gap magnitude
+  const gapPct = (k) => k.target ? Math.abs((k.avg - k.target) / k.target * 100) : 0
+  const sortedRed = [...red].sort((a, b) => gapPct(b) - gapPct(a))
+  const worst = sortedRed[0]
+
+  let story
+  if (green.length === kpis.length) {
+    const names = green.map(k => k.name).join(', ')
+    story = `All ${kpis.length} KPIs are on target: ${names}. This domain is performing well across the board.`
+  } else if (red.length > 0 && worst) {
+    const redNames = red.map(k => k.name).join(', ')
+    const worstGap = gapPct(worst).toFixed(1)
+    story = `${red.length} of ${kpis.length} KPIs are critical: ${redNames}. ` +
+      `${worst.name} is the most concerning at ${fmtKpiValue(worst.avg, worst.unit)}, ` +
+      `${worstGap}% from target of ${fmtKpiValue(worst.target, worst.unit)}.`
+    if (yellow.length > 0) {
+      story += ` Additionally, ${yellow.length} KPI${yellow.length > 1 ? 's are' : ' is'} in the watch zone.`
+    }
+  } else if (yellow.length > 0) {
+    const yellowNames = yellow.map(k => k.name).join(', ')
+    story = `No critical failures, but ${yellow.length} metric${yellow.length > 1 ? 's are' : ' is'} ` +
+      `trending adversely: ${yellowNames}. ${green.length} KPI${green.length > 1 ? 's remain' : ' remains'} on target.`
+  } else {
+    story = `${kpis.length} KPIs tracked: ${green.length} on target, ${yellow.length} watch, ${red.length} critical.`
   }
-  const story = (stories[domain] || stories.other)()
+
   return { story, red, yellow, green }
 }
 

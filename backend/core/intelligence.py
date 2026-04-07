@@ -240,10 +240,10 @@ def domain_narratives(
     total_red: int,
 ) -> list[dict]:
     """
-    Generate a one-sentence diagnosis for each pressured business domain.
+    Generate a data-specific diagnosis for each pressured business domain.
 
     domain_groups: list from group_by_domain() — each has domain, count,
-                   worst_composite, avg_composite, kpis.
+                   worst_composite, avg_composite, kpis (list with key, gap_pct, etc.).
     total_red:     total number of red KPIs across all domains.
 
     Returns list of dicts with:
@@ -255,30 +255,52 @@ def domain_narratives(
         count  = dg["count"]
         ctx    = _DOMAIN_CONTEXT.get(domain, {})
         name   = ctx.get("name", dg.get("domain_label", domain.title()))
+        kpi_list = dg.get("kpis", [])
 
-        # What fraction of total red KPIs sit in this domain?
+        # Build data-specific narrative from actual KPI details
         concentration = count / total_red if total_red > 0 else 0
 
-        if concentration >= 0.5:
+        # Sort KPIs by gap severity (worst first)
+        sorted_kpis = sorted(kpi_list, key=lambda k: abs(k.get("gap_pct", 0) or 0), reverse=True)
+
+        if count >= 2 and sorted_kpis:
+            # Name the specific KPIs and their gap percentages
+            worst = sorted_kpis[0]
+            worst_name = _friendly_name(worst.get("key", ""))
+            worst_gap = abs(worst.get("gap_pct", 0) or 0)
+            kpi_names = ", ".join(_friendly_name(k.get("key", "")) for k in sorted_kpis[:4])
+
+            if concentration >= 0.5:
+                narrative = (
+                    f"{name} is the most pressured domain with {count} of {total_red} "
+                    f"critical metrics: {kpi_names}. "
+                    f"{worst_name} is the most concerning with a {worst_gap:.0f}% gap to target. "
+                    f"{ctx.get('risk', '')}"
+                )
+            elif concentration >= 0.3:
+                narrative = (
+                    f"{name} carries {count} critical metrics: {kpi_names}. "
+                    f"{worst_name} has the largest gap at {worst_gap:.0f}% from target. "
+                    f"{ctx.get('action', '')}"
+                )
+            else:
+                narrative = (
+                    f"{name} has {count} metrics in the critical zone: {kpi_names}. "
+                    f"{worst_name} leads at {worst_gap:.0f}% gap. {ctx.get('action', '')}"
+                )
+        elif count == 1 and sorted_kpis:
+            single = sorted_kpis[0]
+            single_name = _friendly_name(single.get("key", ""))
+            single_gap = abs(single.get("gap_pct", 0) or 0)
             narrative = (
-                f"{name} is your most pressured domain with {count} of {total_red} "
-                f"critical metrics concentrated here. This is a systemic {domain} problem, "
-                f"not isolated KPI misses. {ctx.get('risk', '')}"
-            )
-        elif concentration >= 0.3:
-            narrative = (
-                f"{name} carries {count} critical metrics — a significant share of total risk. "
-                f"{ctx.get('risk', '')} {ctx.get('action', '')}"
-            )
-        elif count >= 2:
-            narrative = (
-                f"{name} has {count} metrics in the critical zone. "
-                f"{ctx.get('action', '')}"
+                f"{name} has 1 critical metric: {single_name} "
+                f"({single_gap:.0f}% gap to target). "
+                "Monitor for spread to adjacent KPIs in this domain."
             )
         else:
             narrative = (
-                f"{name} has 1 critical metric — contained for now. "
-                "Monitor for spread to adjacent KPIs in this domain."
+                f"{name} has {count} critical metric(s). "
+                f"{ctx.get('action', 'Review the underlying drivers.')}"
             )
 
         results.append({

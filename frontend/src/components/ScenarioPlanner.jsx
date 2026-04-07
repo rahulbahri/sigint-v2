@@ -6,8 +6,11 @@ import {
 import axios from 'axios'
 
 // ── KPI causal impact matrix ─────────────────────────────────────────────────
-// For each output KPI, define which levers affect it and by how much (sensitivity coefficient)
-// sign: +1 means moving lever UP moves this KPI UP, -1 means the opposite
+// Industry-average sensitivity coefficients for SaaS companies.
+// These are directional estimates, NOT calibrated to this company's data.
+// Company-specific calibration requires 12+ months of historical data.
+// When sufficient data is available, coefficients should be replaced by
+// regression-derived values from the company's own monthly KPI correlations.
 const CAUSAL_MAP = {
   gross_margin:        { revenue_growth: 0.05,  gross_margin_adj: 1.0,  cost_reduction: 0.8  },
   operating_margin:    { revenue_growth: 0.04,  gross_margin_adj: 0.9,  headcount_delta: -0.3, cost_reduction: 0.7 },
@@ -23,6 +26,8 @@ const CAUSAL_MAP = {
   headcount_eff:       { revenue_growth: 0.6,   headcount_delta: -0.5                           },
   rev_per_employee:    { revenue_growth: 0.5,   headcount_delta: -0.6                           },
 }
+
+const CAUSAL_MAP_IS_INDUSTRY_ESTIMATE = true
 
 // Levers the user can adjust
 const LEVERS = [
@@ -367,6 +372,12 @@ export default function ScenarioPlanner({ fingerprint, authToken, onNavigateToDe
           <p className="text-[11px] font-bold text-slate-500 uppercase tracking-widest mb-3">
             Projected Impact
           </p>
+          {CAUSAL_MAP_IS_INDUSTRY_ESTIMATE && (
+            <div className="text-[10px] text-amber-600 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 mb-3 flex items-start gap-2">
+              <Info size={12} className="flex-shrink-0 mt-0.5" />
+              <span>Projections use industry-average sensitivity coefficients. Company-specific calibration requires 12+ months of historical data. Treat as directional guidance.</span>
+            </div>
+          )}
           <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
             <table className="w-full text-sm">
               <thead>

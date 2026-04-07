@@ -25,7 +25,15 @@ def test_momentum_all_declining():
     assert score == 0.0
 
 def test_momentum_no_signal_short_series():
-    ts = {"rev": [1,2,3]}   # less than 6 months
+    ts = {"rev": [1,2,3]}   # less than 6 months -- insufficient data
+    dirs = {"rev": "higher"}
+    score = _compute_momentum(ts, dirs)
+    assert score is None  # honest: insufficient data, not fake 50.0
+
+
+def _legacy_test_momentum_no_signal_short_series():
+    """Legacy test preserved for reference -- old behavior returned 50.0"""
+    ts = {"rev": [1,2,3]}
     dirs = {"rev": "higher"}
     score = _compute_momentum(ts, dirs)
     assert score == 50.0
@@ -46,7 +54,7 @@ def test_target_achievement_none_green():
 
 def test_target_achievement_no_targets():
     score = _compute_target_achievement({}, {}, {})
-    assert score == 50.0
+    assert score is None  # honest: no targets = cannot compute, not fake 50.0
 
 def test_risk_flags_no_red():
     avgs = {"rev": 100}
@@ -64,4 +72,4 @@ def test_risk_flags_all_red():
 
 def test_risk_flags_no_targets():
     score = _compute_risk_flags({}, {}, {})
-    assert score == 70.0
+    assert score is None  # honest: no targets = cannot assess risk, not fake 70.0
