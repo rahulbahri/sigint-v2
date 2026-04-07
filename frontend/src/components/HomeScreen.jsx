@@ -574,14 +574,9 @@ function KpiSlideOut({ kpi: initialKpi, status: initialStatus, onClose, onNaviga
                 <div>
                   <div className="flex items-center gap-2 mb-1">
                     <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400">Recommended Actions</p>
-                    {detail.actions_source === 'ai_generated' && (
-                      <span className="text-[8px] font-medium px-1.5 py-0.5 rounded-full bg-violet-50 text-violet-600 border border-violet-200">
-                        AI-generated
-                      </span>
-                    )}
-                    {detail.actions_source === 'data_driven_context' && (
+                    {(detail.actions_source === 'data_grounded' || detail.actions_source === 'data_driven_context') && (
                       <span className="text-[8px] font-medium px-1.5 py-0.5 rounded-full bg-emerald-50 text-emerald-600 border border-emerald-200">
-                        Data-driven
+                        Data-grounded
                       </span>
                     )}
                   </div>

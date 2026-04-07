@@ -644,7 +644,7 @@ def get_kpi_detail(kpi_key: str, request: Request):
             final_actions = [rca["contextual_action"]] + deduped[:2]
         else:
             final_actions = ai_actions[:3]
-        _actions_source = "ai_generated"
+        _actions_source = "data_grounded"
     elif rca.get("contextual_action"):
         deduped = _deduplicate_actions(rca["contextual_action"], actions[:3])
         final_actions = [rca["contextual_action"]] + deduped[:2]

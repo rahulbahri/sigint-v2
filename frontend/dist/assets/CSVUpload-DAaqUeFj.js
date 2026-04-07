@@ -1,4 +1,4 @@
-import{a as e,n as t,t as n}from"./jsx-runtime-D57Vegw5.js";import{t as r}from"./createLucideIcon-D2PiFcvX.js";import{t as i}from"./download-BtdPflsz.js";import{t as a}from"./trash-2-c_06Xa6J.js";import{A as o,H as s,N as c,O as l,U as u,a as d,o as ee,t as f,w as p}from"./index-CsFr_Qtz.js";var m=r(`CircleCheckBig`,[[`path`,{d:`M21.801 10A10 10 0 1 1 17 3.335`,key:`yps3ct`}],[`path`,{d:`m9 11 3 3L22 4`,key:`1pflzl`}]]),h=e(t(),1),g=n(),_=`date,revenue,cogs,opex,ar,customers,churn,is_recurring,sm_allocated,arr
+import{a as e,n as t,t as n}from"./jsx-runtime-D57Vegw5.js";import{t as r}from"./createLucideIcon-D2PiFcvX.js";import{t as i}from"./download-BtdPflsz.js";import{t as a}from"./trash-2-c_06Xa6J.js";import{A as o,H as s,N as c,O as l,U as u,a as d,o as ee,t as f,w as p}from"./index-g-FoQC2T.js";var m=r(`CircleCheckBig`,[[`path`,{d:`M21.801 10A10 10 0 1 1 17 3.335`,key:`yps3ct`}],[`path`,{d:`m9 11 3 3L22 4`,key:`1pflzl`}]]),h=e(t(),1),g=n(),_=`date,revenue,cogs,opex,ar,customers,churn,is_recurring,sm_allocated,arr
 2025-01-15,25000,9500,7200,28000,1,0,1,3200,18000
 2025-01-22,18000,7000,5400,20000,1,0,0,2400,0
 2025-02-10,32000,12000,9100,35000,1,0,1,4000,24000

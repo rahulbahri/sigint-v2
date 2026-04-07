@@ -18,21 +18,11 @@ Pure-functional: no DB access. All data passed as arguments.
 from __future__ import annotations
 
 import logging
-import os
-import threading
-import time
 from typing import Any, Optional
 
 from core.kpi_defs import ALL_CAUSATION_RULES, KPI_DEFS, EXTENDED_ONTOLOGY_METRICS
 
 log = logging.getLogger("narrative_engine")
-
-# ── AI action cache (thread-safe, TTL-based) ────────────────────────────────
-# Caches Claude-generated actions per (kpi_key, data_hash) for 1 hour to
-# avoid repeated API calls for the same KPI state.
-_AI_ACTION_CACHE: dict[str, dict] = {}
-_AI_CACHE_LOCK = threading.Lock()
-_AI_CACHE_TTL = 3600  # 1 hour
 
 # ── Reverse causation map ────────────────────────────────────────────────────
 # For each KPI, lists its upstream parents (KPIs whose downstream_impact includes it).
@@ -330,7 +320,56 @@ def analyze_root_causes(
     }
 
 
-# ── AI-powered action generation ─────────────────────────────────────────────
+# ── Data-grounded action generation (native, no API calls) ──────────────────
+
+def _compute_trend(time_series: list[dict], direction: str) -> dict:
+    """Compute 3-month vs prior 3-month trend from time series."""
+    result = {"desc": "stable", "delta_pct": 0.0, "direction": "flat"}
+    if len(time_series) < 3:
+        return result
+    recent = [r["value"] for r in time_series[-3:] if r.get("value") is not None]
+    prior = [r["value"] for r in time_series[-6:-3] if r.get("value") is not None]
+    if not recent or not prior:
+        return result
+    r_avg = sum(recent) / len(recent)
+    p_avg = sum(prior) / len(prior)
+    if not p_avg:
+        return result
+    delta = ((r_avg - p_avg) / abs(p_avg)) * 100
+    result["delta_pct"] = delta
+    if direction == "higher":
+        if delta > 2:
+            result["desc"] = f"improving ({delta:+.1f}%)"
+            result["direction"] = "improving"
+        elif delta < -2:
+            result["desc"] = f"declining ({delta:+.1f}%)"
+            result["direction"] = "declining"
+    else:
+        if delta < -2:
+            result["desc"] = f"improving ({delta:+.1f}%)"
+            result["direction"] = "improving"
+        elif delta > 2:
+            result["desc"] = f"worsening ({delta:+.1f}%)"
+            result["direction"] = "worsening"
+    return result
+
+
+def _fmt_val(val, unit: str) -> str:
+    """Format a value with its unit for display in action text."""
+    if val is None:
+        return "N/A"
+    try:
+        v = float(val)
+    except (ValueError, TypeError):
+        return str(val)
+    fmt_map = {
+        "pct": f"{v:.1f}%", "%": f"{v:.1f}%",
+        "usd": f"${v:,.0f}", "$": f"${v:,.0f}",
+        "days": f"{v:.0f} days", "months": f"{v:.1f} months",
+        "ratio": f"{v:.2f}x", "x": f"{v:.2f}x",
+    }
+    return fmt_map.get((unit or "").lower(), f"{v:.1f}")
+
 
 def generate_ai_actions(
     kpi_key: str,
@@ -347,146 +386,130 @@ def generate_ai_actions(
     benchmark: dict | None = None,
     template_actions: list[str] | None = None,
 ) -> list[str]:
-    """Generate company-specific corrective actions using Claude API.
+    """Generate company-specific corrective actions grounded in actual data.
 
-    Uses the full data context (actual values, confirmed causal chain,
-    trend direction, benchmark position, company stage) to produce
-    actionable, grounded recommendations -- not generic templates.
+    Uses rule-based logic with the full data context (actual values, confirmed
+    causal chain, trend, benchmarks, stage) to produce specific recommendations
+    that reference real numbers. No external API calls -- runs entirely locally.
 
-    Returns a list of 3 action strings, or falls back to template_actions
-    if the Claude API is unavailable.
+    Logic:
+      1. If confirmed upstream causes exist -> first action addresses the root cause
+         with actual deterioration % and the specific corrective action for that cause
+      2. Second action addresses the KPI directly with its gap % and trend
+      3. Third action addresses downstream risk or benchmark positioning
+
+    Falls back to template_actions only if no data context is available.
     """
-    api_key = os.environ.get("ANTHROPIC_API_KEY", "")
-    if not api_key:
-        log.warning("[AI Actions] ANTHROPIC_API_KEY not set, falling back to templates")
-        return template_actions or []
+    if template_actions is None:
+        template_actions = []
 
-    # Check cache first
-    cache_key = f"{kpi_key}:{current_value}:{target_value}:{stage}"
-    with _AI_CACHE_LOCK:
-        cached = _AI_ACTION_CACHE.get(cache_key)
-        if cached and time.time() < cached["expires_at"]:
-            log.info("[AI Actions] Cache hit for %s", kpi_key)
-            return cached["actions"]
+    actions = []
+    trend = _compute_trend(time_series, direction)
+    gap_pct = None
+    if current_value is not None and target_value is not None and target_value != 0:
+        gap_pct = ((current_value - target_value) / abs(target_value)) * 100
 
-    # Build the data context for Claude
-    trend_desc = "stable"
-    if len(time_series) >= 3:
-        recent = [r["value"] for r in time_series[-3:] if r.get("value") is not None]
-        prior = [r["value"] for r in time_series[-6:-3] if r.get("value") is not None]
-        if recent and prior:
-            r_avg = sum(recent) / len(recent)
-            p_avg = sum(prior) / len(prior)
-            if p_avg:
-                delta = ((r_avg - p_avg) / abs(p_avg)) * 100
-                if direction == "higher":
-                    trend_desc = f"improving ({delta:+.1f}%)" if delta > 2 else f"declining ({delta:+.1f}%)" if delta < -2 else "stable"
-                else:
-                    trend_desc = f"improving ({delta:+.1f}%)" if delta < -2 else f"worsening ({delta:+.1f}%)" if delta > 2 else "stable"
+    cur_fmt = _fmt_val(current_value, unit)
+    tgt_fmt = _fmt_val(target_value, unit)
+    stage_label = stage.replace("_", " ").title() if stage else "Growth"
 
-    cause_context = ""
+    # ── Action 1: Address root cause (if confirmed) ──────────────────────────
     if confirmed_causes:
-        cause_lines = []
-        for c in confirmed_causes[:3]:
-            conf = "statistically confirmed by Granger causality" if c.get("confidence") == "granger_confirmed" else "directionally supported by trend data"
-            cause_lines.append(f"  - {c['name']}: {abs(c['delta_pct']):.1f}% deterioration ({conf})")
-        cause_context = "Confirmed upstream causes (verified against actual data):\n" + "\n".join(cause_lines)
-    else:
-        cause_context = "No upstream KPI deterioration confirmed -- issue may be direct/external."
+        top = confirmed_causes[0]
+        cause_name = top.get("name", top.get("kpi", ""))
+        cause_delta = abs(top.get("delta_pct", 0))
+        cause_key = top.get("kpi", "")
+        confidence = top.get("confidence", "expert_prior")
 
-    downstream_context = ""
-    if downstream_impact:
-        ds_names = ", ".join(_friendly(d) for d in downstream_impact[:5])
-        downstream_context = f"Downstream KPIs at risk if not addressed: {ds_names}"
+        # Get the specific corrective action for the CAUSE (not this KPI)
+        cause_actions = _CORRECTIVE_ACTIONS.get(cause_key, [])
+        cause_fix = cause_actions[0] if cause_actions else f"Review {cause_name} operational drivers"
 
-    benchmark_context = ""
-    if benchmark:
+        conf_label = "confirmed by data" if confidence == "granger_confirmed" else "supported by trend analysis"
+        actions.append(
+            f"Address {cause_name} first -- it has deteriorated {cause_delta:.1f}% "
+            f"({conf_label}) and is the primary upstream driver of {kpi_name}. "
+            f"Specifically: {cause_fix}"
+        )
+    elif trend["direction"] == "declining" or trend["direction"] == "worsening":
+        # No confirmed cause but declining -- focus on direct investigation
+        actions.append(
+            f"{kpi_name} has been {trend['desc']} over the past 3 months with no confirmed upstream cause. "
+            f"Conduct a focused diagnostic to identify whether this is driven by external factors "
+            f"(market, competition) or internal operational changes."
+        )
+
+    # ── Action 2: Address the KPI directly with specific numbers ─────────────
+    if gap_pct is not None and abs(gap_pct) > 1:
+        gap_dir = "below" if (direction == "higher" and gap_pct < 0) or (direction == "lower" and gap_pct > 0) else "above"
+        kpi_actions = _CORRECTIVE_ACTIONS.get(kpi_key, [])
+        # Pick the action that's different from action 1
+        direct_fix = ""
+        used_in_action1 = actions[0] if actions else ""
+        for a in kpi_actions:
+            if a.lower()[:30] not in used_in_action1.lower():
+                direct_fix = a
+                break
+        if not direct_fix and kpi_actions:
+            direct_fix = kpi_actions[-1]  # last one is usually different
+
+        if direct_fix:
+            actions.append(
+                f"{kpi_name} is at {cur_fmt}, {abs(gap_pct):.1f}% {gap_dir} the target of {tgt_fmt}. "
+                f"{direct_fix}"
+            )
+        else:
+            actions.append(
+                f"{kpi_name} is at {cur_fmt}, {abs(gap_pct):.1f}% {gap_dir} the target of {tgt_fmt}. "
+                f"Review the key operational levers that directly influence this metric."
+            )
+    elif template_actions and len(actions) < 2:
+        # Gap is small or no target -- use best template action
+        for t in template_actions:
+            if not actions or t.lower()[:30] not in actions[0].lower():
+                actions.append(t)
+                break
+
+    # ── Action 3: Downstream risk or benchmark positioning ───────────────────
+    if downstream_impact and len(downstream_impact) > 0:
+        ds_names = ", ".join(_friendly(d) for d in downstream_impact[:3])
+        ds_count = len(downstream_impact)
+        actions.append(
+            f"Monitor downstream impact -- {kpi_name} directly affects {ds_count} other KPIs "
+            f"({ds_names}). {'Prioritize this fix to prevent cascading deterioration.' if gap_pct and abs(gap_pct) > 10 else 'Track these weekly to catch any spillover early.'}"
+        )
+    elif benchmark:
         p50 = benchmark.get("p50")
         quartile = benchmark.get("quartile", "")
-        if p50 is not None:
-            benchmark_context = f"Peer benchmark (median for {stage.replace('_', ' ')}): {p50}. Company is in the {quartile} quartile."
+        if p50 is not None and quartile:
+            actions.append(
+                f"At {stage_label} stage, peer median for {kpi_name} is {_fmt_val(p50, unit)} "
+                f"(you are in the {quartile} quartile). "
+                f"{'Close the gap to median as a first milestone.' if quartile in ('bottom', 'below_median') else 'Maintain this position and target top quartile.'}"
+            )
+    elif template_actions:
+        # Fall back to a template action we haven't used yet
+        used_lower = {a.lower()[:30] for a in actions}
+        for t in template_actions:
+            if t.lower()[:30] not in used_lower:
+                actions.append(t)
+                break
 
-    pct_off = ""
-    if current_value is not None and target_value is not None and target_value != 0:
-        gap = ((current_value - target_value) / abs(target_value)) * 100
-        pct_off = f" ({gap:+.1f}% vs target)"
+    # If we still have fewer than 2 actions, pad with templates
+    if len(actions) < 2 and template_actions:
+        used_lower = {a.lower()[:30] for a in actions}
+        for t in template_actions:
+            if t.lower()[:30] not in used_lower:
+                actions.append(t)
+                used_lower.add(t.lower()[:30])
+            if len(actions) >= 3:
+                break
 
-    prompt = f"""You are a senior CFO analyst. Generate exactly 3 specific, actionable corrective actions for a {stage.replace('_', ' ')} stage company{f' ({company_name})' if company_name else ''}.
+    if not actions:
+        return template_actions[:3]
 
-KPI: {kpi_name}
-Current value: {current_value}{pct_off}
-Target: {target_value}
-Unit: {unit}
-Direction: {direction} is better
-Trend (3-month): {trend_desc}
-
-{cause_context}
-
-{downstream_context}
-
-{benchmark_context}
-
-Rules:
-- Each action must be specific and operational (not generic advice like "improve efficiency")
-- Reference the ACTUAL numbers and confirmed causes above
-- If upstream causes are confirmed, the first action must address the root cause, not the symptom
-- If no upstream causes, focus on direct operational levers for this specific KPI
-- Each action should be 1-2 sentences max
-- Actions must be different from each other (no repetition)
-- Format: just the 3 actions, one per line, numbered 1-3. No other text."""
-
-    try:
-        import httpx
-        resp = httpx.post(
-            "https://api.anthropic.com/v1/messages",
-            headers={
-                "x-api-key": api_key,
-                "anthropic-version": "2023-06-01",
-                "content-type": "application/json",
-            },
-            json={
-                "model": "claude-3-5-haiku-20241022",
-                "max_tokens": 300,
-                "messages": [{"role": "user", "content": prompt}],
-            },
-            timeout=15,
-        )
-        if resp.status_code != 200:
-            log.error("[AI Actions] Claude API error %d: %s", resp.status_code, resp.text[:200])
-            return template_actions or []
-
-        text = resp.json().get("content", [{}])[0].get("text", "")
-        # Parse numbered lines
-        actions = []
-        for line in text.strip().split("\n"):
-            line = line.strip()
-            if not line:
-                continue
-            # Remove leading number/bullet
-            for prefix in ["1.", "2.", "3.", "1)", "2)", "3)", "-", "*"]:
-                if line.startswith(prefix):
-                    line = line[len(prefix):].strip()
-                    break
-            if line:
-                actions.append(line)
-
-        if not actions:
-            log.warning("[AI Actions] Claude returned empty actions, falling back to templates")
-            return template_actions or []
-
-        # Cache the result
-        with _AI_CACHE_LOCK:
-            _AI_ACTION_CACHE[cache_key] = {
-                "actions": actions[:3],
-                "expires_at": time.time() + _AI_CACHE_TTL,
-            }
-
-        log.info("[AI Actions] Generated %d actions for %s", len(actions), kpi_key)
-        return actions[:3]
-
-    except Exception as e:
-        log.error("[AI Actions] Failed: %s, falling back to templates", e)
-        return template_actions or []
+    log.info("[Actions] Generated %d data-grounded actions for %s", len(actions), kpi_key)
+    return actions[:3]
 
 
 # ── Batch enrichment for /api/home ───────────────────────────────────────────
