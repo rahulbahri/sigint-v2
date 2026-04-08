@@ -30,7 +30,7 @@ EXTENDED_ONTOLOGY_METRICS = [
     {"key": "logo_retention",     "name": "Logo Retention Rate",        "domain": "retention",     "unit": "pct",    "direction": "higher"},
     {"key": "csat",               "name": "Customer Satisfaction",      "domain": "retention",     "unit": "score",  "direction": "higher"},
     # Efficiency
-    {"key": "headcount_eff",      "name": "Headcount Efficiency",       "domain": "efficiency",    "unit": "ratio",  "direction": "higher"},
+    {"key": "headcount_eff",      "name": "Headcount Efficiency",       "domain": "efficiency",    "unit": "usd",    "direction": "higher"},
     {"key": "rev_per_employee",   "name": "Revenue Per Employee",       "domain": "efficiency",    "unit": "usd",    "direction": "higher"},
     {"key": "ramp_time",          "name": "Sales Rep Ramp Time",        "domain": "efficiency",    "unit": "months", "direction": "lower"},
     {"key": "support_volume",     "name": "Support Ticket Volume",      "domain": "efficiency",    "unit": "count",  "direction": "lower"},
@@ -43,6 +43,12 @@ EXTENDED_ONTOLOGY_METRICS = [
     {"key": "contraction_rate",   "name": "Contraction Rate",           "domain": "risk",          "unit": "pct",    "direction": "lower"},
     # Profitability
     {"key": "payback_period",     "name": "Investor Payback Period",    "domain": "profitability", "unit": "months", "direction": "lower"},
+    # Aggregator-computed KPIs (absolute values, not in KPI_DEFS)
+    {"key": "arr",                "name": "Annualised Recurring Revenue","domain": "revenue",      "unit": "usd",    "direction": "higher"},
+    {"key": "mrr",                "name": "Monthly Recurring Revenue",   "domain": "revenue",      "unit": "usd",    "direction": "higher"},
+    {"key": "cash_burn",          "name": "Monthly Cash Burn",           "domain": "cashflow",     "unit": "usd",    "direction": "lower"},
+    {"key": "cac",                "name": "Customer Acquisition Cost",   "domain": "growth",       "unit": "usd",    "direction": "lower"},
+    {"key": "billable_utilization","name": "Billable Utilization",       "domain": "efficiency",   "unit": "pct",    "direction": "higher"},
 ]
 
 KPI_DEFS = [

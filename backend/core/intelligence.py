@@ -384,6 +384,18 @@ def period_comparison(
         # Percentage change (capped at ±999% to prevent absurd display values)
         delta_pct = round(max(-999, min(999, (delta / abs_prev) * 100 * (1 if delta >= 0 else 1))), 1)
 
+        # Compute status from target (if set)
+        from core.health_score import _is_critical, _is_on_target
+        if target is not None:
+            if _is_on_target(curr_val, target, direction):
+                _status = "green"
+            elif _is_critical(curr_val, target, direction):
+                _status = "red"
+            else:
+                _status = "yellow"
+        else:
+            _status = "grey"
+
         entry = {
             "key":   kpi_key,
             "name":  name,
@@ -393,6 +405,7 @@ def period_comparison(
             "delta_pct": delta_pct,
             "unit":  unit,
             "direction": direction,
+            "status": _status,
             "prev_period": prev_pd,
             "curr_period": curr_pd,
         }
@@ -404,7 +417,6 @@ def period_comparison(
 
         # Check for status transitions (red ↔ non-red)
         if target is not None:
-            from core.health_score import _is_critical, _is_on_target
             was_critical = _is_critical(prev_val, target, direction)
             now_critical = _is_critical(curr_val, target, direction)
             if now_critical and not was_critical:
