@@ -457,15 +457,43 @@ DATA_REQUIREMENTS = {
 
 
 def _deduplicate_actions(primary: str, candidates: list[str]) -> list[str]:
-    """Remove candidates that substantially overlap with the primary action."""
+    """Remove candidates that substantially overlap with the primary action.
+
+    Uses entity-aware matching: if both the primary and a candidate reference
+    the same KPI entity AND the same data point (e.g. '33.5%'), they are
+    treated as semantic duplicates even if worded differently.
+    """
+    import re as _re
     if not primary:
         return candidates
     primary_lower = primary.lower()
+
+    # Extract KPI entity names and numeric data points from the primary action
+    _ENTITY_RE = _re.compile(
+        r'[a-z][a-z\s]{3,35}(?:rate|multiple|efficiency|growth|ratio|margin|churn|'
+        r'revenue|cost|payback|retention|conversion|velocity|leverage|runway|burn)'
+    )
+    _NUM_RE = _re.compile(r'\d+\.?\d*%')
+    primary_entities = set(_ENTITY_RE.findall(primary_lower))
+    primary_nums = set(_NUM_RE.findall(primary_lower))
+
     result = []
     for c in candidates:
         c_lower = c.lower()
+        # Exact match
+        if c_lower.strip() == primary_lower.strip():
+            continue
+        # Entity + data-point overlap: same KPI mentioned with same percentage
+        c_entities = set(_ENTITY_RE.findall(c_lower))
+        shared_entities = primary_entities & c_entities
+        if shared_entities and primary_nums:
+            c_nums = set(_NUM_RE.findall(c_lower))
+            if primary_nums & c_nums:
+                continue  # Same entity + same number = semantic duplicate
+        # Legacy: prefix match
         if len(c_lower) > 10 and c_lower[:40] in primary_lower:
             continue
+        # Legacy: first-sentence overlap
         first_sentence = c_lower.split('.')[0].strip()
         if len(first_sentence) > 20 and first_sentence in primary_lower:
             continue

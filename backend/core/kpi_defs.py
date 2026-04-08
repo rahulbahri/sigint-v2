@@ -781,11 +781,12 @@ BENCHMARK_METADATA = {
 }
 
 BENCHMARKS = {
+    # Monthly MoM equivalents — converted from annual: monthly = ((1 + annual/100)^(1/12) - 1) × 100
     "revenue_growth": {
-        "seed":     {"p25": 30,  "p50": 60,  "p75": 120, "label": "% YoY"},
-        "series_a": {"p25": 50,  "p50": 80,  "p75": 130, "label": "% YoY"},
-        "series_b": {"p25": 35,  "p50": 60,  "p75": 90,  "label": "% YoY"},
-        "series_c": {"p25": 20,  "p50": 40,  "p75": 65,  "label": "% YoY"},
+        "seed":     {"p25": 2.2, "p50": 4.0, "p75": 6.8},   # was 30/60/120 annual
+        "series_a": {"p25": 3.4, "p50": 5.0, "p75": 7.2},   # was 50/80/130 annual
+        "series_b": {"p25": 2.5, "p50": 4.0, "p75": 5.5},   # was 35/60/90 annual
+        "series_c": {"p25": 1.5, "p50": 2.8, "p75": 4.2},   # was 20/40/65 annual
     },
     "gross_margin": {
         "seed":     {"p25": 55,  "p50": 65,  "p75": 74},
@@ -805,17 +806,19 @@ BENCHMARKS = {
         "series_b": {"p25": -22, "p50":  -8, "p75":   8},
         "series_c": {"p25":  -8, "p50":   5, "p75":  22},
     },
+    # NRR: monthly equivalents — annual NRR of X% = monthly (X/100)^(1/12) × 100
     "nrr": {
-        "seed":     {"p25": 85,  "p50": 98,  "p75": 108},
-        "series_a": {"p25": 90,  "p50": 104, "p75": 115},
-        "series_b": {"p25": 95,  "p50": 108, "p75": 118},
-        "series_c": {"p25": 100, "p50": 112, "p75": 125},
+        "seed":     {"p25": 98.6, "p50": 99.8, "p75": 100.6},  # was 85/98/108 annual
+        "series_a": {"p25": 99.1, "p50": 100.3,"p75": 101.2},  # was 90/104/115 annual
+        "series_b": {"p25": 99.6, "p50": 100.6,"p75": 101.4},  # was 95/108/118 annual
+        "series_c": {"p25": 100.0,"p50": 101.0,"p75": 101.9},  # was 100/112/125 annual
     },
+    # ARR growth: monthly MoM equivalents from annual benchmarks
     "arr_growth": {
-        "seed":     {"p25": 30,  "p50": 70,  "p75": 150},
-        "series_a": {"p25": 55,  "p50": 85,  "p75": 140},
-        "series_b": {"p25": 38,  "p50": 62,  "p75": 95},
-        "series_c": {"p25": 22,  "p50": 42,  "p75": 68},
+        "seed":     {"p25": 2.2, "p50": 4.5, "p75": 7.9},   # was 30/70/150 annual
+        "series_a": {"p25": 3.7, "p50": 5.3, "p75": 7.6},   # was 55/85/140 annual
+        "series_b": {"p25": 2.7, "p50": 4.1, "p75": 5.7},   # was 38/62/95 annual
+        "series_c": {"p25": 1.7, "p50": 3.0, "p75": 4.4},   # was 22/42/68 annual
     },
     "burn_multiple": {
         "seed":     {"p25": 0.8, "p50": 1.6, "p75": 2.8},

@@ -13,29 +13,18 @@ import { fmtKpiValue, fmtKpiRange } from './kpiFormat'
 
 // ── KPI contextual info dictionary ───────────────────────────────────────────
 const KPI_INFO = {
+  // ── Revenue & Growth ──────────────────────────────────────────────────────
   revenue_growth: {
-    what: 'Month-over-month or year-over-year percentage change in total revenue.',
+    what: 'Month-over-month percentage change in total revenue.',
     why:  'The primary indicator of business momentum — investors and boards use this as the headline growth signal.',
-    how:  'Computed as (current period revenue − prior period revenue) / prior period revenue × 100.',
+    how:  'Computed as (Revenue_Month − Revenue_PrevMonth) / Revenue_PrevMonth × 100.',
     tab:  'trends',
   },
-  gross_margin: {
-    what: 'Revenue minus cost of goods sold, expressed as a percentage of revenue.',
-    why:  'Shows how efficiently you deliver your product. SaaS companies typically target 70–80%.',
-    how:  'Computed as (Revenue − COGS) / Revenue × 100. Sourced from your monthly P&L upload.',
-    tab:  'variance',
-  },
-  net_revenue_retention: {
-    what: 'Percentage of recurring revenue retained from existing customers, including expansions.',
-    why:  'NRR > 100% means your existing base grows on its own — the gold standard for SaaS.',
-    how:  'Computed as (Starting MRR − Churn + Expansion) / Starting MRR × 100.',
-    tab:  'variance',
-  },
-  logo_churn_rate: {
-    what: 'Percentage of customers who cancelled in a given period.',
-    why:  'Customer churn erodes your installed base and signals product-market fit issues.',
-    how:  'Computed as customers lost / customers at start of period × 100.',
-    tab:  'variance',
+  arr_growth: {
+    what: 'Month-over-month percentage change in Annualised Recurring Revenue.',
+    why:  'ARR growth rate is the headline SaaS metric — it determines valuation multiples and fundraising trajectory.',
+    how:  'Computed as (ARR_Month − ARR_PrevMonth) / ARR_PrevMonth × 100.',
+    tab:  'trends',
   },
   arr: {
     what: 'Annualised Recurring Revenue — the predictable, contracted annual revenue run-rate.',
@@ -49,22 +38,91 @@ const KPI_INFO = {
     how:  'Sum of all active subscription monthly fees at end of period.',
     tab:  'trends',
   },
+  // ── Margins & Profitability ───────────────────────────────────────────────
+  gross_margin: {
+    what: 'Revenue minus cost of goods sold, expressed as a percentage of revenue.',
+    why:  'Shows how efficiently you deliver your product. SaaS companies typically target 70-80%.',
+    how:  'Computed as (Revenue − COGS) / Revenue × 100. Sourced from your monthly P&L upload.',
+    tab:  'variance',
+  },
+  operating_margin: {
+    what: 'Operating income as a percentage of revenue.',
+    why:  'Shows the core business profitability before financing decisions.',
+    how:  '(Revenue − OPEX − COGS) / Revenue × 100.',
+    tab:  'variance',
+  },
+  ebitda_margin: {
+    what: 'Earnings before interest, taxes, depreciation and amortisation as a % of revenue.',
+    why:  'Proxy for operating profitability. Negative is acceptable early; trend toward 20%+ at scale.',
+    how:  'EBITDA / Revenue × 100. From your uploaded P&L data.',
+    tab:  'variance',
+  },
+  opex_ratio: {
+    what: 'Total operating expenses as a percentage of revenue.',
+    why:  'Tracks cost discipline. Decreasing opex ratio signals operating leverage kicking in.',
+    how:  'OpEx / Revenue × 100.',
+    tab:  'variance',
+  },
+  contribution_margin: {
+    what: 'Revenue minus all variable costs as a percentage of revenue.',
+    why:  'Shows per-unit profitability before fixed costs. Critical for unit economics analysis.',
+    how:  '(Revenue − COGS − Variable Costs) / Revenue × 100.',
+    tab:  'variance',
+  },
+  // ── Retention & Churn ─────────────────────────────────────────────────────
+  nrr: {
+    what: 'Percentage of recurring revenue retained from existing customers, including expansions.',
+    why:  'NRR > 100% means your existing base grows on its own — the gold standard for SaaS.',
+    how:  'Computed as (Starting MRR − Churn + Expansion) / Starting MRR × 100.',
+    tab:  'variance',
+  },
+  churn_rate: {
+    what: 'Percentage of customers who cancelled in a given period.',
+    why:  'Customer churn erodes your installed base and signals product-market fit issues.',
+    how:  'Computed as customers lost / customers at start of period × 100.',
+    tab:  'variance',
+  },
+  logo_retention: {
+    what: 'Percentage of customers retained from the prior period.',
+    why:  'Logo retention tracks customer stickiness independent of revenue — losing many small accounts may not show in NRR.',
+    how:  '(1 − Customers Lost / Customers at Start) × 100.',
+    tab:  'variance',
+  },
+  contraction_rate: {
+    what: 'Percentage of existing customer revenue lost to downgrades or reduced usage.',
+    why:  'Contraction erodes NRR silently — customers stay but pay less.',
+    how:  'Contraction Revenue / Prior Period Revenue from retained customers × 100.',
+    tab:  'variance',
+  },
+  expansion_rate: {
+    what: 'Percentage of existing customer revenue gained from upsells and cross-sells.',
+    why:  'Expansion is the cheapest growth — no CAC required. Drives NRR above 100%.',
+    how:  'Expansion Revenue / Prior Period Revenue from retained customers × 100.',
+    tab:  'variance',
+  },
+  // ── Unit Economics ────────────────────────────────────────────────────────
   cac: {
     what: 'Customer Acquisition Cost — total sales & marketing spend divided by new customers won.',
     why:  'High CAC relative to LTV signals inefficient go-to-market and unsustainable unit economics.',
     how:  'Total S&M spend in period / number of new customers acquired in that period.',
     tab:  'variance',
   },
-  ltv: {
+  customer_ltv: {
     what: 'Lifetime Value — projected total revenue from an average customer over their entire relationship.',
-    why:  'LTV:CAC ratio (target ≥ 3:1) is a core efficiency metric used by investors.',
-    how:  'ARPU / Churn Rate (simplified), or ARPU × Gross Margin / Churn Rate.',
+    why:  'LTV:CAC ratio (target >= 3:1) is a core efficiency metric used by investors.',
+    how:  '(ARPU × Gross Margin) / Monthly Churn Rate.',
     tab:  'variance',
   },
-  ltv_cac_ratio: {
+  ltv_cac: {
     what: 'Ratio of customer lifetime value to acquisition cost.',
     why:  'Below 3x signals go-to-market inefficiency; above 5x may mean under-investment in growth.',
-    how:  'LTV / CAC. Industry benchmark: 3–5× for healthy SaaS.',
+    how:  'LTV / CAC. Industry benchmark: 3-5x for healthy SaaS.',
+    tab:  'variance',
+  },
+  cac_payback: {
+    what: 'Months required to recoup the cost of acquiring a customer.',
+    why:  'Shorter payback means faster capital recycling. Best-in-class is under 12 months.',
+    how:  'CAC / (ARPU × Gross Margin %). Sourced from your CAC and margin inputs.',
     tab:  'variance',
   },
   payback_period: {
@@ -73,19 +131,39 @@ const KPI_INFO = {
     how:  'CAC / (ARPU × Gross Margin %). Sourced from your CAC and margin inputs.',
     tab:  'variance',
   },
-  magic_number: {
+  // ── Sales & GTM ───────────────────────────────────────────────────────────
+  sales_efficiency: {
     what: 'Sales efficiency metric: net new ARR generated per dollar of S&M spend.',
-    why:  'Magic Number ≥ 0.75 indicates efficient growth; < 0.5 signals go-to-market issues.',
-    how:  'Net New ARR / Prior Quarter S&M Spend.',
+    why:  'Sales Efficiency >= 0.75 indicates efficient growth; < 0.5 signals go-to-market issues.',
+    how:  'Net New ARR / S&M Spend (annualised).',
     tab:  'variance',
   },
+  pipeline_conversion: {
+    what: 'Percentage of pipeline value that converts to closed-won revenue.',
+    why:  'Low conversion signals deal qualification or competitive issues. Directly drives ARR growth.',
+    how:  'Won Deal Value / Total Pipeline Value × 100.',
+    tab:  'variance',
+  },
+  win_rate: {
+    what: 'Percentage of sales opportunities that result in a closed-won deal.',
+    why:  'Direct measure of GTM effectiveness and product-market fit.',
+    how:  'Closed-won deals / Total deals entering final stage × 100.',
+    tab:  'variance',
+  },
+  ramp_time: {
+    what: 'Average days from first contact to closed-won deal.',
+    why:  'Longer cycles compress win rates and slow ARR growth. Benchmark varies by ACV.',
+    how:  'Average of (close date − first touch date) across closed-won deals.',
+    tab:  'variance',
+  },
+  // ── Burn & Cash ───────────────────────────────────────────────────────────
   burn_multiple: {
     what: 'Net cash burned per dollar of net new ARR added.',
-    why:  'Lower is better. > 2× is a warning sign; the best companies operate at < 1×.',
+    why:  'Lower is better. > 2x is a warning sign; the best companies operate at < 1x.',
     how:  'Net Burn / Net New ARR. Sourced from your cash flow and ARR data.',
     tab:  'variance',
   },
-  runway_months: {
+  cash_runway: {
     what: 'Months of operating runway at current burn rate.',
     why:  'Critical risk indicator. < 12 months means fundraising must begin immediately.',
     how:  'Cash Balance / Monthly Net Burn.',
@@ -97,40 +175,55 @@ const KPI_INFO = {
     how:  'Cash at start of period − Cash at end of period (net of financing).',
     tab:  'trends',
   },
-  ebitda_margin: {
-    what: 'Earnings before interest, taxes, depreciation and amortisation as a % of revenue.',
-    why:  'Proxy for operating profitability. Negative is acceptable early; trend toward 20%+ at scale.',
-    how:  'EBITDA / Revenue × 100. From your uploaded P&L data.',
+  // ── Derived & Composite ───────────────────────────────────────────────────
+  growth_efficiency: {
+    what: 'ARR Growth Rate divided by Burn Multiple — how efficiently growth is purchased.',
+    why:  'Combines growth quality with capital efficiency. Higher means more growth per dollar burned.',
+    how:  'ARR Growth Rate / |Burn Multiple|. Extreme values indicate near-zero burn multiple.',
     tab:  'variance',
   },
-  operating_margin: {
-    what: 'Operating income as a percentage of revenue.',
-    why:  'Shows the core business profitability before financing decisions.',
-    how:  '(Revenue − OPEX − COGS) / Revenue × 100.',
+  pricing_power_index: {
+    what: 'Difference between ARPU growth rate and customer volume growth rate.',
+    why:  'Positive means price increases stick; negative means growth is discount-driven.',
+    how:  '(ARPU % Change) − (Customer Volume % Change).',
     tab:  'variance',
   },
+  customer_concentration: {
+    what: 'Revenue share of the largest customer or HHI concentration index.',
+    why:  'High concentration means revenue risk — losing one customer has outsized impact.',
+    how:  'Top Customer Revenue / Total Revenue × 100 (or HHI index if customer data available).',
+    tab:  'variance',
+  },
+  time_to_value: {
+    what: 'Average days from signup to first meaningful product engagement.',
+    why:  'Faster time-to-value reduces early churn and increases activation rates.',
+    how:  'Average of (first value event date − signup date) across new users.',
+    tab:  'variance',
+  },
+  // ── Receivables & Cash Cycle ──────────────────────────────────────────────
+  dso: {
+    what: 'Average days to collect payment after a sale.',
+    why:  'Higher DSO ties up cash and increases working capital needs.',
+    how:  '(Accounts Receivable / Revenue) × 30.',
+    tab:  'variance',
+  },
+  // ── Product & Engagement ──────────────────────────────────────────────────
   dau_mau_ratio: {
     what: 'Daily Active Users divided by Monthly Active Users — product stickiness.',
-    why:  'Measures how often users return. 20%+ is decent; 50%+ is excellent (WhatsApp-level).',
+    why:  'Measures how often users return. 20%+ is decent; 50%+ is excellent.',
     how:  'DAU / MAU × 100. Sourced from your product analytics upload.',
     tab:  'trends',
   },
-  nps: {
-    what: 'Net Promoter Score — customer sentiment measured on a −100 to +100 scale.',
+  product_nps: {
+    what: 'Net Promoter Score — customer sentiment measured on a -100 to +100 scale.',
     why:  'Strong leading indicator of retention and referral-driven growth.',
-    how:  '% Promoters (9–10) − % Detractors (0–6). From customer survey data.',
+    how:  '% Promoters (9-10) − % Detractors (0-6). From customer survey data.',
     tab:  'trends',
   },
-  sales_cycle_days: {
-    what: 'Average days from first contact to closed-won deal.',
-    why:  'Longer cycles compress win rates and slow ARR growth. Benchmark varies by ACV.',
-    how:  'Average of (close date − first touch date) across closed-won deals.',
-    tab:  'variance',
-  },
-  win_rate: {
-    what: 'Percentage of sales opportunities that result in a closed-won deal.',
-    why:  'Direct measure of GTM effectiveness and product-market fit.',
-    how:  'Closed-won deals / Total deals entering final stage × 100.',
+  recurring_revenue: {
+    what: 'Percentage of total revenue that is recurring (subscription-based).',
+    why:  'Higher recurring revenue means more predictable cash flows and higher valuation multiples.',
+    how:  'Recurring Revenue / Total Revenue × 100.',
     tab:  'variance',
   },
 }
@@ -386,7 +479,7 @@ function KpiSlideOut({ kpi: initialKpi, status: initialStatus, onClose, onNaviga
               </div>
             </div>
           )}
-          {!info.what && (
+          {!info.what && !detail && !detailLoading && (
             <p className="text-slate-400 text-[12px]">No additional context available for this KPI.</p>
           )}
 
