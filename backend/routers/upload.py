@@ -2329,33 +2329,71 @@ async def upload_canonical_xlsx(request: Request, file: UploadFile = File(...)):
     if not parsed_sheets:
         raise HTTPException(status_code=400, detail="No data rows found in any recognised sheet.")
 
-    # ── Synchronous DB processing (batch INSERT for speed) ───────────────────
+    # ── Fast batch INSERT (bypasses Transformer's row-by-row upsert) ────────
     conn = get_db()
     sheet_results = {}
+    total_upserted = 0
 
-    # Step 1: Clean previous canonical_xlsx data from all canonical tables
-    for entity_type in _SHEET_TO_ENTITY.values():
+    # Use Transformer only to ensure tables exist (schema creation + migration)
+    transformer = Transformer(conn, workspace_id, source_name)
+
+    for sheet_name, (entity_type, rows) in parsed_sheets.items():
+        table = f"canonical_{entity_type}"
+
+        # Ensure table + unique index exist
         try:
-            conn.execute(f"DELETE FROM canonical_{entity_type} WHERE workspace_id=? AND source=?",
+            transformer._ensure_canonical_table(entity_type)
+        except Exception as e:
+            sheet_results[sheet_name] = {"rows": 0, "status": f"table error: {str(e)}"}
+            continue
+
+        # DELETE previous canonical_xlsx rows for this table (clean slate)
+        try:
+            conn.execute(f"DELETE FROM {table} WHERE workspace_id=? AND source=?",
                          [workspace_id, source_name])
         except Exception:
             pass
-    conn.commit()
 
-    # Step 2: Batch-insert each sheet using Transformer (ensures table creation)
-    transformer = Transformer(conn, workspace_id, source_name)
-    total_upserted = 0
-
-    for sheet_name, (entity_type, rows) in parsed_sheets.items():
+        # Batch INSERT: collect all column names, build one INSERT per row
+        # but execute in a single transaction (no change detection, no ON CONFLICT)
         try:
-            count = transformer.upsert_canonical(entity_type, rows)
-            sheet_results[sheet_name] = {"rows": count, "status": "ok"}
-            total_upserted += count
+            # Determine all columns present across all rows
+            all_cols = set()
+            for r in rows:
+                all_cols.update(r.keys())
+            all_cols.discard("source")  # Already set
+            all_cols.discard("source_id")  # Already set
+            col_list = ["workspace_id", "source", "source_id"] + sorted(all_cols)
+            placeholders = ",".join(["?"] * len(col_list))
+
+            # Build value tuples
+            batch = []
+            for r in rows:
+                vals = [workspace_id, source_name, str(r.get("source_id", ""))]
+                for col in sorted(all_cols):
+                    v = r.get(col)
+                    # Stringify dicts/lists for SQLite/PG TEXT columns
+                    if isinstance(v, (dict, list)):
+                        v = json.dumps(v)
+                    batch.append(vals + [v])
+
+            # Execute batch — one INSERT per row but in a single transaction
+            insert_sql = f"INSERT INTO {table} ({','.join(col_list)}) VALUES ({placeholders})"
+            for vals in batch:
+                conn.execute(insert_sql, vals)
+
+            conn.commit()
+            sheet_results[sheet_name] = {"rows": len(batch), "status": "ok"}
+            total_upserted += len(batch)
         except Exception as e:
-            sheet_results[sheet_name] = {"rows": 0, "status": f"error: {str(e)}"}
+            sheet_results[sheet_name] = {"rows": 0, "status": f"insert error: {str(e)}"}
+            try:
+                conn.commit()  # Commit whatever succeeded
+            except Exception:
+                pass
 
     if total_upserted == 0:
-        errors = {k: v["status"] for k, v in sheet_results.items() if isinstance(v.get("status"), str) and v["status"].startswith("error")}
+        errors = {k: v["status"] for k, v in sheet_results.items() if v.get("status", "").startswith("error")}
         conn.close()
         raise HTTPException(status_code=400, detail=f"Insert failed. Errors: {json.dumps(errors, default=str)}")
 
