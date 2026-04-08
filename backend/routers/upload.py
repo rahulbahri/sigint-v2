@@ -2347,10 +2347,10 @@ async def upload_canonical_xlsx(request: Request, file: UploadFile = File(...)):
             sheet_results[sheet_name] = {"rows": 0, "status": f"table error: {str(e)}"}
             continue
 
-        # DELETE previous canonical_xlsx rows for this table (clean slate)
+        # DELETE ALL rows for this workspace (clean slate — seed + previous xlsx + connectors)
+        # The canonical workbook is meant to be the SOLE data source for testing
         try:
-            conn.execute(f"DELETE FROM {table} WHERE workspace_id=? AND source=?",
-                         [workspace_id, source_name])
+            conn.execute(f"DELETE FROM {table} WHERE workspace_id=?", [workspace_id])
         except Exception:
             pass
 
