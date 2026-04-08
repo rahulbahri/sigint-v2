@@ -1247,8 +1247,17 @@ const DOMAIN_COLORS = {
   other:         { bg: 'bg-slate-100',   text: 'text-slate-500' },
 }
 
-function DomainBadge({ domain, label }) {
-  const dc = DOMAIN_COLORS[domain] || DOMAIN_COLORS.other
+function DomainBadge({ domain, label, status }) {
+  // When status is provided (critical/needs-attention contexts), use status color
+  // so the badge doesn't misleadingly show green for a critical KPI's domain.
+  const STATUS_COLORS = {
+    red:    { bg: 'bg-red-100',    text: 'text-red-700' },
+    yellow: { bg: 'bg-amber-100',  text: 'text-amber-700' },
+    green:  { bg: 'bg-emerald-100', text: 'text-emerald-700' },
+  }
+  const dc = (status && STATUS_COLORS[status])
+    ? STATUS_COLORS[status]
+    : (DOMAIN_COLORS[domain] || DOMAIN_COLORS.other)
   return (
     <span className={`text-[9px] font-semibold px-1.5 py-0.5 rounded-full ${dc.bg} ${dc.text}`}>
       {label || domain}
@@ -1951,7 +1960,7 @@ export default function HomeScreen({ onNavigate, onAskAnika }) {
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2 mb-0.5 flex-wrap">
                         <span className="text-slate-800 text-[12px] font-bold truncate">{kLabel}</span>
-                        {kpi.domain && <DomainBadge domain={kpi.domain} label={kpi.domain_label} />}
+                        {kpi.domain && <DomainBadge domain={kpi.domain} label={kpi.domain_label} status="red" />}
                       </div>
                       <div className="flex items-center gap-2 flex-wrap">
                         <span className="text-slate-900 text-sm font-extrabold">{kAvg}</span>
@@ -2162,7 +2171,7 @@ export default function HomeScreen({ onNavigate, onAskAnika }) {
                 {domainKeys.map(dk => (
                   <div key={dk} className="bg-slate-50 rounded-xl p-2">
                     <div className="flex items-center gap-1.5 px-2 mb-1">
-                      <DomainBadge domain={dk} label={byDomain[dk].label} />
+                      <DomainBadge domain={dk} label={byDomain[dk].label} status="red" />
                       <span className="text-[10px] text-slate-400">{byDomain[dk].kpis.length} metric{byDomain[dk].kpis.length > 1 ? 's' : ''}</span>
                     </div>
                     {byDomain[dk].kpis.map(kpi => {
