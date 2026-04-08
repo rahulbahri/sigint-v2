@@ -2277,7 +2277,11 @@ async def upload_canonical_xlsx(request: Request, file: UploadFile = File(...)):
         if not headers or all(h == "" for h in headers):
             continue
 
-        # Read data rows
+        # Get valid columns for this canonical entity type
+        from elt.transformer import _CANONICAL_SCHEMAS
+        valid_cols = set(_CANONICAL_SCHEMAS.get(entity_type, {}).keys()) | {"source", "source_id"}
+
+        # Read data rows — only include columns that exist in the canonical schema
         rows = []
         for row in ws.iter_rows(min_row=2, values_only=True):
             if row is None or all(v is None for v in row):
@@ -2285,7 +2289,8 @@ async def upload_canonical_xlsx(request: Request, file: UploadFile = File(...)):
             record = {}
             for ci, val in enumerate(row):
                 if ci < len(headers) and headers[ci] and val is not None:
-                    record[headers[ci]] = val
+                    if headers[ci] in valid_cols:
+                        record[headers[ci]] = val
             if not record:
                 continue
 
@@ -2310,13 +2315,18 @@ async def upload_canonical_xlsx(request: Request, file: UploadFile = File(...)):
     wb.close()
 
     if total_upserted == 0:
-        raise HTTPException(
-            status_code=400,
-            detail="No data rows found in any recognised sheet. "
-                   "Expected sheets: Revenue, Expenses, Customers, Pipeline, "
-                   "Invoices, Employees, Marketing, Balance Sheet, Time Tracking, "
-                   "Surveys, Support, Product Usage.",
-        )
+        # Surface per-sheet errors so the user knows what went wrong
+        errors = {k: v["status"] for k, v in sheet_results.items() if isinstance(v.get("status"), str) and v["status"].startswith("error")}
+        if errors:
+            detail = f"Upload failed. Per-sheet errors: {json.dumps(errors, default=str)}"
+        else:
+            detail = (
+                "No data rows found in any recognised sheet. "
+                "Expected sheets: Revenue, Expenses, Customers, Pipeline, "
+                "Invoices, Employees, Marketing, Balance Sheet, Time Tracking, "
+                "Surveys, Support, Product Usage."
+            )
+        raise HTTPException(status_code=400, detail=detail)
 
     # ── Trigger full KPI aggregation ─────────────────────────────────────────
     agg_summary = {}

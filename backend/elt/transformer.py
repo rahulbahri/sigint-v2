@@ -475,24 +475,43 @@ class Transformer:
         return value
 
     def _ensure_canonical_table(self, entity_type: str) -> None:
+        from core.config import _USE_PG
         schema = _CANONICAL_SCHEMAS.get(entity_type, {})
+        _real_typed = ("amount", "salary", "price", "spend", "probability",
+                       "leads", "conversions", "cash_balance", "current_assets",
+                       "current_liabilities", "total_assets", "total_liabilities",
+                       "billable_hours", "total_hours", "usage_count",
+                       "nps_score", "csat_score", "resolution_hours", "effort_score")
         cols_sql = ", ".join(
-            f"{col} TEXT" if col not in ("amount", "salary", "price", "spend",
-                                          "probability", "leads", "conversions")
-            else f"{col} REAL"
+            f"{col} REAL" if col in _real_typed else f"{col} TEXT"
             for col in schema.keys()
         )
-        self._conn.execute(f"""
-            CREATE TABLE IF NOT EXISTS canonical_{entity_type} (
-                id          INTEGER PRIMARY KEY AUTOINCREMENT,
-                workspace_id TEXT NOT NULL,
-                {cols_sql},
-                raw_id      TEXT,
-                created_at  TEXT DEFAULT CURRENT_TIMESTAMP,
-                updated_at  TEXT DEFAULT CURRENT_TIMESTAMP,
-                UNIQUE(workspace_id, source, source_id)
-            )
-        """)
+        if _USE_PG:
+            # PostgreSQL: SERIAL, NOW()
+            self._conn.execute(f"""
+                CREATE TABLE IF NOT EXISTS canonical_{entity_type} (
+                    id          SERIAL PRIMARY KEY,
+                    workspace_id TEXT NOT NULL,
+                    {cols_sql},
+                    raw_id      TEXT,
+                    created_at  TEXT DEFAULT NOW(),
+                    updated_at  TEXT DEFAULT NOW(),
+                    UNIQUE(workspace_id, source, source_id)
+                )
+            """)
+        else:
+            # SQLite: AUTOINCREMENT, CURRENT_TIMESTAMP
+            self._conn.execute(f"""
+                CREATE TABLE IF NOT EXISTS canonical_{entity_type} (
+                    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                    workspace_id TEXT NOT NULL,
+                    {cols_sql},
+                    raw_id      TEXT,
+                    created_at  TEXT DEFAULT CURRENT_TIMESTAMP,
+                    updated_at  TEXT DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(workspace_id, source, source_id)
+                )
+            """)
         self._conn.commit()
 
         # ── Schema migration: detect and add missing columns ──────────────
@@ -510,10 +529,10 @@ class Transformer:
                 ).fetchall():
                     existing_cols.add(row[1])
             except Exception:
-                # PostgreSQL fallback
+                # PostgreSQL fallback — use f-string (table name is safe, from code constants)
                 for row in self._conn.execute(
-                    "SELECT column_name FROM information_schema.columns "
-                    "WHERE table_name = %s", [f"canonical_{entity_type}"]
+                    f"SELECT column_name FROM information_schema.columns "
+                    f"WHERE table_name = 'canonical_{entity_type}'"
                 ).fetchall():
                     existing_cols.add(row[0])
 
