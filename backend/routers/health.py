@@ -22,7 +22,7 @@ from core.intelligence import (
     decision_check_ins,
     _normalise_stage,
 )
-from core.kpi_defs import KPI_DEFS, ALL_CAUSATION_RULES, BENCHMARKS
+from core.kpi_defs import KPI_DEFS, EXTENDED_ONTOLOGY_METRICS, ALL_CAUSATION_RULES, BENCHMARKS
 
 router = APIRouter()
 
@@ -188,6 +188,7 @@ def get_home(
 
     def _kpi_spotlight(key: str) -> dict:
         t  = targets_map.get(key, {})
+        kd = _KPI_DEFS_MAP.get(key, {})  # Fallback to kpi_defs for unit/direction
         mo = sorted(kpi_monthly.get(key, []), key=lambda x: x["period"])
         # Use last 6 months for average — matches health_score.py kpi_avgs window
         recent_vals = [m["value"] for m in mo[-6:]]
@@ -195,8 +196,8 @@ def get_home(
         return {
             "key":       key,
             "target":    t.get("target"),
-            "direction": t.get("direction", "higher"),
-            "unit":      t.get("unit", ""),
+            "direction": t.get("direction") or kd.get("direction", "higher"),
+            "unit":      t.get("unit") or kd.get("unit", ""),
             "avg":       avg,
             "sparkline": [m["value"] for m in mo[-6:]],
         }
@@ -434,7 +435,11 @@ def get_home(
 # ─── KPI Detail ──────────────────────────────────────────────────────────────
 
 # Build lookup dicts once at import time
+# Union of KPI_DEFS + EXTENDED_ONTOLOGY_METRICS — EXTENDED has 30 KPIs not in KPI_DEFS
 _KPI_DEFS_MAP = {d["key"]: d for d in KPI_DEFS}
+for _ext in EXTENDED_ONTOLOGY_METRICS:
+    if _ext.get("key") and _ext["key"] not in _KPI_DEFS_MAP:
+        _KPI_DEFS_MAP[_ext["key"]] = _ext
 
 # Data requirements: what raw data columns are needed to compute each KPI
 DATA_REQUIREMENTS = {

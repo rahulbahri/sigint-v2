@@ -16,6 +16,12 @@ from typing import Optional
 from core.kpi_defs import BENCHMARKS, EXTENDED_ONTOLOGY_METRICS, KPI_DEFS
 from core.health_score import _friendly_name
 
+# Union lookup: KPI_DEFS + EXTENDED_ONTOLOGY_METRICS for unit/direction fallback
+_KPI_DEFS_BY_KEY = {d["key"]: d for d in KPI_DEFS}
+for _ext in EXTENDED_ONTOLOGY_METRICS:
+    if _ext.get("key") and _ext["key"] not in _KPI_DEFS_BY_KEY:
+        _KPI_DEFS_BY_KEY[_ext["key"]] = _ext
+
 
 # ── Stage key normalisation ──────────────────────────────────────────────────
 _STAGE_ALIASES = {
@@ -354,9 +360,11 @@ def period_comparison(
             continue
 
         t = targets_map.get(kpi_key, {})
+        # Fall back to kpi_defs for unit/direction when not in targets_map
+        _kd = _KPI_DEFS_BY_KEY.get(kpi_key, {})
         target = t.get("target")
-        direction = t.get("direction", "higher")
-        unit = t.get("unit", "")
+        direction = t.get("direction") or _kd.get("direction", "higher")
+        unit = t.get("unit") or _kd.get("unit", "")
 
         delta = round(curr_val - prev_val, 2)
         name = _friendly_name(kpi_key)

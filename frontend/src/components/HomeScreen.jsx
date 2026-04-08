@@ -635,7 +635,7 @@ function KpiSlideOut({ kpi: initialKpi, status: initialStatus, onClose, onNaviga
                         const nodeStatus = typeof node === 'object' ? node.status : null
                         const nodeColor = nodeStatus === 'green' ? 'bg-emerald-100 text-emerald-700'
                           : nodeStatus === 'red' ? 'bg-red-100 text-red-700'
-                          : nodeStatus === 'amber' ? 'bg-amber-100 text-amber-700'
+                          : (nodeStatus === 'amber' || nodeStatus === 'yellow') ? 'bg-amber-100 text-amber-700'
                           : 'bg-slate-100 text-slate-600'
                         const nodeCauses = typeof node === 'object' && node.root_causes ? node.root_causes : []
                         const nodeChildren = typeof node === 'object' && node.children ? node.children : []
@@ -672,7 +672,7 @@ function KpiSlideOut({ kpi: initialKpi, status: initialStatus, onClose, onNaviga
                                   const childStatus = typeof child === 'object' ? child.status : null
                                   const childColor = childStatus === 'green' ? 'bg-emerald-100 text-emerald-700'
                                     : childStatus === 'red' ? 'bg-red-100 text-red-700'
-                                    : childStatus === 'amber' ? 'bg-amber-100 text-amber-700'
+                                    : (childStatus === 'amber' || childStatus === 'yellow') ? 'bg-amber-100 text-amber-700'
                                     : 'bg-slate-100 text-slate-600'
                                   return (
                                     <div key={ci} className="flex items-center gap-2">
@@ -706,7 +706,7 @@ function KpiSlideOut({ kpi: initialKpi, status: initialStatus, onClose, onNaviga
                       const dkStatus = typeof dk === 'object' ? dk.status : null
                       const dkColor = dkStatus === 'green' ? 'bg-emerald-100 text-emerald-700 hover:bg-emerald-200'
                         : dkStatus === 'red' ? 'bg-red-100 text-red-700 hover:bg-red-200'
-                        : dkStatus === 'amber' ? 'bg-amber-100 text-amber-700 hover:bg-amber-200'
+                        : (dkStatus === 'amber' || dkStatus === 'yellow') ? 'bg-amber-100 text-amber-700 hover:bg-amber-200'
                         : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
                       return (
                         <button

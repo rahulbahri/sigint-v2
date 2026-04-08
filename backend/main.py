@@ -609,7 +609,10 @@ def _run_ontology_discovery(workspace_id: str = ""):
               kdef["unit"], kdef["direction"], now))
 
     # Upsert extended ontology-only nodes
-    for ekey, emeta in EXTENDED_ONTOLOGY_METRICS.items():
+    for emeta in EXTENDED_ONTOLOGY_METRICS:  # EXTENDED_ONTOLOGY_METRICS is a list, not dict
+        ekey = emeta.get("key")
+        if not ekey:
+            continue
         conn.execute("""
             INSERT INTO ontology_nodes(key, name, domain, unit, direction, updated_at)
             VALUES (?,?,?,?,?,?)
