@@ -326,9 +326,11 @@ function KpiSlideOut({ kpi: initialKpi, status: initialStatus, onClose, onNaviga
   const target = fmtKpiValue(_rawTarget, _unit)
   const sparkColor = currentStatus === 'green' ? '#059669' : currentStatus === 'red' ? '#DC2626' : '#D97706'
   const statusColors = {
-    red:   { pill: 'bg-red-100 text-red-700',     label: 'Below Target' },
-    amber: { pill: 'bg-amber-100 text-amber-700', label: 'Watch Zone'   },
-    green: { pill: 'bg-emerald-100 text-emerald-700', label: 'On Target' },
+    red:    { pill: 'bg-red-100 text-red-700',     label: 'Below Target' },
+    amber:  { pill: 'bg-amber-100 text-amber-700', label: 'Watch Zone'   },
+    yellow: { pill: 'bg-amber-100 text-amber-700', label: 'Watch Zone'   },
+    green:  { pill: 'bg-emerald-100 text-emerald-700', label: 'On Target' },
+    grey:   { pill: 'bg-slate-100 text-slate-600', label: 'No Target'   },
   }
   const sc = statusColors[currentStatus] || { pill: 'bg-slate-100 text-slate-600', label: 'No Target' }
 
