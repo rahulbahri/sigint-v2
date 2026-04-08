@@ -2366,18 +2366,19 @@ async def upload_canonical_xlsx(request: Request, file: UploadFile = File(...)):
             col_list = ["workspace_id", "source", "source_id"] + sorted(all_cols)
             placeholders = ",".join(["?"] * len(col_list))
 
-            # Build value tuples
+            # Build value tuples — one list per row, with ALL columns
             batch = []
+            sorted_cols = sorted(all_cols)
             for r in rows:
                 vals = [workspace_id, source_name, str(r.get("source_id", ""))]
-                for col in sorted(all_cols):
+                for col in sorted_cols:
                     v = r.get(col)
-                    # Stringify dicts/lists for SQLite/PG TEXT columns
                     if isinstance(v, (dict, list)):
                         v = json.dumps(v)
-                    batch.append(vals + [v])
+                    vals.append(v)
+                batch.append(vals)
 
-            # Execute batch — one INSERT per row but in a single transaction
+            # Execute batch — one INSERT per row in a single transaction
             insert_sql = f"INSERT INTO {table} ({','.join(col_list)}) VALUES ({placeholders})"
             for vals in batch:
                 conn.execute(insert_sql, vals)
@@ -2386,14 +2387,14 @@ async def upload_canonical_xlsx(request: Request, file: UploadFile = File(...)):
             sheet_results[sheet_name] = {"rows": len(batch), "status": "ok"}
             total_upserted += len(batch)
         except Exception as e:
-            sheet_results[sheet_name] = {"rows": 0, "status": f"insert error: {str(e)}"}
+            sheet_results[sheet_name] = {"rows": 0, "status": str(e)}
             try:
-                conn.commit()  # Commit whatever succeeded
+                conn.commit()
             except Exception:
                 pass
 
     if total_upserted == 0:
-        errors = {k: v["status"] for k, v in sheet_results.items() if v.get("status", "").startswith("error")}
+        errors = {k: v["status"] for k, v in sheet_results.items() if v.get("status") != "ok"}
         conn.close()
         raise HTTPException(status_code=400, detail=f"Insert failed. Errors: {json.dumps(errors, default=str)}")
 
