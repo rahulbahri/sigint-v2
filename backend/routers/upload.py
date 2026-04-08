@@ -2218,6 +2218,55 @@ def download_canonical_template(request: Request):
     )
 
 
+import threading as _threading
+
+
+def _run_canonical_ingest(workspace_id: str, parsed_sheets: dict, filename: str):
+    """
+    Background worker: upsert parsed sheet data into canonical tables,
+    then run the full KPI aggregator. Runs in a daemon thread to avoid
+    blocking the HTTP response (8,000+ rows can take 30-60s on PG).
+    """
+    try:
+        conn = get_db()
+        source_name = "canonical_xlsx"
+        transformer = Transformer(conn, workspace_id, source_name)
+
+        # Clean previous canonical_xlsx data
+        for entity_type in _SHEET_TO_ENTITY.values():
+            try:
+                conn.execute(
+                    f"DELETE FROM canonical_{entity_type} WHERE workspace_id=? AND source=?",
+                    [workspace_id, source_name],
+                )
+            except Exception:
+                pass
+
+        total = 0
+        for sheet_name, (entity_type, rows) in parsed_sheets.items():
+            try:
+                count = transformer.upsert_canonical(entity_type, rows)
+                total += count
+            except Exception as e:
+                import logging
+                logging.getLogger(__name__).error(f"Canonical upload {sheet_name}: {e}")
+
+        # Trigger full KPI aggregation
+        if total > 0:
+            aggregate_canonical_to_monthly(conn, workspace_id)
+
+        conn.commit()
+        _audit(conn, "upload_canonical_xlsx_complete", {
+            "filename": filename,
+            "total_upserted": total,
+            "sheets": len(parsed_sheets),
+        }, workspace_id=workspace_id)
+        conn.close()
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).error(f"Canonical ingest failed: {e}")
+
+
 @router.post("/api/upload/canonical-xlsx", tags=["Data"])
 async def upload_canonical_xlsx(request: Request, file: UploadFile = File(...)):
     """
@@ -2227,13 +2276,11 @@ async def upload_canonical_xlsx(request: Request, file: UploadFile = File(...)):
     Invoices, Employees, Marketing, Balance Sheet, Time Tracking, Surveys, Support,
     Product Usage). Not all sheets are required.
 
-    After ingestion, the full KPI aggregator runs to compute all 61 KPIs,
-    health scores, and causal metrics from the canonical data.
-
-    This REPLACES previous canonical_xlsx data (connector and CSV data preserved).
+    After ingestion, the full KPI aggregator runs to compute all 61 KPIs.
+    Processing runs in the background (takes 30-60s). Refresh the dashboard
+    when complete.
     """
     workspace_id = _require_workspace(request)
-    conn = get_db()
 
     # Validate file
     contents = await file.read()
@@ -2245,43 +2292,24 @@ async def upload_canonical_xlsx(request: Request, file: UploadFile = File(...)):
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Cannot read XLSX: {str(e)}")
 
-    # ── Process each sheet ───────────────────────────────────────────────────
+    # ── Parse all sheets in-memory (fast) ────────────────────────────────────
+    from elt.transformer import _CANONICAL_SCHEMAS
     source_name = "canonical_xlsx"
-    transformer = Transformer(conn, workspace_id, source_name)
-    sheet_results = {}
-    total_upserted = 0
-
-    # Clean previous canonical_xlsx data for this workspace (idempotent re-upload)
-    for entity_type in _SHEET_TO_ENTITY.values():
-        table = f"canonical_{entity_type}"
-        try:
-            conn.execute(
-                f"DELETE FROM {table} WHERE workspace_id=? AND source=?",
-                [workspace_id, source_name],
-            )
-        except Exception:
-            pass  # Table may not exist yet — Transformer will create it
+    parsed_sheets = {}  # {sheet_title: (entity_type, [row_dicts])}
+    total_rows = 0
 
     for ws in wb.worksheets:
         sheet_name = ws.title.strip().lower()
         entity_type = _SHEET_TO_ENTITY.get(sheet_name)
         if entity_type is None:
-            continue  # Skip unrecognised sheets (e.g., README)
+            continue
 
-        # Read headers from row 1
-        headers = []
-        for cell in ws[1]:
-            val = str(cell.value).strip().lower() if cell.value else ""
-            headers.append(val)
-
+        headers = [str(c.value).strip().lower() if c.value else "" for c in ws[1]]
         if not headers or all(h == "" for h in headers):
             continue
 
-        # Get valid columns for this canonical entity type
-        from elt.transformer import _CANONICAL_SCHEMAS
         valid_cols = set(_CANONICAL_SCHEMAS.get(entity_type, {}).keys()) | {"source", "source_id"}
 
-        # Read data rows — only include columns that exist in the canonical schema
         rows = []
         for row in ws.iter_rows(min_row=2, values_only=True):
             if row is None or all(v is None for v in row):
@@ -2293,73 +2321,42 @@ async def upload_canonical_xlsx(request: Request, file: UploadFile = File(...)):
                         record[headers[ci]] = val
             if not record:
                 continue
-
-            # Ensure source and source_id are set
             record["source"] = source_name
             if "source_id" not in record or not record["source_id"]:
                 record["source_id"] = f"{entity_type}_{len(rows)}"
-
             rows.append(record)
 
-        if not rows:
-            continue
-
-        # Upsert into canonical table
-        try:
-            count = transformer.upsert_canonical(entity_type, rows)
-            sheet_results[ws.title] = {"rows": count, "status": "ok"}
-            total_upserted += count
-        except Exception as e:
-            sheet_results[ws.title] = {"rows": 0, "status": f"error: {str(e)}"}
+        if rows:
+            parsed_sheets[ws.title] = (entity_type, rows)
+            total_rows += len(rows)
 
     wb.close()
 
-    if total_upserted == 0:
-        # Surface per-sheet errors so the user knows what went wrong
-        errors = {k: v["status"] for k, v in sheet_results.items() if isinstance(v.get("status"), str) and v["status"].startswith("error")}
-        if errors:
-            detail = f"Upload failed. Per-sheet errors: {json.dumps(errors, default=str)}"
-        else:
-            detail = (
-                "No data rows found in any recognised sheet. "
-                "Expected sheets: Revenue, Expenses, Customers, Pipeline, "
-                "Invoices, Employees, Marketing, Balance Sheet, Time Tracking, "
-                "Surveys, Support, Product Usage."
-            )
-        raise HTTPException(status_code=400, detail=detail)
+    if not parsed_sheets:
+        raise HTTPException(
+            status_code=400,
+            detail="No data rows found in any recognised sheet. "
+                   "Expected sheets: Revenue, Expenses, Customers, Pipeline, "
+                   "Invoices, Employees, Marketing, Balance Sheet, Time Tracking, "
+                   "Surveys, Support, Product Usage.",
+        )
 
-    # ── Trigger full KPI aggregation ─────────────────────────────────────────
-    agg_summary = {}
-    try:
-        agg_summary = aggregate_canonical_to_monthly(conn, workspace_id)
-    except Exception as e:
-        agg_summary = {"error": str(e)}
-
-    conn.commit()
-
-    _audit(conn, "upload_canonical_xlsx", {
-        "filename": file.filename,
-        "sheets": sheet_results,
-        "total_upserted": total_upserted,
-        "aggregation": {k: v for k, v in agg_summary.items() if k != "kpis_computed"} if isinstance(agg_summary, dict) else {},
-    }, workspace_id=workspace_id)
-
-    # Serialize kpis_computed (it's a set)
-    kpis_list = sorted(agg_summary.get("kpis_computed", set())) if isinstance(agg_summary, dict) else []
+    # ── Run heavy DB work in background thread ───────────────────────────────
+    t = _threading.Thread(
+        target=_run_canonical_ingest,
+        args=(workspace_id, parsed_sheets, file.filename),
+        daemon=True,
+    )
+    t.start()
 
     return {
-        "status": "success",
-        "sheets_processed": sheet_results,
-        "total_records_upserted": total_upserted,
-        "aggregation": {
-            "months_written": agg_summary.get("months_written", 0) if isinstance(agg_summary, dict) else 0,
-            "kpis_computed": len(kpis_list),
-            "kpi_keys": kpis_list[:20],  # First 20 for display
-        },
+        "status": "processing",
+        "sheets_parsed": {k: len(v[1]) for k, v in parsed_sheets.items()},
+        "total_rows": total_rows,
         "message": (
-            f"Uploaded {total_upserted} records across {len(sheet_results)} sheets. "
-            f"Aggregator computed {len(kpis_list)} KPIs across "
-            f"{agg_summary.get('months_written', 0) if isinstance(agg_summary, dict) else 0} months."
+            f"Parsed {total_rows} records across {len(parsed_sheets)} sheets. "
+            f"Processing in background — takes 30-60 seconds. "
+            f"Refresh the dashboard to see updated KPIs."
         ),
     }
 
