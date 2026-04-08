@@ -2265,103 +2265,6 @@ def download_canonical_template(request: Request):
     )
 
 
-import threading as _threading
-
-
-def _run_canonical_ingest(workspace_id: str, parsed_sheets: dict, filename: str):
-    """
-    Background worker: upsert parsed sheet data into canonical tables,
-    then run the full KPI aggregator. Prints at every stage for Render log visibility.
-    """
-    import traceback
-    print(f"[CANONICAL] Starting ingest for workspace={workspace_id}, file={filename}, sheets={len(parsed_sheets)}")
-
-    try:
-        conn = get_db()
-        print(f"[CANONICAL] DB connection established")
-    except Exception as e:
-        print(f"[CANONICAL] FATAL: get_db() failed: {e}")
-        traceback.print_exc()
-        return
-
-    source_name = "canonical_xlsx"
-
-    # Step 1: Clean previous canonical_xlsx data
-    for entity_type in _SHEET_TO_ENTITY.values():
-        try:
-            conn.execute(
-                f"DELETE FROM canonical_{entity_type} WHERE workspace_id=? AND source=?",
-                [workspace_id, source_name],
-            )
-        except Exception:
-            pass  # Table may not exist yet
-    try:
-        conn.commit()
-        print(f"[CANONICAL] Cleaned previous canonical_xlsx data")
-    except Exception as e:
-        print(f"[CANONICAL] WARN: commit after clean failed: {e}")
-
-    # Step 2: Upsert each sheet into canonical tables
-    total = 0
-    try:
-        transformer = Transformer(conn, workspace_id, source_name)
-    except Exception as e:
-        print(f"[CANONICAL] FATAL: Transformer init failed: {e}")
-        traceback.print_exc()
-        return
-
-    for sheet_name, (entity_type, rows) in parsed_sheets.items():
-        try:
-            count = transformer.upsert_canonical(entity_type, rows)
-            total += count
-            print(f"[CANONICAL] {sheet_name}: {count} rows upserted")
-        except Exception as e:
-            print(f"[CANONICAL] ERROR {sheet_name}: {e}")
-            traceback.print_exc()
-
-    print(f"[CANONICAL] Total upserted: {total}")
-
-    if total == 0:
-        print(f"[CANONICAL] ABORT: no rows upserted, skipping aggregation")
-        return
-
-    # Step 3: Clear ALL existing monthly_data (so canonical is sole source)
-    try:
-        conn.execute("DELETE FROM monthly_data WHERE workspace_id=?", [workspace_id])
-        conn.commit()
-        print(f"[CANONICAL] Cleared monthly_data for workspace")
-    except Exception as e:
-        print(f"[CANONICAL] ERROR clearing monthly_data: {e}")
-        traceback.print_exc()
-
-    # Step 4: Run full KPI aggregation
-    try:
-        print(f"[CANONICAL] Starting KPI aggregation...")
-        summary = aggregate_canonical_to_monthly(conn, workspace_id)
-        kpis_count = len(summary.get("kpis_computed", set())) if isinstance(summary, dict) else 0
-        months = summary.get("months_written", 0) if isinstance(summary, dict) else 0
-        errors = summary.get("errors", []) if isinstance(summary, dict) else []
-        print(f"[CANONICAL] Aggregation complete: {months} months, {kpis_count} KPIs")
-        if errors:
-            print(f"[CANONICAL] Aggregation errors: {errors[:5]}")
-    except Exception as e:
-        print(f"[CANONICAL] ERROR in aggregation: {e}")
-        traceback.print_exc()
-
-    # Step 5: Final commit
-    try:
-        conn.commit()
-        print(f"[CANONICAL] Final commit done")
-    except Exception as e:
-        print(f"[CANONICAL] ERROR final commit: {e}")
-
-    try:
-        conn.close()
-    except Exception:
-        pass
-    print(f"[CANONICAL] Ingest complete for {filename}")
-
-
 @router.post("/api/upload/canonical-xlsx", tags=["Data"])
 async def upload_canonical_xlsx(request: Request, file: UploadFile = File(...)):
     """
@@ -2371,9 +2274,8 @@ async def upload_canonical_xlsx(request: Request, file: UploadFile = File(...)):
     Invoices, Employees, Marketing, Balance Sheet, Time Tracking, Surveys, Support,
     Product Usage). Not all sheets are required.
 
-    After ingestion, the full KPI aggregator runs to compute all 61 KPIs.
-    Processing runs in the background (takes 30-60s). Refresh the dashboard
-    when complete.
+    After ingestion, the full KPI aggregator runs to compute all 61 KPIs,
+    health scores, and causal metrics from the canonical data.
     """
     workspace_id = _require_workspace(request)
 
@@ -2387,10 +2289,10 @@ async def upload_canonical_xlsx(request: Request, file: UploadFile = File(...)):
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Cannot read XLSX: {str(e)}")
 
-    # ── Parse all sheets in-memory (fast) ────────────────────────────────────
+    # ── Parse all sheets ─────────────────────────────────────────────────────
     from elt.transformer import _CANONICAL_SCHEMAS
     source_name = "canonical_xlsx"
-    parsed_sheets = {}  # {sheet_title: (entity_type, [row_dicts])}
+    parsed_sheets = {}
     total_rows = 0
 
     for ws in wb.worksheets:
@@ -2398,13 +2300,10 @@ async def upload_canonical_xlsx(request: Request, file: UploadFile = File(...)):
         entity_type = _SHEET_TO_ENTITY.get(sheet_name)
         if entity_type is None:
             continue
-
         headers = [str(c.value).strip().lower() if c.value else "" for c in ws[1]]
         if not headers or all(h == "" for h in headers):
             continue
-
         valid_cols = set(_CANONICAL_SCHEMAS.get(entity_type, {}).keys()) | {"source", "source_id"}
-
         rows = []
         for row in ws.iter_rows(min_row=2, values_only=True):
             if row is None or all(v is None for v in row):
@@ -2413,7 +2312,6 @@ async def upload_canonical_xlsx(request: Request, file: UploadFile = File(...)):
             for ci, val in enumerate(row):
                 if ci < len(headers) and headers[ci] and val is not None:
                     if headers[ci] in valid_cols:
-                        # Convert datetime objects to ISO strings (Excel auto-formats dates)
                         if isinstance(val, datetime):
                             val = val.strftime("%Y-%m-%d")
                         record[headers[ci]] = val
@@ -2423,38 +2321,76 @@ async def upload_canonical_xlsx(request: Request, file: UploadFile = File(...)):
             if "source_id" not in record or not record["source_id"]:
                 record["source_id"] = f"{entity_type}_{len(rows)}"
             rows.append(record)
-
         if rows:
             parsed_sheets[ws.title] = (entity_type, rows)
             total_rows += len(rows)
-
     wb.close()
 
     if not parsed_sheets:
-        raise HTTPException(
-            status_code=400,
-            detail="No data rows found in any recognised sheet. "
-                   "Expected sheets: Revenue, Expenses, Customers, Pipeline, "
-                   "Invoices, Employees, Marketing, Balance Sheet, Time Tracking, "
-                   "Surveys, Support, Product Usage.",
-        )
+        raise HTTPException(status_code=400, detail="No data rows found in any recognised sheet.")
 
-    # ── Run heavy DB work in background thread ───────────────────────────────
-    t = _threading.Thread(
-        target=_run_canonical_ingest,
-        args=(workspace_id, parsed_sheets, file.filename),
-        daemon=True,
-    )
-    t.start()
+    # ── Synchronous DB processing (batch INSERT for speed) ───────────────────
+    conn = get_db()
+    sheet_results = {}
+
+    # Step 1: Clean previous canonical_xlsx data from all canonical tables
+    for entity_type in _SHEET_TO_ENTITY.values():
+        try:
+            conn.execute(f"DELETE FROM canonical_{entity_type} WHERE workspace_id=? AND source=?",
+                         [workspace_id, source_name])
+        except Exception:
+            pass
+    conn.commit()
+
+    # Step 2: Batch-insert each sheet using Transformer (ensures table creation)
+    transformer = Transformer(conn, workspace_id, source_name)
+    total_upserted = 0
+
+    for sheet_name, (entity_type, rows) in parsed_sheets.items():
+        try:
+            count = transformer.upsert_canonical(entity_type, rows)
+            sheet_results[sheet_name] = {"rows": count, "status": "ok"}
+            total_upserted += count
+        except Exception as e:
+            sheet_results[sheet_name] = {"rows": 0, "status": f"error: {str(e)}"}
+
+    if total_upserted == 0:
+        errors = {k: v["status"] for k, v in sheet_results.items() if isinstance(v.get("status"), str) and v["status"].startswith("error")}
+        conn.close()
+        raise HTTPException(status_code=400, detail=f"Insert failed. Errors: {json.dumps(errors, default=str)}")
+
+    # Step 3: Clear ALL existing monthly_data (so canonical is sole source)
+    conn.execute("DELETE FROM monthly_data WHERE workspace_id=?", [workspace_id])
+    conn.commit()
+
+    # Step 4: Run full KPI aggregation
+    agg_error = None
+    agg_summary = {}
+    try:
+        agg_summary = aggregate_canonical_to_monthly(conn, workspace_id)
+    except Exception as e:
+        agg_error = str(e)
+
+    conn.commit()
+    conn.close()
+
+    kpis_list = sorted(agg_summary.get("kpis_computed", set())) if isinstance(agg_summary, dict) else []
 
     return {
-        "status": "processing",
-        "sheets_parsed": {k: len(v[1]) for k, v in parsed_sheets.items()},
-        "total_rows": total_rows,
+        "status": "success",
+        "sheets_processed": sheet_results,
+        "total_records_upserted": total_upserted,
+        "aggregation": {
+            "months_written": agg_summary.get("months_written", 0) if isinstance(agg_summary, dict) else 0,
+            "kpis_computed": len(kpis_list),
+            "kpi_keys": kpis_list[:20],
+            "error": agg_error,
+        },
         "message": (
-            f"Parsed {total_rows} records across {len(parsed_sheets)} sheets. "
-            f"Processing in background — takes 30-60 seconds. "
-            f"Refresh the dashboard to see updated KPIs."
+            f"Uploaded {total_upserted} records across {len(sheet_results)} sheets. "
+            f"Aggregator computed {len(kpis_list)} KPIs across "
+            f"{agg_summary.get('months_written', 0) if isinstance(agg_summary, dict) else 0} months."
+            + (f" Aggregation error: {agg_error}" if agg_error else "")
         ),
     }
 
