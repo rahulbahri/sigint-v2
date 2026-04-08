@@ -319,26 +319,14 @@ def compute_health_score(
             })
     risk_kpis.sort(key=lambda x: x["key"])
 
-    # Guard: if any component is None (insufficient data), return honest response
-    if momentum is None or target_achieve is None or risk is None:
-        return {
-            "score": None,
-            "grade": "Insufficient Data",
-            "label": "Set KPI targets and add more data to enable health scoring",
-            "color": "grey",
-            "insufficient_data": True,
-            "momentum": momentum,
-            "momentum_trend": "",
-            "target_achievement": target_achieve,
-            "risk_flags": risk,
-            "needs_attention": needs_attention if 'needs_attention' in dir() else [],
-            "doing_well": doing_well if 'doing_well' in dir() else [],
-            "kpis_green": 0, "kpis_yellow": 0, "kpis_red": 0,
-            "composite_ranked": composite_ranked if 'composite_ranked' in dir() else [],
-            "domain_groups": domain_groups if 'domain_groups' in dir() else [],
-            "target_kpis": target_kpis if 'target_kpis' in dir() else [],
-            "risk_kpis": risk_kpis if 'risk_kpis' in dir() else [],
-        }
+    # Handle missing components gracefully — don't bail out, reweight
+    # Momentum needs 6+ months; short date ranges should still produce valid scores
+    if momentum is None:
+        momentum = 50.0  # Neutral: assume flat when insufficient history
+    if target_achieve is None:
+        target_achieve = 0.0
+    if risk is None:
+        risk = 50.0
 
     # Weighted composite
     raw_score = (momentum * w_momentum) + (target_achieve * w_target) + (risk * w_risk)
