@@ -167,7 +167,7 @@ def get_home(
         rows = conn.execute(spark_query, spark_params).fetchall()
     else:
         rows = conn.execute(
-            "SELECT year, month, data_json FROM monthly_data WHERE workspace_id=? ORDER BY year DESC, month DESC LIMIT 6",
+            "SELECT year, month, data_json FROM monthly_data WHERE workspace_id=? ORDER BY year DESC, month DESC LIMIT 12",
             [workspace_id]
         ).fetchall()
     targets_rows = conn.execute(
@@ -189,8 +189,9 @@ def get_home(
     def _kpi_spotlight(key: str) -> dict:
         t  = targets_map.get(key, {})
         mo = sorted(kpi_monthly.get(key, []), key=lambda x: x["period"])
-        vals = [m["value"] for m in mo]
-        avg  = round(sum(vals) / len(vals), 2) if vals else None
+        # Use last 6 months for average — matches health_score.py kpi_avgs window
+        recent_vals = [m["value"] for m in mo[-6:]]
+        avg  = round(sum(recent_vals) / len(recent_vals), 2) if recent_vals else None
         return {
             "key":       key,
             "target":    t.get("target"),
@@ -259,7 +260,8 @@ def get_home(
     _kpi_avgs_for_engine = {}
     for k, entries in kpi_monthly.items():
         vals = [e["value"] for e in entries if isinstance(e.get("value"), (int, float))]
-        _kpi_avgs_for_engine[k] = sum(vals[-3:]) / len(vals[-3:]) if vals else None
+        recent = vals[-6:] if len(vals) >= 6 else vals
+        _kpi_avgs_for_engine[k] = sum(recent) / len(recent) if recent else None
 
     root_cause_analyses = _run_root_cause_analysis(
         health.get("needs_attention", []),
@@ -551,7 +553,7 @@ def get_kpi_detail(kpi_key: str, request: Request):
     status = "grey"
     pct_of_target = None
     if time_series and target_value is not None:
-        recent_vals = [pt["value"] for pt in time_series[-3:]]
+        recent_vals = [pt["value"] for pt in time_series[-6:]]
         avg = sum(recent_vals) / len(recent_vals)
         gap = _gap_pct(avg, target_value, direction)
         pct_of_target = round(gap * 100, 1)

@@ -255,10 +255,11 @@ def compute_health_score(
                 except (ValueError, TypeError):
                     pass
 
-    # Latest-period averages (last 3 months or all if <3)
+    # Latest-period averages (last 6 months, or all available if <6)
+    # Uses 6-month window for stability — matches display averages system-wide
     kpi_avgs: dict = {}
     for k, vals in time_series.items():
-        recent = vals[-3:] if len(vals) >= 3 else vals
+        recent = vals[-6:] if len(vals) >= 6 else vals
         kpi_avgs[k] = sum(recent) / len(recent) if recent else None
 
     # ── Component scores ───────────────────────────────────────────────────────
