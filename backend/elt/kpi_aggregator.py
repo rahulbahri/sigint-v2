@@ -1719,6 +1719,11 @@ def _parse_period(raw) -> Optional[tuple[int, int]]:
     """Parse a date/period string into (year, month). Handles many formats."""
     if raw is None:
         return None
+    # Handle datetime objects directly (e.g., from openpyxl reading Excel date cells)
+    if isinstance(raw, datetime):
+        if 2000 <= raw.year <= 2050:
+            return (raw.year, raw.month)
+        return None
     s = str(raw).strip()
     if not s:
         return None

@@ -2251,8 +2251,13 @@ def _run_canonical_ingest(workspace_id: str, parsed_sheets: dict, filename: str)
                 import logging
                 logging.getLogger(__name__).error(f"Canonical upload {sheet_name}: {e}")
 
-        # Trigger full KPI aggregation
+        # Clear ALL existing monthly_data so canonical workbook is the sole source.
+        # Without this, old seed/CSV data (with real upload_ids) overrides the
+        # aggregator output due to the CSV-priority merge logic in kpi_aggregator.
         if total > 0:
+            conn.execute("DELETE FROM monthly_data WHERE workspace_id=?", [workspace_id])
+            conn.commit()
+            # Trigger full KPI aggregation — now writes with no competition
             aggregate_canonical_to_monthly(conn, workspace_id)
 
         conn.commit()
@@ -2318,6 +2323,9 @@ async def upload_canonical_xlsx(request: Request, file: UploadFile = File(...)):
             for ci, val in enumerate(row):
                 if ci < len(headers) and headers[ci] and val is not None:
                     if headers[ci] in valid_cols:
+                        # Convert datetime objects to ISO strings (Excel auto-formats dates)
+                        if isinstance(val, datetime):
+                            val = val.strftime("%Y-%m-%d")
                         record[headers[ci]] = val
             if not record:
                 continue
