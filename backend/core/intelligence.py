@@ -384,6 +384,7 @@ def period_comparison(
             "delta": delta,
             "delta_pct": delta_pct,
             "unit":  unit,
+            "direction": direction,
             "prev_period": prev_pd,
             "curr_period": curr_pd,
         }

@@ -2217,10 +2217,11 @@ export default function HomeScreen({ onNavigate, onAskAnika }) {
                     <div className="flex flex-wrap gap-1.5">
                       {data.period_comparison.improved.map(kpi => {
                         const pct = kpi.delta_pct ?? (kpi.prev ? Math.max(-999, Math.min(999, (kpi.delta / Math.abs(kpi.prev)) * 100)) : kpi.delta)
+                        const currVal = kpi.curr != null ? fmtKpiValue(kpi.curr, kpi.unit) : null
                         return (
-                          <button key={kpi.key} onClick={() => setSlideOut({ kpi: { key: kpi.key }, status: 'green' })}
+                          <button key={kpi.key} onClick={() => setSlideOut({ kpi: { key: kpi.key, avg: kpi.curr, unit: kpi.unit, direction: kpi.direction }, status: 'green' })}
                             className="text-[10px] font-medium text-emerald-700 bg-emerald-50 px-2 py-1 rounded-lg hover:bg-emerald-100 transition-colors cursor-pointer">
-                            {formatKpiLabel(kpi.key)} <span className="font-bold">{pct > 0 ? '+' : ''}{pct?.toFixed?.(1) ?? pct}%</span>
+                            {formatKpiLabel(kpi.key)} {currVal && <span className="font-bold">{currVal}</span>} <span className="opacity-70">({pct > 0 ? '+' : ''}{pct?.toFixed?.(1) ?? pct}%)</span>
                           </button>
                         )
                       })}
@@ -2236,10 +2237,11 @@ export default function HomeScreen({ onNavigate, onAskAnika }) {
                     <div className="flex flex-wrap gap-1.5">
                       {data.period_comparison.deteriorated.map(kpi => {
                         const pct = kpi.delta_pct ?? (kpi.prev ? Math.max(-999, Math.min(999, (kpi.delta / Math.abs(kpi.prev)) * 100)) : kpi.delta)
+                        const currVal = kpi.curr != null ? fmtKpiValue(kpi.curr, kpi.unit) : null
                         return (
-                          <button key={kpi.key} onClick={() => setSlideOut({ kpi: { key: kpi.key }, status: kpi.status || 'red' })}
+                          <button key={kpi.key} onClick={() => setSlideOut({ kpi: { key: kpi.key, avg: kpi.curr, unit: kpi.unit, direction: kpi.direction }, status: kpi.status || 'red' })}
                             className="text-[10px] font-medium text-red-700 bg-red-50 px-2 py-1 rounded-lg hover:bg-red-100 transition-colors cursor-pointer">
-                            {formatKpiLabel(kpi.key)} <span className="font-bold">{pct > 0 ? '+' : ''}{pct?.toFixed?.(1) ?? pct}%</span>
+                            {formatKpiLabel(kpi.key)} {currVal && <span className="font-bold">{currVal}</span>} <span className="opacity-70">({pct > 0 ? '+' : ''}{pct?.toFixed?.(1) ?? pct}%)</span>
                           </button>
                         )
                       })}
