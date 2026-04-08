@@ -124,6 +124,125 @@ def _parse_excel_upload(content: bytes) -> pd.DataFrame:
     return pd.read_excel(io.BytesIO(content), sheet_name=0)
 
 
+def _populate_canonical_from_csv(conn, workspace_id: str, df: pd.DataFrame, col_map: dict, upload_id: int) -> dict:
+    """
+    Map flat CSV columns into canonical_revenue + canonical_expenses tables,
+    then trigger the full KPI aggregator to compute all 61 KPIs.
+
+    This augments the simple 14-KPI CSV path with the full canonical pipeline.
+    Returns aggregation summary dict.
+    """
+    from elt.transformer import Transformer
+    from elt.kpi_aggregator import aggregate_canonical_to_monthly
+
+    source_name = "csv_upload"
+    transformer = Transformer(conn, workspace_id, source_name)
+
+    # Clean previous csv_upload canonical rows (idempotent)
+    for table in ("canonical_revenue", "canonical_expenses", "canonical_customers"):
+        try:
+            conn.execute(f"DELETE FROM {table} WHERE workspace_id=? AND source=?",
+                         [workspace_id, source_name])
+        except Exception:
+            pass
+
+    # Parse date column for period
+    date_col = col_map.get("date")
+    if date_col:
+        df["__date__"] = pd.to_datetime(df[date_col], errors="coerce")
+        df["__period__"] = df["__date__"].dt.strftime("%Y-%m-15")
+    else:
+        df["__period__"] = "2025-01-15"
+
+    # ── Build canonical_revenue rows ─────────────────────────────────────────
+    rev_col = col_map.get("revenue")
+    if rev_col:
+        rev_rows = []
+        for idx, row in df.iterrows():
+            val = row.get(rev_col)
+            if val is None or (isinstance(val, float) and np.isnan(val)):
+                continue
+            is_rec_col = col_map.get("is_recurring")
+            is_recurring = True
+            if is_rec_col:
+                rv = str(row.get(is_rec_col, "")).lower()
+                is_recurring = rv in ("1", "true", "yes", "recurring")
+            rev_rows.append({
+                "source": source_name,
+                "source_id": f"csv_{upload_id}_rev_{idx}",
+                "amount": float(val),
+                "currency": "USD",
+                "period": row.get("__period__", "2025-01-15"),
+                "customer_id": str(row.get(col_map.get("customers", "__none__"), "")) if "customers" in col_map else None,
+                "subscription_type": "recurring" if is_recurring else "one-time",
+            })
+        if rev_rows:
+            transformer.upsert_canonical("revenue", rev_rows)
+
+    # ── Build canonical_expenses rows (COGS + OpEx + S&M) ────────────────────
+    exp_rows = []
+    for idx, row in df.iterrows():
+        period = row.get("__period__", "2025-01-15")
+        cogs_col = col_map.get("cogs")
+        if cogs_col and row.get(cogs_col) and not (isinstance(row.get(cogs_col), float) and np.isnan(row.get(cogs_col))):
+            exp_rows.append({
+                "source": source_name,
+                "source_id": f"csv_{upload_id}_cogs_{idx}",
+                "amount": float(row[cogs_col]),
+                "currency": "USD",
+                "category": "cogs",
+                "period": period,
+            })
+        opex_col = col_map.get("opex")
+        if opex_col and row.get(opex_col) and not (isinstance(row.get(opex_col), float) and np.isnan(row.get(opex_col))):
+            exp_rows.append({
+                "source": source_name,
+                "source_id": f"csv_{upload_id}_opex_{idx}",
+                "amount": float(row[opex_col]),
+                "currency": "USD",
+                "category": "operating_expense",
+                "period": period,
+            })
+        sm_col = col_map.get("sm_cost")
+        if sm_col and row.get(sm_col) and not (isinstance(row.get(sm_col), float) and np.isnan(row.get(sm_col))):
+            exp_rows.append({
+                "source": source_name,
+                "source_id": f"csv_{upload_id}_sm_{idx}",
+                "amount": float(row[sm_col]),
+                "currency": "USD",
+                "category": "sales",
+                "period": period,
+            })
+    if exp_rows:
+        transformer.upsert_canonical("expenses", exp_rows)
+
+    # ── Build canonical_customers rows (if customer count available) ──────────
+    cust_col = col_map.get("customers")
+    churn_col = col_map.get("churn")
+    if cust_col:
+        # Group by period to create one customer snapshot per month
+        if date_col:
+            df["__ym__"] = df["__date__"].dt.strftime("%Y-%m")
+            for ym, grp in df.groupby("__ym__"):
+                cust_count = grp[cust_col].max()  # Take max for the month
+                if cust_count and not (isinstance(cust_count, float) and np.isnan(cust_count)):
+                    for ci in range(min(int(cust_count), 500)):  # Cap at 500 synthetic customers
+                        transformer.upsert_canonical("customers", [{
+                            "source": source_name,
+                            "source_id": f"csv_{upload_id}_cust_{ym}_{ci}",
+                            "name": f"Customer {ci}",
+                            "created_at": f"{ym}-01",
+                            "lifecycle_stage": "active",
+                        }])
+
+    # ── Trigger full aggregation ─────────────────────────────────────────────
+    summary = aggregate_canonical_to_monthly(conn, workspace_id)
+    conn.commit()
+
+    kpis_count = len(summary.get("kpis_computed", set())) if isinstance(summary, dict) else 0
+    return {"kpis_computed": kpis_count, "months": summary.get("months_written", 0)}
+
+
 @router.post("/api/upload", tags=["Data Ingestion"])
 async def upload_csv(request: Request, file: UploadFile = File(...)):
     """
@@ -216,6 +335,20 @@ async def upload_csv(request: Request, file: UploadFile = File(...)):
 
     _audit("data_upload", "upload", str(upload_id), "KPI data uploaded")
 
+    # ── Phase 2: Augment with canonical tables → full 61-KPI aggregator ──────
+    # Maps the flat CSV data into canonical_revenue + canonical_expenses tables,
+    # then triggers the full kpi_aggregator to compute all 61 KPIs on top of
+    # the 14 already computed by the simple path. Non-blocking: failures here
+    # don't affect the primary upload (which already succeeded above).
+    augmented_kpis = 0
+    try:
+        conn2 = get_db()
+        _augmented = _populate_canonical_from_csv(conn2, workspace_id, df, col_map, upload_id)
+        augmented_kpis = _augmented.get("kpis_computed", 0) if isinstance(_augmented, dict) else 0
+        conn2.close()
+    except Exception:
+        pass  # Augmentation is best-effort; primary upload already committed
+
     return {
         "upload_id":        upload_id,
         "filename":         file.filename,
@@ -223,7 +356,8 @@ async def upload_csv(request: Request, file: UploadFile = File(...)):
         "months_detected":  len(monthly_agg),
         "columns_detected": col_map,
         "kpis_computed":    [k for k in monthly_agg.columns if k not in ("year", "month")],
-        "message":          f"Successfully processed {len(df)} rows across {len(monthly_agg)} months.",
+        "augmented_kpis":   augmented_kpis,
+        "message":          f"Successfully processed {len(df)} rows across {len(monthly_agg)} months. Full aggregator computed {augmented_kpis} additional KPIs.",
     }
 
 @router.get("/api/seed-demo-actuals", tags=["System"])

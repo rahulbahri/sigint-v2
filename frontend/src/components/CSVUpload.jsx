@@ -178,6 +178,109 @@ function ReimportModelSection() {
 }
 
 
+// ── Canonical Workbook Upload (12-Sheet Full Pipeline) ──────────────────────
+function CanonicalWorkbookSection() {
+  const [uploading, setUploading] = useState(false)
+  const [result, setResult] = useState(null)
+  const [error, setError] = useState(null)
+  const fileRef = useRef(null)
+
+  const downloadTemplate = async () => {
+    try {
+      const resp = await axios.get('/api/template/canonical-workbook.xlsx', { responseType: 'blob' })
+      const url = URL.createObjectURL(resp.data)
+      const a = document.createElement('a')
+      a.href = url; a.download = 'axiom_canonical_workbook.xlsx'; a.click()
+      URL.revokeObjectURL(url)
+    } catch {
+      setError('Failed to download template.')
+    }
+  }
+
+  const handleUpload = async (file) => {
+    if (!file) return
+    setUploading(true); setResult(null); setError(null)
+    const form = new FormData()
+    form.append('file', file)
+    try {
+      const resp = await axios.post('/api/upload/canonical-xlsx', form)
+      setResult(resp.data)
+    } catch (e) {
+      setError(e.response?.data?.detail || 'Upload failed.')
+    } finally {
+      setUploading(false)
+    }
+  }
+
+  return (
+    <div className="space-y-3 bg-gradient-to-r from-indigo-50/50 to-violet-50/50 rounded-xl p-4 border border-indigo-100">
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <Database size={16} className="text-indigo-600" />
+          <h2 className="text-slate-800 font-semibold text-base">Canonical Data Workbook</h2>
+          <span className="text-[9px] font-bold text-indigo-600 bg-indigo-100 px-1.5 py-0.5 rounded-full">FULL PIPELINE</span>
+        </div>
+        <button onClick={downloadTemplate}
+          className="flex items-center gap-1.5 text-xs text-indigo-700 border border-indigo-200
+                     bg-white hover:bg-indigo-50 px-3 py-1.5 rounded-lg transition-all">
+          <Download size={12}/> Download Template
+        </button>
+      </div>
+
+      <p className="text-slate-500 text-xs">
+        Upload a 12-sheet Excel workbook with detailed business data (Revenue, Expenses, Customers, Pipeline,
+        Invoices, Employees, Marketing, Balance Sheet, Time Tracking, Surveys, Support, Product Usage).
+        The platform computes <span className="font-semibold text-indigo-700">all 61 KPIs</span>, health scores,
+        knowledge graph, and narratives from your raw data.
+      </p>
+
+      <div className="flex items-center gap-3">
+        <button onClick={() => fileRef.current?.click()}
+          disabled={uploading}
+          className="flex items-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-semibold
+                     rounded-lg transition-colors disabled:opacity-50">
+          {uploading
+            ? <><div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"/> Processing...</>
+            : <><Upload size={14}/> Upload Canonical Workbook</>
+          }
+        </button>
+        <input ref={fileRef} type="file" accept=".xlsx,.xls" className="hidden"
+          onChange={e => handleUpload(e.target.files[0])} />
+        <span className="text-slate-400 text-[10px]">.xlsx format, up to 10MB</span>
+      </div>
+
+      {result && (
+        <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-3 text-sm">
+          <div className="flex items-center gap-2 text-emerald-700 font-semibold mb-1">
+            <CheckCircle size={14}/> Upload Successful
+          </div>
+          <p className="text-emerald-600 text-xs">{result.message}</p>
+          {result.sheets_processed && (
+            <div className="mt-2 flex flex-wrap gap-1.5">
+              {Object.entries(result.sheets_processed).map(([sheet, info]) => (
+                <span key={sheet} className={`text-[10px] px-2 py-0.5 rounded-full font-medium ${
+                  info.status === 'ok' ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-700'
+                }`}>
+                  {sheet}: {info.rows} rows
+                </span>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {error && (
+        <div className="bg-red-50 border border-red-200 rounded-lg p-3 text-sm">
+          <div className="flex items-center gap-2 text-red-700 font-semibold">
+            <AlertCircle size={14}/> {error}
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+
 export default function CSVUpload({ onUploaded }) {
 
   // ── KPI Export / Import state ─────────────────────────────────────────────
@@ -386,6 +489,9 @@ export default function CSVUpload({ onUploaded }) {
 
       {/* ══ Section 0b: Re-import Financial Model ══════════════════════════ */}
       <ReimportModelSection />
+
+      {/* ══ Section 0c: Canonical Workbook (12-Sheet Full Pipeline) ═══════ */}
+      <CanonicalWorkbookSection />
 
       {/* ══ Section 1: Actuals Data ═══════════════════════════════════════ */}
       <div className="space-y-5">
