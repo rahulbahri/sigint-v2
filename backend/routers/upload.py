@@ -2378,10 +2378,17 @@ async def upload_canonical_xlsx(request: Request, file: UploadFile = File(...)):
                     vals.append(v)
                 batch.append(vals)
 
-            # Execute batch — one INSERT per row in a single transaction
-            insert_sql = f"INSERT INTO {table} ({','.join(col_list)}) VALUES ({placeholders})"
-            for vals in batch:
-                conn.execute(insert_sql, vals)
+            # Multi-row INSERT in chunks of 80 rows (stays under SQLite's 999 variable limit)
+            # This is ~12 SQL statements per table instead of 1,500 — massive PG speedup
+            CHUNK = 80
+            n_cols = len(col_list)
+            one_row_ph = f"({','.join(['?'] * n_cols)})"
+            for i in range(0, len(batch), CHUNK):
+                chunk = batch[i:i + CHUNK]
+                multi_ph = ",".join([one_row_ph] * len(chunk))
+                multi_sql = f"INSERT INTO {table} ({','.join(col_list)}) VALUES {multi_ph}"
+                flat_vals = [v for row in chunk for v in row]
+                conn.execute(multi_sql, flat_vals)
 
             conn.commit()
             sheet_results[sheet_name] = {"rows": len(batch), "status": "ok"}
