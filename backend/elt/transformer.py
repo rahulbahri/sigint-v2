@@ -495,8 +495,7 @@ class Transformer:
                     {cols_sql},
                     raw_id      TEXT,
                     created_at  TEXT DEFAULT NOW(),
-                    updated_at  TEXT DEFAULT NOW(),
-                    UNIQUE(workspace_id, source, source_id)
+                    updated_at  TEXT DEFAULT NOW()
                 )
             """)
         else:
@@ -512,6 +511,16 @@ class Transformer:
                     UNIQUE(workspace_id, source, source_id)
                 )
             """)
+        # Ensure the UNIQUE constraint exists — safe on both new and existing tables.
+        # CREATE TABLE IF NOT EXISTS skips creation for existing tables, so the
+        # UNIQUE constraint inside it never gets applied. This index guarantees it.
+        try:
+            self._conn.execute(f"""
+                CREATE UNIQUE INDEX IF NOT EXISTS uix_canonical_{entity_type}_upsert
+                ON canonical_{entity_type} (workspace_id, source, source_id)
+            """)
+        except Exception:
+            pass  # Index may already exist or constraint may be inline
         self._conn.commit()
 
         # ── Schema migration: detect and add missing columns ──────────────
