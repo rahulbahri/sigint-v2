@@ -557,6 +557,7 @@ def compute_health_score(
         "momentum_trend":     momentum_trend,
         "green_kpis_detail":  [{"key": k, "pct": round(p * 100, 1)} for k, p in green_kpis],
         "yellow_kpis_detail": [{"key": k, "pct": round(p * 100, 1)} for k, p in yellow_kpis],
+        "yellow_kpis_raw":    yellow_kpis,  # [(key, pct_ratio), ...] for /api/home enrichment
         "red_kpis_detail":    [{"key": k, "pct": round(p * 100, 1)} for k, p in red_kpis],
         "grey_kpis_list":     grey_kpis,
         "weights":            {"momentum": w_momentum, "target": w_target, "risk": w_risk},

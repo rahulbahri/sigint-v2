@@ -283,8 +283,19 @@ function KpiSlideOut({ kpi: initialKpi, status: initialStatus, onClose, onNaviga
 
   const info = KPI_INFO[currentKpi?.key] || {}
   const label = formatKpiLabel(currentKpi?.key)
-  const avg    = fmtKpiValue(currentKpi?.avg, currentKpi?.unit)
-  const target = fmtKpiValue(currentKpi?.target, currentKpi?.unit)
+
+  // ── Merge data: prefer detail API response, fall back to card-passed data ──
+  // When slideout opens from compact cards or navigation, currentKpi may only have {key}.
+  // The detail API fetches full data — use it when available.
+  const _rawAvg = detail?.avg ?? (detail?.time_series?.length
+    ? (() => { const v = detail.time_series.slice(-6).map(p => p.value); return v.reduce((a,b) => a+b, 0) / v.length })()
+    : null) ?? currentKpi?.avg
+  const _rawTarget = detail?.target_value ?? currentKpi?.target
+  const _direction = detail?.direction ?? currentKpi?.direction
+  const _unit = detail?.unit ?? currentKpi?.unit ?? ''
+
+  const avg    = fmtKpiValue(_rawAvg, _unit)
+  const target = fmtKpiValue(_rawTarget, _unit)
   const sparkColor = currentStatus === 'green' ? '#059669' : currentStatus === 'red' ? '#DC2626' : '#D97706'
   const statusColors = {
     red:   { pill: 'bg-red-100 text-red-700',     label: 'Below Target' },
@@ -293,41 +304,35 @@ function KpiSlideOut({ kpi: initialKpi, status: initialStatus, onClose, onNaviga
   }
   const sc = statusColors[currentStatus] || { pill: 'bg-slate-100 text-slate-600', label: 'No Target' }
 
-  // Direction guidance
-  const directionLabel = currentKpi?.direction === 'higher'
+  // Direction guidance — use merged direction
+  const directionLabel = _direction === 'higher'
     ? { arrow: '\u2191', text: 'Higher is better', color: 'text-emerald-600' }
-    : currentKpi?.direction === 'lower'
+    : _direction === 'lower'
     ? { arrow: '\u2193', text: 'Lower is better', color: 'text-blue-600' }
     : null
 
-  const isLowerBetter = currentKpi?.direction === 'lower'
+  const isLowerBetter = _direction === 'lower'
 
-  // Gap calculation: always shows how far from target in absolute terms
-  // Positive = better than target, Negative = worse than target (regardless of direction)
+  // Gap calculation: uses merged avg/target so it works even when card data was incomplete
   const gapPct = (() => {
-    if (currentKpi?.avg == null || !currentKpi?.target) return null
-    const a = currentKpi.avg, t = currentKpi.target
-    if (t === 0) return null
+    if (_rawAvg == null || _rawTarget == null || _rawTarget === 0) return null
+    const a = _rawAvg, t = _rawTarget
     if (isLowerBetter) {
-      // Lower is better: being below target is GOOD
-      // Gap = how much better/worse: (target - actual) / |target| * 100
       return ((t - a) / Math.abs(t) * 100).toFixed(1)
     } else {
-      // Higher is better: being above target is GOOD
       return ((a / t - 1) * 100).toFixed(1)
     }
   })()
 
   // Determine if the KPI is actually performing well or poorly based on direction
   const isPerformingWell = (() => {
-    if (currentKpi?.avg == null || !currentKpi?.target) return null
-    if (isLowerBetter) return currentKpi.avg <= currentKpi.target
-    return currentKpi.avg >= currentKpi.target
+    if (_rawAvg == null || _rawTarget == null) return null
+    if (isLowerBetter) return _rawAvg <= _rawTarget
+    return _rawAvg >= _rawTarget
   })()
 
   const narrative = () => {
-    if (currentKpi?.avg == null || !currentKpi?.target) return `No target has been set for ${label}. Add a target in Settings to track performance.`
-    const a = currentKpi.avg, t = currentKpi.target
+    if (_rawAvg == null || _rawTarget == null) return `No target has been set for ${label}. Add a target in Settings to track performance.`
 
     if (isPerformingWell) {
       const absDiff = Math.abs(gapPct)
@@ -454,7 +459,7 @@ function KpiSlideOut({ kpi: initialKpi, status: initialStatus, onClose, onNaviga
                 </div>
               )}
             </div>
-            <Sparkline data={currentKpi?.sparkline} color={sparkColor} width={96} height={40} />
+            <Sparkline data={currentKpi?.sparkline || detail?.time_series?.slice(-6).map(p => p.value)} color={sparkColor} width={96} height={40} />
           </div>
 
           {/* Narrative */}
@@ -1890,7 +1895,7 @@ export default function HomeScreen({ onNavigate, onAskAnika }) {
   // Determine visible KPIs for show all / collapse
   const topCritical = needs_attention?.slice(0, 3) || []
   const otherCritical = needs_attention?.slice(3) || []
-  const watchKpis = (health?.yellow_kpis_detail || []).slice(0, 4)
+  const watchKpis = (data.watch_zone || health?.yellow_kpis_detail || []).slice(0, 4)
   const greyKpis = (health?.grey_kpis_list || []).map(k => typeof k === 'string' ? { key: k } : k)
   const doingWellVisible = showAllDoingWell ? doing_well : doing_well?.slice(0, 6)
 
@@ -2310,21 +2315,22 @@ export default function HomeScreen({ onNavigate, onAskAnika }) {
           <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5">
             {watchKpis.map(kpi => {
               const wKey = kpi.key || kpi
-              const hasFullData = kpi.avg != null || kpi.target != null
+              // Enriched watch_zone data has avg/target/sparkline; legacy yellow_kpis_detail only has key+pct
+              const hasFullData = kpi.avg != null
               if (hasFullData) {
                 return (
-                  <KpiCard key={wKey} kpi={{ key: wKey, avg: kpi.avg, target: kpi.target, unit: kpi.unit, sparkline: kpi.sparkline, direction: kpi.direction }} status="amber"
+                  <KpiCard key={wKey} kpi={{ key: wKey, avg: kpi.avg, target: kpi.target, unit: kpi.unit, sparkline: kpi.sparkline, direction: kpi.direction, domain: kpi.domain, domain_label: kpi.domain_label }} status="amber"
                     onOpen={(k, s) => setSlideOut({ kpi: k, status: s })} />
                 )
               }
-              // Render a compact watch card from limited yellow_kpis_detail data (key + pct)
+              // Fallback: compact card when only key+pct available (shouldn't happen with enriched data)
               const wLabel = formatKpiLabel(wKey)
               const wInfo = KPI_INFO[wKey]
               const wPct = kpi.pct != null ? `${kpi.pct}%` : null
               return (
                 <button
                   key={wKey}
-                  onClick={() => setSlideOut({ kpi: { key: wKey }, status: 'amber' })}
+                  onClick={() => setSlideOut({ kpi: { key: wKey, pct: kpi.pct }, status: 'amber' })}
                   className="w-full text-left card p-3.5 bg-amber-50 border-amber-200 hover:border-amber-300 hover:shadow-md transition-all group cursor-pointer"
                 >
                   <div className="flex items-start justify-between gap-2 mb-1.5">

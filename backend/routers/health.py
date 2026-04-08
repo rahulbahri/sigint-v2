@@ -374,6 +374,23 @@ def get_home(
             spot["benchmark"] = bench
         doing_well_enriched.append(spot)
 
+    # ── Enrich yellow (watch zone) KPIs with full spotlight data ────────────
+    yellow_enriched = []
+    for k, pct_ratio in health.get("yellow_kpis_raw", []):
+        spot = _kpi_spotlight(k)
+        spot["pct"]    = round(pct_ratio * 100, 1)
+        spot["status"] = "yellow"
+        cr = composite_map.get(k)
+        if cr:
+            spot["domain"]       = cr["domain"]
+            spot["domain_label"] = cr["domain_label"]
+        bench = benchmark_position(
+            k, spot.get("avg"), spot.get("direction", "higher"), company_stage,
+        )
+        if bench:
+            spot["benchmark"] = bench
+        yellow_enriched.append(spot)
+
     # ── P1.3: Domain-level narratives ─────────────────────────────────────────
     domain_groups = health.get("domain_groups", [])
     total_red = len(health.get("needs_attention", []))
@@ -395,6 +412,7 @@ def get_home(
         "data_period":     data_period,
         "needs_attention": needs_enriched,
         "doing_well":      doing_well_enriched,
+        "watch_zone":      yellow_enriched,
         "domain_groups":   domain_groups,
         "domain_narratives": domain_narrs,
         "period_comparison": period_delta,
