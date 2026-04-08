@@ -2199,6 +2199,53 @@ _SHEET_TO_ENTITY = {
 }
 
 
+@router.get("/api/debug/canonical-status", tags=["Data"])
+def canonical_status(request: Request):
+    """
+    Diagnostic endpoint: shows row counts per canonical table and monthly_data
+    status so we can verify if the canonical upload processed correctly.
+    """
+    workspace_id = _get_workspace(request)
+    conn = get_db()
+    result = {"workspace_id": workspace_id, "canonical_tables": {}, "monthly_data": {}}
+
+    for entity_type in _SHEET_TO_ENTITY.values():
+        table = f"canonical_{entity_type}"
+        try:
+            total = conn.execute(f"SELECT COUNT(*) FROM {table} WHERE workspace_id=?", [workspace_id]).fetchone()
+            by_source = conn.execute(
+                f"SELECT source, COUNT(*) as cnt FROM {table} WHERE workspace_id=? GROUP BY source",
+                [workspace_id],
+            ).fetchall()
+            result["canonical_tables"][entity_type] = {
+                "total": total[0] if total else 0,
+                "by_source": {r[0]: r[1] for r in by_source} if by_source else {},
+            }
+        except Exception as e:
+            result["canonical_tables"][entity_type] = {"error": str(e)}
+
+    try:
+        md_total = conn.execute("SELECT COUNT(*) FROM monthly_data WHERE workspace_id=?", [workspace_id]).fetchone()
+        md_by_upload = conn.execute(
+            "SELECT upload_id, COUNT(*) FROM monthly_data WHERE workspace_id=? GROUP BY upload_id",
+            [workspace_id],
+        ).fetchall()
+        md_sample = conn.execute(
+            "SELECT year, month, LENGTH(data_json) as json_len FROM monthly_data WHERE workspace_id=? ORDER BY year DESC, month DESC LIMIT 3",
+            [workspace_id],
+        ).fetchall()
+        result["monthly_data"] = {
+            "total_rows": md_total[0] if md_total else 0,
+            "by_upload_id": {str(r[0]): r[1] for r in md_by_upload} if md_by_upload else {},
+            "latest_months": [{"year": r[0], "month": r[1], "json_bytes": r[2]} for r in md_sample] if md_sample else [],
+        }
+    except Exception as e:
+        result["monthly_data"] = {"error": str(e)}
+
+    conn.close()
+    return result
+
+
 @router.get("/api/template/canonical-workbook.xlsx", tags=["Data"])
 def download_canonical_template(request: Request):
     """
@@ -2224,52 +2271,95 @@ import threading as _threading
 def _run_canonical_ingest(workspace_id: str, parsed_sheets: dict, filename: str):
     """
     Background worker: upsert parsed sheet data into canonical tables,
-    then run the full KPI aggregator. Runs in a daemon thread to avoid
-    blocking the HTTP response (8,000+ rows can take 30-60s on PG).
+    then run the full KPI aggregator. Prints at every stage for Render log visibility.
     """
+    import traceback
+    print(f"[CANONICAL] Starting ingest for workspace={workspace_id}, file={filename}, sheets={len(parsed_sheets)}")
+
     try:
         conn = get_db()
-        source_name = "canonical_xlsx"
-        transformer = Transformer(conn, workspace_id, source_name)
-
-        # Clean previous canonical_xlsx data
-        for entity_type in _SHEET_TO_ENTITY.values():
-            try:
-                conn.execute(
-                    f"DELETE FROM canonical_{entity_type} WHERE workspace_id=? AND source=?",
-                    [workspace_id, source_name],
-                )
-            except Exception:
-                pass
-
-        total = 0
-        for sheet_name, (entity_type, rows) in parsed_sheets.items():
-            try:
-                count = transformer.upsert_canonical(entity_type, rows)
-                total += count
-            except Exception as e:
-                import logging
-                logging.getLogger(__name__).error(f"Canonical upload {sheet_name}: {e}")
-
-        # Clear ALL existing monthly_data so canonical workbook is the sole source.
-        # Without this, old seed/CSV data (with real upload_ids) overrides the
-        # aggregator output due to the CSV-priority merge logic in kpi_aggregator.
-        if total > 0:
-            conn.execute("DELETE FROM monthly_data WHERE workspace_id=?", [workspace_id])
-            conn.commit()
-            # Trigger full KPI aggregation — now writes with no competition
-            aggregate_canonical_to_monthly(conn, workspace_id)
-
-        conn.commit()
-        _audit(conn, "upload_canonical_xlsx_complete", {
-            "filename": filename,
-            "total_upserted": total,
-            "sheets": len(parsed_sheets),
-        }, workspace_id=workspace_id)
-        conn.close()
+        print(f"[CANONICAL] DB connection established")
     except Exception as e:
-        import logging
-        logging.getLogger(__name__).error(f"Canonical ingest failed: {e}")
+        print(f"[CANONICAL] FATAL: get_db() failed: {e}")
+        traceback.print_exc()
+        return
+
+    source_name = "canonical_xlsx"
+
+    # Step 1: Clean previous canonical_xlsx data
+    for entity_type in _SHEET_TO_ENTITY.values():
+        try:
+            conn.execute(
+                f"DELETE FROM canonical_{entity_type} WHERE workspace_id=? AND source=?",
+                [workspace_id, source_name],
+            )
+        except Exception:
+            pass  # Table may not exist yet
+    try:
+        conn.commit()
+        print(f"[CANONICAL] Cleaned previous canonical_xlsx data")
+    except Exception as e:
+        print(f"[CANONICAL] WARN: commit after clean failed: {e}")
+
+    # Step 2: Upsert each sheet into canonical tables
+    total = 0
+    try:
+        transformer = Transformer(conn, workspace_id, source_name)
+    except Exception as e:
+        print(f"[CANONICAL] FATAL: Transformer init failed: {e}")
+        traceback.print_exc()
+        return
+
+    for sheet_name, (entity_type, rows) in parsed_sheets.items():
+        try:
+            count = transformer.upsert_canonical(entity_type, rows)
+            total += count
+            print(f"[CANONICAL] {sheet_name}: {count} rows upserted")
+        except Exception as e:
+            print(f"[CANONICAL] ERROR {sheet_name}: {e}")
+            traceback.print_exc()
+
+    print(f"[CANONICAL] Total upserted: {total}")
+
+    if total == 0:
+        print(f"[CANONICAL] ABORT: no rows upserted, skipping aggregation")
+        return
+
+    # Step 3: Clear ALL existing monthly_data (so canonical is sole source)
+    try:
+        conn.execute("DELETE FROM monthly_data WHERE workspace_id=?", [workspace_id])
+        conn.commit()
+        print(f"[CANONICAL] Cleared monthly_data for workspace")
+    except Exception as e:
+        print(f"[CANONICAL] ERROR clearing monthly_data: {e}")
+        traceback.print_exc()
+
+    # Step 4: Run full KPI aggregation
+    try:
+        print(f"[CANONICAL] Starting KPI aggregation...")
+        summary = aggregate_canonical_to_monthly(conn, workspace_id)
+        kpis_count = len(summary.get("kpis_computed", set())) if isinstance(summary, dict) else 0
+        months = summary.get("months_written", 0) if isinstance(summary, dict) else 0
+        errors = summary.get("errors", []) if isinstance(summary, dict) else []
+        print(f"[CANONICAL] Aggregation complete: {months} months, {kpis_count} KPIs")
+        if errors:
+            print(f"[CANONICAL] Aggregation errors: {errors[:5]}")
+    except Exception as e:
+        print(f"[CANONICAL] ERROR in aggregation: {e}")
+        traceback.print_exc()
+
+    # Step 5: Final commit
+    try:
+        conn.commit()
+        print(f"[CANONICAL] Final commit done")
+    except Exception as e:
+        print(f"[CANONICAL] ERROR final commit: {e}")
+
+    try:
+        conn.close()
+    except Exception:
+        pass
+    print(f"[CANONICAL] Ingest complete for {filename}")
 
 
 @router.post("/api/upload/canonical-xlsx", tags=["Data"])
