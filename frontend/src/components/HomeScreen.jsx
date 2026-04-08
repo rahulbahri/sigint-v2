@@ -281,10 +281,30 @@ function KpiSlideOut({ kpi: initialKpi, status: initialStatus, onClose, onNaviga
   const [currentKpi, setCurrentKpi] = useState(initialKpi)
   const [currentStatus, setCurrentStatus] = useState(initialStatus)
 
+  // ── Hooks first (React rules: all hooks before any computed values) ─────
+  // Fetch enriched detail from API
+  const [detail, setDetail] = useState(null)
+  const [detailLoading, setDetailLoading] = useState(false)
+
+  useEffect(() => {
+    if (!currentKpi?.key) return
+    setDetail(null) // Clear stale detail when navigating to a new KPI
+    setDetailLoading(true)
+    axios.get(`/api/kpi-detail/${currentKpi.key}`)
+      .then(r => {
+        setDetail(r.data)
+        // Override status from API's direction-aware computation (never trust the prop)
+        if (r.data?.status) setCurrentStatus(r.data.status)
+      })
+      .catch(() => setDetail(null))
+      .finally(() => setDetailLoading(false))
+  }, [currentKpi?.key])
+
+  // ── Computed display values ─────────────────────────────────────────────
   const info = KPI_INFO[currentKpi?.key] || {}
   const label = formatKpiLabel(currentKpi?.key)
 
-  // ── Merge data: prefer detail API response, fall back to card-passed data ──
+  // Merge data: prefer detail API response, fall back to card-passed data.
   // When slideout opens from compact cards or navigation, currentKpi may only have {key}.
   // The detail API fetches full data — use it when available.
   const _rawAvg = detail?.avg ?? (detail?.time_series?.length
@@ -346,23 +366,6 @@ function KpiSlideOut({ kpi: initialKpi, status: initialStatus, onClose, onNaviga
       }
     }
   }
-
-  // Fetch enriched detail from API
-  const [detail, setDetail] = useState(null)
-  const [detailLoading, setDetailLoading] = useState(false)
-
-  useEffect(() => {
-    if (!currentKpi?.key) return
-    setDetailLoading(true)
-    axios.get(`/api/kpi-detail/${currentKpi.key}`)
-      .then(r => {
-        setDetail(r.data)
-        // Override status from API's direction-aware computation (never trust the prop)
-        if (r.data?.status) setCurrentStatus(r.data.status)
-      })
-      .catch(() => setDetail(null))
-      .finally(() => setDetailLoading(false))
-  }, [currentKpi?.key])
 
   // Navigate to a downstream KPI
   const navigateToKpi = (dkKey, dkStatus) => {
