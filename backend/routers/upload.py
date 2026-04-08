@@ -1826,3 +1826,396 @@ def reseed_canonical(request: Request):
         "message": "Reseed running in background. Takes 2-5 minutes. Refresh the dashboard to see data.",
     }
 
+
+# ═════════════════════════════════════════════════════════════════════════════
+# KPI-Level Data Export & Import (XLSX — columnar format)
+# ═════════════════════════════════════════════════════════════════════════════
+
+from openpyxl import Workbook, load_workbook
+from openpyxl.styles import Font, PatternFill, Alignment
+from openpyxl.utils import get_column_letter
+from fastapi.responses import StreamingResponse
+from core.kpi_defs import KPI_DEFS, EXTENDED_ONTOLOGY_METRICS
+
+
+@router.get("/api/export/monthly-data.xlsx", tags=["Data"])
+def export_monthly_data_xlsx(request: Request):
+    """
+    Download all monthly KPI data as an XLSX workbook with two sheets:
+    - Sheet 1 'Monthly Data': year | month | kpi_1 | kpi_2 | ... (one row per month)
+    - Sheet 2 'KPI Reference': key | name | unit | direction | domain | formula
+
+    The exported file can be edited and re-uploaded via POST /api/upload/kpi-xlsx.
+    """
+    workspace_id = _get_workspace(request)
+    conn = get_db()
+
+    rows = conn.execute(
+        "SELECT year, month, data_json FROM monthly_data WHERE workspace_id=? ORDER BY year, month",
+        [workspace_id],
+    ).fetchall()
+
+    if not rows:
+        raise HTTPException(status_code=404, detail="No monthly data found. Upload data first.")
+
+    # Parse all rows and collect KPI keys
+    all_keys = set()
+    parsed = []
+    for r in rows:
+        d = json.loads(r["data_json"])
+        kpis = {k: v for k, v in d.items() if not k.startswith("_") and k not in ("year", "month")}
+        all_keys.update(kpis.keys())
+        parsed.append({"year": r["year"], "month": r["month"], "kpis": kpis})
+    all_keys = sorted(all_keys)
+
+    # Build KPI metadata lookup
+    kpi_meta = {}
+    for d in KPI_DEFS + EXTENDED_ONTOLOGY_METRICS:
+        k = d.get("key")
+        if k:
+            kpi_meta[k] = d
+
+    # ── Build workbook ──────────────────────────────────────────────────────
+    wb = Workbook()
+    hdr_font = Font(bold=True, color="FFFFFF", size=11)
+    hdr_fill = PatternFill(start_color="1F4E79", end_color="1F4E79", fill_type="solid")
+    hdr_align = Alignment(horizontal="center", wrap_text=True)
+
+    # Sheet 1: Monthly Data
+    ws = wb.active
+    ws.title = "Monthly Data"
+    headers = ["year", "month"] + all_keys
+    for ci, h in enumerate(headers, 1):
+        c = ws.cell(row=1, column=ci, value=h)
+        c.font, c.fill, c.alignment = hdr_font, hdr_fill, hdr_align
+
+    for ri, p in enumerate(parsed, 2):
+        ws.cell(row=ri, column=1, value=p["year"])
+        ws.cell(row=ri, column=2, value=p["month"])
+        for ci, k in enumerate(all_keys, 3):
+            v = p["kpis"].get(k)
+            if v is not None:
+                ws.cell(row=ri, column=ci, value=round(float(v), 4) if isinstance(v, (int, float)) else v)
+
+    for ci in range(1, len(headers) + 1):
+        ws.column_dimensions[get_column_letter(ci)].width = min(max(len(str(headers[ci - 1])) + 3, 10), 22)
+    ws.freeze_panes = "C2"
+
+    # Sheet 2: KPI Reference
+    ws2 = wb.create_sheet("KPI Reference")
+    ref_hdrs = ["key", "name", "unit", "direction", "domain", "formula"]
+    for ci, h in enumerate(ref_hdrs, 1):
+        c = ws2.cell(row=1, column=ci, value=h)
+        c.font, c.fill, c.alignment = hdr_font, hdr_fill, hdr_align
+    for ri, k in enumerate(all_keys, 2):
+        m = kpi_meta.get(k, {})
+        ws2.cell(row=ri, column=1, value=k)
+        ws2.cell(row=ri, column=2, value=m.get("name", k))
+        ws2.cell(row=ri, column=3, value=m.get("unit", ""))
+        ws2.cell(row=ri, column=4, value=m.get("direction", ""))
+        ws2.cell(row=ri, column=5, value=m.get("domain", ""))
+        ws2.cell(row=ri, column=6, value=m.get("formula", ""))
+    for ci in range(1, len(ref_hdrs) + 1):
+        ws2.column_dimensions[get_column_letter(ci)].width = 28
+    ws2.freeze_panes = "A2"
+
+    # ── Stream response ─────────────────────────────────────────────────────
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    _audit(conn, "export_monthly_data", {"months": len(parsed), "kpis": len(all_keys)}, workspace_id=workspace_id)
+    return StreamingResponse(
+        buf,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": "attachment; filename=axiom_monthly_data.xlsx"},
+    )
+
+
+@router.post("/api/upload/kpi-xlsx", tags=["Data"])
+async def upload_kpi_xlsx(request: Request, file: UploadFile = File(...)):
+    """
+    Upload an XLSX file with pre-computed KPI data (columnar format).
+
+    Expected format — Sheet 1 must have:
+    - Column A: 'year' (integer, e.g. 2024)
+    - Column B: 'month' (integer 1-12)
+    - Columns C+: KPI keys as headers, values in rows
+
+    This REPLACES all existing monthly_data for the workspace.
+    """
+    workspace_id = _require_workspace(request)
+    conn = get_db()
+
+    # Read file
+    contents = await file.read()
+    if not file.filename.endswith((".xlsx", ".xls")):
+        raise HTTPException(status_code=400, detail="File must be .xlsx or .xls format.")
+
+    try:
+        wb = load_workbook(io.BytesIO(contents), read_only=True, data_only=True)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Cannot read XLSX: {str(e)}")
+
+    ws = wb.active
+    if ws is None or ws.max_row < 2:
+        raise HTTPException(status_code=400, detail="Workbook has no data rows.")
+
+    # Parse headers
+    headers = [str(c.value).strip().lower() if c.value else "" for c in ws[1]]
+    if "year" not in headers or "month" not in headers:
+        raise HTTPException(status_code=400, detail="Sheet must have 'year' and 'month' columns.")
+
+    year_col = headers.index("year")
+    month_col = headers.index("month")
+    kpi_cols = [(i, h) for i, h in enumerate(headers) if h and h not in ("year", "month", "")]
+
+    if not kpi_cols:
+        raise HTTPException(status_code=400, detail="No KPI columns found (need at least one column besides year/month).")
+
+    # Parse data rows
+    imported = []
+    for row in ws.iter_rows(min_row=2, values_only=True):
+        if row is None or len(row) <= max(year_col, month_col):
+            continue
+        yr = row[year_col]
+        mo = row[month_col]
+        if yr is None or mo is None:
+            continue
+        try:
+            yr = int(yr)
+            mo = int(mo)
+        except (ValueError, TypeError):
+            continue
+        if not (2000 <= yr <= 2099 and 1 <= mo <= 12):
+            continue
+
+        data = {}
+        for ci, kpi_key in kpi_cols:
+            if ci < len(row) and row[ci] is not None:
+                try:
+                    data[kpi_key] = float(row[ci])
+                except (ValueError, TypeError):
+                    pass  # Skip non-numeric values
+
+        if data:
+            imported.append({"year": yr, "month": mo, "data_json": json.dumps(data)})
+
+    wb.close()
+
+    if not imported:
+        raise HTTPException(status_code=400, detail="No valid data rows found. Check that year/month columns have valid values.")
+
+    # ── Replace existing data ───────────────────────────────────────────────
+    # Create upload record
+    now = datetime.utcnow().isoformat()
+    cursor = conn.execute(
+        "INSERT INTO uploads (filename, uploaded_at, row_count, detected_columns, workspace_id) VALUES (?,?,?,?,?)",
+        [file.filename, now, len(imported), json.dumps([k for _, k in kpi_cols]), workspace_id],
+    )
+    upload_id = cursor.lastrowid
+
+    # Delete existing monthly_data for this workspace
+    conn.execute("DELETE FROM monthly_data WHERE workspace_id=?", [workspace_id])
+
+    # Insert new data
+    for row in imported:
+        conn.execute(
+            "INSERT INTO monthly_data (upload_id, year, month, data_json, workspace_id) VALUES (?,?,?,?,?)",
+            [upload_id, row["year"], row["month"], row["data_json"], workspace_id],
+        )
+
+    conn.commit()
+    _audit(conn, "upload_kpi_xlsx", {
+        "filename": file.filename,
+        "months": len(imported),
+        "kpi_columns": len(kpi_cols),
+        "replaced": True,
+    }, workspace_id=workspace_id)
+
+    return {
+        "status": "success",
+        "months_imported": len(imported),
+        "kpi_columns": len(kpi_cols),
+        "upload_id": upload_id,
+        "message": f"Imported {len(imported)} months of data with {len(kpi_cols)} KPI columns. All previous data replaced.",
+    }
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# Canonical Data Workbook — 12-Sheet XLSX Upload & Template Download
+# ═════════════════════════════════════════════════════════════════════════════
+
+from elt.transformer import Transformer
+from elt.kpi_aggregator import aggregate_canonical_to_monthly
+
+# Sheet name → canonical entity type mapping
+_SHEET_TO_ENTITY = {
+    "revenue":        "revenue",
+    "expenses":       "expenses",
+    "customers":      "customers",
+    "pipeline":       "pipeline",
+    "invoices":       "invoices",
+    "employees":      "employees",
+    "marketing":      "marketing",
+    "balance sheet":  "balance_sheet",
+    "time tracking":  "time_tracking",
+    "surveys":        "surveys",
+    "support":        "support",
+    "product usage":  "product_usage",
+}
+
+
+@router.get("/api/template/canonical-workbook.xlsx", tags=["Data"])
+def download_canonical_template(request: Request):
+    """
+    Download a 12-sheet XLSX template with realistic pre-filled B2B SaaS data.
+    Edit the data and re-upload via POST /api/upload/canonical-xlsx.
+    The platform will compute all 61 KPIs from the canonical data.
+    """
+    from scripts.generate_canonical_workbook import generate_canonical_workbook
+    wb = generate_canonical_workbook()
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    return StreamingResponse(
+        buf,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": "attachment; filename=axiom_canonical_workbook.xlsx"},
+    )
+
+
+@router.post("/api/upload/canonical-xlsx", tags=["Data"])
+async def upload_canonical_xlsx(request: Request, file: UploadFile = File(...)):
+    """
+    Upload a 12-sheet XLSX workbook with canonical business data.
+
+    Each sheet maps to a canonical table (Revenue, Expenses, Customers, Pipeline,
+    Invoices, Employees, Marketing, Balance Sheet, Time Tracking, Surveys, Support,
+    Product Usage). Not all sheets are required.
+
+    After ingestion, the full KPI aggregator runs to compute all 61 KPIs,
+    health scores, and causal metrics from the canonical data.
+
+    This REPLACES previous canonical_xlsx data (connector and CSV data preserved).
+    """
+    workspace_id = _require_workspace(request)
+    conn = get_db()
+
+    # Validate file
+    contents = await file.read()
+    if not file.filename.lower().endswith((".xlsx", ".xls")):
+        raise HTTPException(status_code=400, detail="File must be .xlsx format.")
+
+    try:
+        wb = load_workbook(io.BytesIO(contents), read_only=True, data_only=True)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Cannot read XLSX: {str(e)}")
+
+    # ── Process each sheet ───────────────────────────────────────────────────
+    source_name = "canonical_xlsx"
+    transformer = Transformer(conn, workspace_id, source_name)
+    sheet_results = {}
+    total_upserted = 0
+
+    # Clean previous canonical_xlsx data for this workspace (idempotent re-upload)
+    for entity_type in _SHEET_TO_ENTITY.values():
+        table = f"canonical_{entity_type}"
+        try:
+            conn.execute(
+                f"DELETE FROM {table} WHERE workspace_id=? AND source=?",
+                [workspace_id, source_name],
+            )
+        except Exception:
+            pass  # Table may not exist yet — Transformer will create it
+
+    for ws in wb.worksheets:
+        sheet_name = ws.title.strip().lower()
+        entity_type = _SHEET_TO_ENTITY.get(sheet_name)
+        if entity_type is None:
+            continue  # Skip unrecognised sheets (e.g., README)
+
+        # Read headers from row 1
+        headers = []
+        for cell in ws[1]:
+            val = str(cell.value).strip().lower() if cell.value else ""
+            headers.append(val)
+
+        if not headers or all(h == "" for h in headers):
+            continue
+
+        # Read data rows
+        rows = []
+        for row in ws.iter_rows(min_row=2, values_only=True):
+            if row is None or all(v is None for v in row):
+                continue
+            record = {}
+            for ci, val in enumerate(row):
+                if ci < len(headers) and headers[ci] and val is not None:
+                    record[headers[ci]] = val
+            if not record:
+                continue
+
+            # Ensure source and source_id are set
+            record["source"] = source_name
+            if "source_id" not in record or not record["source_id"]:
+                record["source_id"] = f"{entity_type}_{len(rows)}"
+
+            rows.append(record)
+
+        if not rows:
+            continue
+
+        # Upsert into canonical table
+        try:
+            count = transformer.upsert_canonical(entity_type, rows)
+            sheet_results[ws.title] = {"rows": count, "status": "ok"}
+            total_upserted += count
+        except Exception as e:
+            sheet_results[ws.title] = {"rows": 0, "status": f"error: {str(e)}"}
+
+    wb.close()
+
+    if total_upserted == 0:
+        raise HTTPException(
+            status_code=400,
+            detail="No data rows found in any recognised sheet. "
+                   "Expected sheets: Revenue, Expenses, Customers, Pipeline, "
+                   "Invoices, Employees, Marketing, Balance Sheet, Time Tracking, "
+                   "Surveys, Support, Product Usage.",
+        )
+
+    # ── Trigger full KPI aggregation ─────────────────────────────────────────
+    agg_summary = {}
+    try:
+        agg_summary = aggregate_canonical_to_monthly(conn, workspace_id)
+    except Exception as e:
+        agg_summary = {"error": str(e)}
+
+    conn.commit()
+
+    _audit(conn, "upload_canonical_xlsx", {
+        "filename": file.filename,
+        "sheets": sheet_results,
+        "total_upserted": total_upserted,
+        "aggregation": {k: v for k, v in agg_summary.items() if k != "kpis_computed"} if isinstance(agg_summary, dict) else {},
+    }, workspace_id=workspace_id)
+
+    # Serialize kpis_computed (it's a set)
+    kpis_list = sorted(agg_summary.get("kpis_computed", set())) if isinstance(agg_summary, dict) else []
+
+    return {
+        "status": "success",
+        "sheets_processed": sheet_results,
+        "total_records_upserted": total_upserted,
+        "aggregation": {
+            "months_written": agg_summary.get("months_written", 0) if isinstance(agg_summary, dict) else 0,
+            "kpis_computed": len(kpis_list),
+            "kpi_keys": kpis_list[:20],  # First 20 for display
+        },
+        "message": (
+            f"Uploaded {total_upserted} records across {len(sheet_results)} sheets. "
+            f"Aggregator computed {len(kpis_list)} KPIs across "
+            f"{agg_summary.get('months_written', 0) if isinstance(agg_summary, dict) else 0} months."
+        ),
+    }
+
