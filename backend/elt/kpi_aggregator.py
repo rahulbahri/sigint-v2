@@ -395,7 +395,8 @@ def aggregate_canonical_to_monthly(conn, workspace_id: str) -> dict:
             # Prevents _diagnostics, _data_quality, and other metadata from leaking forward.
             _INTERNAL_STATE_KEYS = {"_active_customers", "_revenue_customer_ids",
                                     "_total_revenue", "_total_expenses",
-                                    "_opex", "_cogs", "_customer_amounts", "_ending_ar"}
+                                    "_opex", "_cogs", "_sm_spend",
+                                    "_customer_amounts", "_ending_ar"}
             prev_kpis = {}
             for _pk, _pv in kpis.items():
                 if _pk in _INTERNAL_STATE_KEYS:
@@ -1118,6 +1119,7 @@ def _compute_month_kpis(
     total_exp     = exp.get("total_expenses", 0.0)
     cogs          = exp.get("cogs", 0.0)
     sm_exp        = exp.get("sm_expenses", 0.0)
+    kpis["_sm_spend"] = sm_exp  # carry forward for Magic Number computation
     new_cust      = cust.get("new_customers", 0)
     headcount     = emp.get("headcount", 0)
     inv_total     = inv.get("invoice_total", 0.0)
@@ -1622,10 +1624,48 @@ def _compute_derived_kpis(
                 _record_diagnostic(kpis, "customer_decay_slope", None,
                     "Prior month's churn rate was unavailable — cannot compute delta.")
 
+        # ── Investor metrics ──────────────────────────────────────────────
+        # Rule of 40 = Revenue Growth % + EBITDA Margin % (or Operating Margin)
+        rg = kpis.get("revenue_growth")
+        em = kpis.get("ebitda_margin") or kpis.get("operating_margin")
+        if rg is not None and em is not None:
+            _safe_set(kpis, "rule_of_40", rg + em)
+        elif "rule_of_40" not in kpis:
+            _record_diagnostic(kpis, "rule_of_40", None,
+                "Requires revenue growth and EBITDA (or operating) margin.")
+
+        # Gross Profit (absolute $)
+        _tr = kpis.get("_total_revenue", 0) or 0
+        _cg = kpis.get("_cogs", 0) or 0
+        if _tr > 0:
+            _safe_set(kpis, "gross_profit", _tr - _cg)
+
+        # ARPU
+        _nc = kpis.get("_active_customers", 0) or 0
+        if _nc > 0 and _tr > 0:
+            _safe_set(kpis, "arpu", _tr / _nc)
+
+        # Magic Number = Net New ARR (quarterly) / Prior Quarter S&M Spend
+        # Approximation: (ARR_current - ARR_3_months_ago) / (sum of last 3 months S&M)
+        if i >= 3:
+            arr_now = kpis.get("arr")
+            arr_3ago = monthly_kpis.get(sorted_months[i - 3], {}).get("arr")
+            sm_3mo = sum(
+                monthly_kpis.get(sorted_months[j], {}).get("_sm_spend", 0) or 0
+                for j in range(max(0, i - 2), i + 1)
+            )
+            if arr_now is not None and arr_3ago is not None and sm_3mo > 0:
+                net_new_arr = arr_now - arr_3ago
+                _safe_set(kpis, "magic_number", net_new_arr / sm_3mo)
+            elif "magic_number" not in kpis:
+                _record_diagnostic(kpis, "magic_number", None,
+                    "Requires 3+ months of ARR data and S&M spend to compute quarterly magic number.")
+
         # Remove internal-only keys before final output
         for internal_key in ("_active_customers", "_revenue_customer_ids",
                              "_total_revenue", "_total_expenses",
-                             "_opex", "_cogs", "_customer_amounts", "_ending_ar"):
+                             "_opex", "_cogs", "_sm_spend",
+                             "_customer_amounts", "_ending_ar"):
             kpis.pop(internal_key, None)
 
 

@@ -49,6 +49,15 @@ EXTENDED_ONTOLOGY_METRICS = [
     {"key": "cash_burn",          "name": "Monthly Cash Burn",           "domain": "cashflow",     "unit": "usd",    "direction": "lower"},
     {"key": "cac",                "name": "Customer Acquisition Cost",   "domain": "growth",       "unit": "usd",    "direction": "lower"},
     {"key": "billable_utilization","name": "Billable Utilization",       "domain": "efficiency",   "unit": "pct",    "direction": "higher"},
+    # Key investor metrics
+    {"key": "rule_of_40",         "name": "Rule of 40",                 "domain": "profitability","unit": "pct",    "direction": "higher",
+     "formula": "Revenue Growth % + EBITDA Margin % (or Operating Margin %). Score ≥ 40 is healthy."},
+    {"key": "magic_number",       "name": "SaaS Magic Number",          "domain": "growth",       "unit": "ratio",  "direction": "higher",
+     "formula": "Net New ARR (quarterly) / Prior Quarter S&M Spend. >0.75 = efficient growth."},
+    {"key": "gross_profit",       "name": "Gross Profit",               "domain": "profitability","unit": "usd",    "direction": "higher",
+     "formula": "Total Revenue - COGS. Absolute dollar gross profit."},
+    {"key": "arpu",               "name": "Average Revenue Per User",   "domain": "revenue",      "unit": "usd",    "direction": "higher",
+     "formula": "Total Revenue / Active Customers."},
 ]
 
 KPI_DEFS = [
@@ -651,6 +660,26 @@ EXTENDED_CAUSATION_RULES = {
         "downstream_impact": ["burn_multiple", "cash_runway"],
         "corrective_actions": ["Optimize acquisition channel mix", "Review pricing to increase ARPU", "Improve gross margin through COGS reduction"],
     },
+    "rule_of_40": {
+        "root_causes": ["Revenue growth slowing while margins not expanding", "Margin compression without offsetting growth acceleration", "Both growth and margins declining simultaneously"],
+        "downstream_impact": ["burn_multiple", "cash_runway", "growth_efficiency"],
+        "corrective_actions": ["If growth is strong, focus on path to profitability", "If profitable, invest in growth acceleration", "Identify which lever (growth or margin) has more headroom"],
+    },
+    "magic_number": {
+        "root_causes": ["S&M spend increasing faster than ARR growth", "Sales cycle lengthening reducing conversion", "High churn eroding new ARR gains"],
+        "downstream_impact": ["burn_multiple", "sales_efficiency", "cac_payback"],
+        "corrective_actions": ["Audit S&M spend by channel for ROI", "Focus on channels with shortest payback", "Reduce churn to preserve net new ARR"],
+    },
+    "gross_profit": {
+        "root_causes": ["Revenue declining", "COGS increasing (hosting, infrastructure, direct costs)", "Revenue mix shifting to lower-margin products"],
+        "downstream_impact": ["operating_margin", "cash_burn", "cash_runway"],
+        "corrective_actions": ["Review pricing strategy", "Optimize hosting and infrastructure costs", "Shift revenue mix toward higher-margin products"],
+    },
+    "arpu": {
+        "root_causes": ["Downmarket customer acquisition (smaller deals)", "Discount pressure from competitive dynamics", "Product-led growth bringing lower-ACV customers"],
+        "downstream_impact": ["customer_ltv", "revenue_growth", "burn_multiple"],
+        "corrective_actions": ["Analyze ARPU by segment and channel", "Implement value-based pricing tiers", "Focus expansion revenue on existing accounts"],
+    },
 }
 
 # Merged causation rules for the graph endpoint
@@ -943,6 +972,19 @@ BENCHMARKS = {
         "series_a": {"p25": 3,   "p50": 5,   "p75": 9},
         "series_b": {"p25": 4,   "p50": 6,   "p75": 10},
         "series_c": {"p25": 5,   "p50": 8,   "p75": 12},
+    },
+    # Investor metrics
+    "rule_of_40": {
+        "seed":     {"p25": 15,  "p50": 30,  "p75": 55},
+        "series_a": {"p25": 20,  "p50": 35,  "p75": 60},
+        "series_b": {"p25": 25,  "p50": 40,  "p75": 65},
+        "series_c": {"p25": 30,  "p50": 45,  "p75": 70},
+    },
+    "magic_number": {
+        "seed":     {"p25": 0.3, "p50": 0.5, "p75": 0.8},
+        "series_a": {"p25": 0.4, "p50": 0.7, "p75": 1.0},
+        "series_b": {"p25": 0.5, "p50": 0.8, "p75": 1.2},
+        "series_c": {"p25": 0.6, "p50": 0.9, "p75": 1.3},
     },
 }
 # ── KPI Metric Type Classification ──────────────────────────────────────────
