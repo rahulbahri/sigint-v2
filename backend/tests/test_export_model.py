@@ -74,7 +74,7 @@ async def test_export_empty_workspace(client: AsyncClient, auth_headers):
     # Should be a valid XLSX
     wb = load_workbook(io.BytesIO(resp.content))
     assert "Assumptions" in wb.sheetnames
-    assert len(wb.sheetnames) == 7
+    assert len(wb.sheetnames) == 9
 
 
 @pytest.mark.anyio
@@ -87,7 +87,7 @@ async def test_export_with_data(client: AsyncClient, auth_headers):
     assert resp.status_code == 200
 
     wb = load_workbook(io.BytesIO(resp.content), data_only=False)
-    assert len(wb.sheetnames) == 7
+    assert len(wb.sheetnames) == 9
 
     # Actuals sheet should have data rows
     ws = wb["Actuals"]

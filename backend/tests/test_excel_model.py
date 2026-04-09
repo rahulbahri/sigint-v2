@@ -131,10 +131,10 @@ def test_cell_map_cross_sheet():
 
 # ── Workbook Structure Tests ─────────────────────────────────────────────────
 
-def test_workbook_has_seven_sheets():
+def test_workbook_has_nine_sheets():
     wb = _build_and_load()
-    assert len(wb.sheetnames) == 7
-    expected = ["Assumptions", "Actuals", "Forecast", "P&L", "Scenarios", "Confidence Bands", "Dashboard"]
+    assert len(wb.sheetnames) == 9
+    expected = ["Assumptions", "Actuals", "Forecast", "P&L", "Cash Flow", "Balance Sheet", "Scenarios", "Confidence Bands", "Dashboard"]
     assert wb.sheetnames == expected
 
 
@@ -322,7 +322,7 @@ def test_full_workbook_round_trip():
 
     buf.seek(0)
     wb2 = load_workbook(buf)
-    assert len(wb2.sheetnames) == 7
+    assert len(wb2.sheetnames) == 9
 
     # Verify metadata
     assert wb2.properties.title == "Axiom Financial Model"

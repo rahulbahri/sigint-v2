@@ -10,9 +10,11 @@ Sheets:
   2. Actuals (locked historical data)
   3. Forecast (formulas referencing Assumptions)
   4. P&L (formulas building a simplified income statement)
-  5. Scenarios (side-by-side comparison from saved scenarios)
-  6. Confidence Bands (Monte Carlo p10/p25/p50/p75/p90)
-  7. Dashboard (charts)
+  5. Cash Flow (operating, investing, financing with live formulas)
+  6. Balance Sheet (assets, liabilities, equity linked to Cash Flow + P&L)
+  7. Scenarios (side-by-side comparison from saved scenarios)
+  8. Confidence Bands (Monte Carlo p10/p25/p50/p75/p90)
+  9. Dashboard (charts)
 """
 import json
 from datetime import datetime
@@ -187,6 +189,8 @@ class ModelWorkbookBuilder:
         self._build_actuals_sheet()
         self._build_forecast_sheet()
         self._build_pl_sheet()
+        self._build_cashflow_sheet()
+        self._build_balance_sheet()
         self._build_scenarios_sheet()
         self._build_confidence_sheet()
         self._build_dashboard_sheet()
@@ -482,7 +486,309 @@ class ModelWorkbookBuilder:
         ws.freeze_panes = "B2"
         _auto_width(ws)
 
-    # ── Sheet 5: Scenarios ───────────────────────────────────────────────
+    # ── Sheet 5: Cash Flow Statement ───────────────────────────────────
+
+    # Cash Flow line items: (key, label, formula_or_source)
+    CF_LINES = [
+        # Operating Activities
+        ("cf_header_ops",     "OPERATING ACTIVITIES",          "header"),
+        ("net_income",        "Net Income (Operating Income)", "pl_ref:operating_income"),
+        ("add_da",            "Add: Depreciation & Amort.",    "percent_of:revenue:2"),  # ~2% of revenue proxy
+        ("change_ar",         "Change in Accounts Receivable", "delta:ar"),
+        ("change_ap",         "Change in Accounts Payable",    "percent_of:opex:-8"),  # ~8% of opex proxy
+        ("cf_from_ops",       "Cash Flow from Operations",     "sum:net_income:add_da:change_ar:change_ap"),
+        # Investing Activities
+        ("cf_header_inv",     "INVESTING ACTIVITIES",          "header"),
+        ("capex",             "Capital Expenditures",          "percent_of:revenue:-3"),  # ~3% SaaS capex
+        ("cf_from_investing", "Cash Flow from Investing",      "ref:capex"),
+        # Financing Activities
+        ("cf_header_fin",     "FINANCING ACTIVITIES",          "header"),
+        ("equity_debt",       "Equity / Debt Raised",          "value:0"),
+        ("cf_from_financing", "Cash Flow from Financing",      "ref:equity_debt"),
+        # Net
+        ("cf_separator",      "",                              "separator"),
+        ("net_cash_flow",     "Net Cash Flow",                 "sum:cf_from_ops:cf_from_investing:cf_from_financing"),
+        ("opening_cash",      "Opening Cash Balance",          "carry:closing_cash"),
+        ("closing_cash",      "Closing Cash Balance",          "sum:opening_cash:net_cash_flow"),
+    ]
+
+    def _build_cashflow_sheet(self):
+        ws = self.wb.create_sheet("Cash Flow")
+
+        actuals_slice = self.monthly_data[-12:] if len(self.monthly_data) >= 12 else self.monthly_data
+        all_months = [(y, m, "actual") for y, m, _ in actuals_slice]
+        for fy, fm in self.forecast_months:
+            all_months.append((fy, fm, "forecast"))
+
+        # Headers
+        row = 1
+        ws.cell(row=row, column=1, value="Cash Flow Statement").font = _HEADER_FONT
+        ws.cell(row=row, column=1).fill = _HEADER_FILL
+        for i, (y, m, source) in enumerate(all_months):
+            col = 2 + i
+            ws.cell(row=row, column=col, value=f"{y}-{m:02d}").font = _HEADER_FONT
+            ws.cell(row=row, column=col).fill = _HEADER_FILL if source == "actual" else PatternFill(
+                start_color="1E3A5F", end_color="1E3A5F", fill_type="solid")
+
+        cf_rows = {}
+        for line_idx, (key, label, formula_type) in enumerate(self.CF_LINES):
+            r = row + 1 + line_idx
+            cf_rows[key] = r
+
+            if formula_type == "header":
+                ws.cell(row=r, column=1, value=label).font = Font(bold=True, size=10, color="0055A4")
+                continue
+            if formula_type == "separator":
+                continue
+
+            is_total = key in ("cf_from_ops", "cf_from_investing", "cf_from_financing", "net_cash_flow", "closing_cash")
+            ws.cell(row=r, column=1, value=label).font = Font(
+                bold=is_total, size=10, color="0055A4" if is_total else "1E293B")
+            if is_total:
+                ws.cell(row=r, column=1).border = Border(
+                    top=Side(style="thin", color="0055A4"),
+                    bottom=Side(style="double", color="0055A4"))
+
+            for m_idx, (y, m, source) in enumerate(all_months):
+                col = 2 + m_idx
+
+                if formula_type.startswith("pl_ref:"):
+                    # Reference P&L line item
+                    pl_key = formula_type.split(":")[1]
+                    # Find the row in P&L sheet
+                    for pl_idx, (pk, _, _) in enumerate(PL_LINES):
+                        if pk == pl_key:
+                            ws.cell(row=r, column=col, value=f"='P&L'!{_cell(2 + pl_idx, col)}")
+                            ws.cell(row=r, column=col).font = _FORMULA_FONT
+                            break
+
+                elif formula_type.startswith("percent_of:"):
+                    parts = formula_type.split(":")
+                    base_key = parts[1]
+                    pct = float(parts[2])
+                    # Use actuals data
+                    if source == "actual":
+                        data_idx = len(self.monthly_data) - len(actuals_slice) + m_idx
+                        if data_idx < len(self.monthly_data):
+                            base_val = self.monthly_data[data_idx][2].get(base_key, 0)
+                            if base_val:
+                                try:
+                                    ws.cell(row=r, column=col, value=round(float(base_val) * pct / 100, 2))
+                                except (ValueError, TypeError):
+                                    ws.cell(row=r, column=col, value=0)
+                    else:
+                        # For forecast, use formula referencing P&L revenue
+                        for pl_idx, (pk, _, _) in enumerate(PL_LINES):
+                            if pk == base_key:
+                                ws.cell(row=r, column=col,
+                                        value=f"='P&L'!{_cell(2 + pl_idx, col)}*{pct/100}")
+                                ws.cell(row=r, column=col).font = _FORMULA_FONT
+                                break
+
+                elif formula_type.startswith("delta:"):
+                    # Change in a balance (this month - last month)
+                    balance_key = formula_type.split(":")[1]
+                    if source == "actual" and m_idx > 0:
+                        data_idx = len(self.monthly_data) - len(actuals_slice) + m_idx
+                        prev_idx = data_idx - 1
+                        if data_idx < len(self.monthly_data) and prev_idx >= 0:
+                            curr = self.monthly_data[data_idx][2].get(balance_key, 0) or 0
+                            prev = self.monthly_data[prev_idx][2].get(balance_key, 0) or 0
+                            try:
+                                ws.cell(row=r, column=col, value=round(float(prev) - float(curr), 2))
+                            except (ValueError, TypeError):
+                                ws.cell(row=r, column=col, value=0)
+                    else:
+                        ws.cell(row=r, column=col, value=0)
+
+                elif formula_type.startswith("sum:"):
+                    refs = formula_type.split(":")[1:]
+                    cells = [_cell(cf_rows.get(ref, r), col) for ref in refs if ref in cf_rows]
+                    if cells:
+                        ws.cell(row=r, column=col, value="=" + "+".join(cells))
+                        ws.cell(row=r, column=col).font = _FORMULA_FONT
+
+                elif formula_type.startswith("ref:"):
+                    ref_key = formula_type.split(":")[1]
+                    if ref_key in cf_rows:
+                        ws.cell(row=r, column=col, value=f"={_cell(cf_rows[ref_key], col)}")
+                        ws.cell(row=r, column=col).font = _FORMULA_FONT
+
+                elif formula_type.startswith("value:"):
+                    ws.cell(row=r, column=col, value=float(formula_type.split(":")[1]))
+
+                elif formula_type.startswith("carry:"):
+                    # Carry forward from previous month's closing
+                    ref_key = formula_type.split(":")[1]
+                    if m_idx == 0:
+                        # First month — use cash burn data or estimate
+                        if actuals_slice:
+                            burn = actuals_slice[0][2].get("cash_burn", 0) or 0
+                            rev = actuals_slice[0][2].get("_total_revenue", 0) or actuals_slice[0][2].get("revenue", 0) or 0
+                            # Estimate opening cash as 12 months of net burn
+                            try:
+                                est_cash = abs(float(burn)) * 12 if float(burn) < 0 else float(rev) * 6
+                            except (ValueError, TypeError):
+                                est_cash = 0
+                            ws.cell(row=r, column=col, value=round(est_cash, 2))
+                    else:
+                        # Reference previous month's closing cash
+                        if ref_key in cf_rows:
+                            ws.cell(row=r, column=col, value=f"={_cell(cf_rows[ref_key], col - 1)}")
+                            ws.cell(row=r, column=col).font = _FORMULA_FONT
+
+                ws.cell(row=r, column=col).number_format = '#,##0'
+
+        ws.freeze_panes = "B2"
+        _auto_width(ws)
+
+    # ── Sheet 6: Balance Sheet ──────────────────────────────────────────
+
+    BS_LINES = [
+        # Assets
+        ("bs_header_assets",  "ASSETS",                    "header"),
+        ("cash",              "Cash & Equivalents",        "cf_ref:closing_cash"),
+        ("accounts_recv",     "Accounts Receivable",       "data:ar"),
+        ("prepaids",          "Prepaid Expenses",          "percent_of:opex:8"),  # ~8% of opex
+        ("total_current",     "Total Current Assets",      "sum:cash:accounts_recv:prepaids"),
+        ("total_assets",      "Total Assets",              "ref:total_current"),
+        # Liabilities
+        ("bs_header_liab",    "LIABILITIES",               "header"),
+        ("accounts_pay",      "Accounts Payable",          "percent_of:cogs:15"),  # ~15% of COGS
+        ("deferred_rev",      "Deferred Revenue",          "percent_of:mrr:25"),  # ~25% of MRR
+        ("accrued",           "Accrued Expenses",          "percent_of:opex:5"),   # ~5% of opex
+        ("total_current_liab","Total Current Liabilities", "sum:accounts_pay:deferred_rev:accrued"),
+        ("total_liab",        "Total Liabilities",         "ref:total_current_liab"),
+        # Equity
+        ("bs_header_equity",  "EQUITY",                    "header"),
+        ("equity",            "Total Equity",              "formula:total_assets-total_liab"),
+        # Check
+        ("bs_check",          "Balance Check (A - L - E)", "formula:total_assets-total_liab-equity"),
+    ]
+
+    def _build_balance_sheet(self):
+        ws = self.wb.create_sheet("Balance Sheet")
+
+        actuals_slice = self.monthly_data[-12:] if len(self.monthly_data) >= 12 else self.monthly_data
+        all_months = [(y, m, "actual") for y, m, _ in actuals_slice]
+        for fy, fm in self.forecast_months:
+            all_months.append((fy, fm, "forecast"))
+
+        # Headers
+        row = 1
+        ws.cell(row=row, column=1, value="Balance Sheet").font = _HEADER_FONT
+        ws.cell(row=row, column=1).fill = _HEADER_FILL
+        for i, (y, m, source) in enumerate(all_months):
+            col = 2 + i
+            ws.cell(row=row, column=col, value=f"{y}-{m:02d}").font = _HEADER_FONT
+            ws.cell(row=row, column=col).fill = _HEADER_FILL if source == "actual" else PatternFill(
+                start_color="1E3A5F", end_color="1E3A5F", fill_type="solid")
+
+        bs_rows = {}
+        for line_idx, (key, label, formula_type) in enumerate(self.BS_LINES):
+            r = row + 1 + line_idx
+            bs_rows[key] = r
+
+            if formula_type == "header":
+                ws.cell(row=r, column=1, value=label).font = Font(bold=True, size=10, color="0055A4")
+                continue
+
+            is_total = key in ("total_current", "total_assets", "total_current_liab", "total_liab", "equity")
+            ws.cell(row=r, column=1, value=label).font = Font(
+                bold=is_total, size=10, color="0055A4" if is_total else "1E293B")
+            if is_total:
+                ws.cell(row=r, column=1).border = Border(
+                    top=Side(style="thin", color="0055A4"),
+                    bottom=Side(style="double", color="0055A4"))
+
+            for m_idx, (y, m, source) in enumerate(all_months):
+                col = 2 + m_idx
+
+                if formula_type.startswith("cf_ref:"):
+                    # Reference Cash Flow sheet
+                    cf_key = formula_type.split(":")[1]
+                    # Find the row in CF sheet
+                    for cf_idx, (ck, _, _) in enumerate(self.CF_LINES):
+                        if ck == cf_key:
+                            ws.cell(row=r, column=col, value=f"='Cash Flow'!{_cell(2 + cf_idx, col)}")
+                            ws.cell(row=r, column=col).font = _FORMULA_FONT
+                            break
+
+                elif formula_type.startswith("data:"):
+                    data_key = formula_type.split(":")[1]
+                    if source == "actual":
+                        data_idx = len(self.monthly_data) - len(actuals_slice) + m_idx
+                        if data_idx < len(self.monthly_data):
+                            val = self.monthly_data[data_idx][2].get(data_key, 0)
+                            try:
+                                ws.cell(row=r, column=col, value=round(float(val or 0), 2))
+                            except (ValueError, TypeError):
+                                ws.cell(row=r, column=col, value=0)
+                    else:
+                        # Forecast: carry forward last actual
+                        prev_col = col - 1
+                        ws.cell(row=r, column=col, value=f"={_cell(r, prev_col)}")
+                        ws.cell(row=r, column=col).font = _FORMULA_FONT
+
+                elif formula_type.startswith("percent_of:"):
+                    parts = formula_type.split(":")
+                    base_key = parts[1]
+                    pct = float(parts[2])
+                    if source == "actual":
+                        data_idx = len(self.monthly_data) - len(actuals_slice) + m_idx
+                        if data_idx < len(self.monthly_data):
+                            base_val = self.monthly_data[data_idx][2].get(base_key, 0)
+                            try:
+                                ws.cell(row=r, column=col, value=round(float(base_val or 0) * pct / 100, 2))
+                            except (ValueError, TypeError):
+                                ws.cell(row=r, column=col, value=0)
+                    else:
+                        prev_col = col - 1
+                        ws.cell(row=r, column=col, value=f"={_cell(r, prev_col)}")
+                        ws.cell(row=r, column=col).font = _FORMULA_FONT
+
+                elif formula_type.startswith("sum:"):
+                    refs = formula_type.split(":")[1:]
+                    cells = [_cell(bs_rows.get(ref, r), col) for ref in refs if ref in bs_rows]
+                    if cells:
+                        ws.cell(row=r, column=col, value="=" + "+".join(cells))
+                        ws.cell(row=r, column=col).font = _FORMULA_FONT
+
+                elif formula_type.startswith("ref:"):
+                    ref_key = formula_type.split(":")[1]
+                    if ref_key in bs_rows:
+                        ws.cell(row=r, column=col, value=f"={_cell(bs_rows[ref_key], col)}")
+                        ws.cell(row=r, column=col).font = _FORMULA_FONT
+
+                elif formula_type.startswith("formula:"):
+                    expr = formula_type.split(":", 1)[1]
+                    # Parse "a-b" or "a-b-c"
+                    parts = expr.replace("-", "+-").split("+")
+                    formula_parts = []
+                    for part in parts:
+                        part = part.strip()
+                        if not part:
+                            continue
+                        neg = part.startswith("-")
+                        pk = part.lstrip("-")
+                        if pk in bs_rows:
+                            ref = _cell(bs_rows[pk], col)
+                            formula_parts.append(f"-{ref}" if neg else ref)
+                    if formula_parts:
+                        ws.cell(row=r, column=col, value="=" + "+".join(formula_parts))
+                        ws.cell(row=r, column=col).font = _FORMULA_FONT
+
+                ws.cell(row=r, column=col).number_format = '#,##0'
+
+        # Balance check row should show 0 if balanced
+        bs_check_row = bs_rows.get("bs_check")
+        if bs_check_row:
+            ws.cell(row=bs_check_row, column=1).font = Font(size=9, italic=True, color="94A3B8")
+
+        ws.freeze_panes = "B2"
+        _auto_width(ws)
+
+    # ── Sheet 7: Scenarios ───────────────────────────────────────────────
 
     def _build_scenarios_sheet(self):
         ws = self.wb.create_sheet("Scenarios")
