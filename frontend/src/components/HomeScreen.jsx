@@ -2184,6 +2184,31 @@ export default function HomeScreen({ onNavigate, onAskAnika, externalPeriodDates
       {data && <WeeklyDigest data={data} onNavigate={onNavigate}
         onKpiClick={(kpi) => setSlideOut({ kpi, status: 'red' })} />}
 
+      {/* ── Wins This Period (top green KPIs) ─────────────────────────── */}
+      {doing_well?.length > 0 && (
+        <div>
+          <div className="flex items-center justify-between mb-2.5">
+            <div className="flex items-center gap-2">
+              <CheckCircle2 size={13} className="text-emerald-500" />
+              <h2 className="text-slate-700 text-[11px] font-bold uppercase tracking-wider">Wins This Period</h2>
+              <span className="bg-emerald-100 text-emerald-700 text-[10px] font-bold px-1.5 py-0.5 rounded-full">{doing_well.length}</span>
+            </div>
+            {doing_well.length > 6 && (
+              <button onClick={() => setShowAllDoingWell(!showAllDoingWell)}
+                className="text-[11px] text-slate-400 hover:text-[#0055A4] flex items-center gap-1 font-medium">
+                {showAllDoingWell ? 'Show less' : `All ${doing_well.length}`} <ArrowRight size={10}/>
+              </button>
+            )}
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-2.5">
+            {(showAllDoingWell ? doing_well : doing_well.slice(0, 6)).map(kpi => (
+              <KpiCard key={kpi.key} kpi={kpi} status="green"
+                onOpen={(k, s) => setSlideOut({ kpi: k, status: s })} />
+            ))}
+          </div>
+        </div>
+      )}
+
       {/* ── Intelligence Feed (autonomous agent insights) ────────────── */}
       <IntelligenceFeed compact />
 
@@ -2373,41 +2398,6 @@ export default function HomeScreen({ onNavigate, onAskAnika, externalPeriodDates
               )
             })}
           </div>
-        </div>
-      )}
-
-      {/* ── Doing Well ─────────────────────────────────────────────────── */}
-      {doing_well?.length > 0 && (
-        <div>
-          <div className="flex items-center justify-between mb-2.5">
-            <div className="flex items-center gap-2">
-              <CheckCircle2 size={13} className="text-emerald-500" />
-              <h2 className="text-slate-700 text-[11px] font-bold uppercase tracking-wider">Doing Well</h2>
-              <span className="bg-emerald-100 text-emerald-700 text-[10px] font-bold px-1.5 py-0.5 rounded-full">{doing_well.length}</span>
-              <span className="text-[9px] text-slate-300 italic">— click any card to explore</span>
-            </div>
-            <button onClick={() => onNavigate?.('board')}
-              className="text-[11px] text-slate-400 hover:text-[#0055A4] flex items-center gap-1 transition-colors font-medium">
-              Executive Brief <ArrowRight size={10}/>
-            </button>
-          </div>
-          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-2.5">
-            {doingWellVisible.map(kpi => (
-              <KpiCard key={kpi.key} kpi={kpi} status="green"
-                onOpen={(k, s) => setSlideOut({ kpi: k, status: s })} />
-            ))}
-          </div>
-          {doing_well.length > 6 && (
-            <button
-              onClick={() => setShowAllDoingWell(!showAllDoingWell)}
-              className="mt-2 text-[11px] text-slate-400 hover:text-[#0055A4] font-medium transition-colors flex items-center gap-1"
-            >
-              {showAllDoingWell
-                ? <>Show less</>
-                : <>Show all {doing_well.length} <ArrowRight size={10}/></>
-              }
-            </button>
-          )}
         </div>
       )}
 
