@@ -42,6 +42,7 @@ const LegalPage         = lazy(() => import('./components/LegalPage.jsx'))
 const DecisionLog       = lazy(() => import('./components/DecisionLog.jsx'))
 const DepartmentDashboard = lazy(() => import('./components/DepartmentDashboard.jsx'))
 const CustomerSegments    = lazy(() => import('./components/CustomerSegments.jsx'))
+const OKRPage             = lazy(() => import('./components/OKRPage.jsx'))
 const ScenarioPlanner   = lazy(() => import('./components/ScenarioPlanner.jsx'))
 const DocsPage          = lazy(() => import('./components/DocsPage.jsx'))
 const DataHealthPage    = lazy(() => import('./components/DataHealthPage.jsx'))
@@ -92,6 +93,7 @@ const NAV_GROUPS = [
       { id: 'board_pack', label: 'Board Pack',          Icon: Presentation},
       { id: 'variance',   label: 'Variance Command',    Icon: Activity   },
       { id: 'departments', label: 'Departments',        Icon: Users      },
+      { id: 'okrs',       label: 'OKRs',               Icon: Target     },
       { id: 'decisions',  label: 'Decision Log',        Icon: BookMarked },
     ],
   },
@@ -150,6 +152,7 @@ const PAGE_TITLES = {
   projection:  'Plan vs Actual',
   departments: 'Departments',
   segments:    'Customer Segments',
+  okrs:        'OKRs',
   ontology:    'Causal Intelligence',
   docs:        'Documentation',
   forecast:    'Forward Signals — 90-Day Outlook',
@@ -904,6 +907,7 @@ function AppInner() {
               {tab === 'tutorial'    && <TutorialPage onNavigate={setTab} />}
               {tab === 'admin'       && isAdmin && <AdminPanel />}
               {tab === 'departments' && <DepartmentDashboard onKpiClick={openKpi} />}
+              {tab === 'okrs'        && <OKRPage fingerprint={fingerprint} />}
               {tab === 'segments'    && <CustomerSegments />}
               {tab === 'decisions'   && <DecisionLog authToken={authToken} fingerprint={fingerprint} prefillDecision={prefillDecision} onPrefillConsumed={() => setPrefillDecision(null)} />}
               {tab === 'scenario'    && <ScenarioPlanner fingerprint={filteredFingerprint} authToken={authToken} onNavigateToDecisions={(data) => { setPrefillDecision(data); setTab('decisions') }} />}

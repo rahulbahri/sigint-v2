@@ -611,6 +611,39 @@ def init_db():
     """)
     conn.execute("CREATE INDEX IF NOT EXISTS idx_dept_ws ON departments(workspace_id)")
     conn.commit()
+    # ── OKR tables ────────────────────────────────────────────────────────
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS objectives (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            workspace_id    TEXT NOT NULL DEFAULT '',
+            title           TEXT NOT NULL,
+            description     TEXT DEFAULT '',
+            owner           TEXT DEFAULT '',
+            quarter         TEXT DEFAULT '',
+            status          TEXT DEFAULT 'active',
+            confidence      INTEGER DEFAULT 50,
+            created_at      TEXT DEFAULT (datetime('now'))
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS key_results (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            objective_id    INTEGER NOT NULL,
+            workspace_id    TEXT NOT NULL DEFAULT '',
+            title           TEXT NOT NULL,
+            kpi_key         TEXT DEFAULT '',
+            target_value    REAL,
+            current_value   REAL,
+            unit            TEXT DEFAULT '',
+            progress_pct    REAL DEFAULT 0,
+            status          TEXT DEFAULT 'on_track',
+            created_at      TEXT DEFAULT (datetime('now')),
+            FOREIGN KEY (objective_id) REFERENCES objectives(id)
+        )
+    """)
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_obj_ws ON objectives(workspace_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_kr_ws ON key_results(workspace_id)")
+    conn.commit()
     # ALTER TABLE migrations for existing tables (add workspace_id if missing)
     for tbl in ["uploads","monthly_data","kpi_targets","projection_uploads",
                 "projection_monthly_data","kpi_accountability","annotations",
