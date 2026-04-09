@@ -124,3 +124,15 @@ body { background: #E6F2FF; color: #0f172a; }
   50%      { box-shadow: 0 0 14px 4px rgba(0,85,164,0.18); }
 }
 .pulse-accent { animation: pulse-accent 3s ease-in-out infinite; }
+
+/* ── Mobile optimizations ─────────────────────────────────── */
+@media (max-width: 640px) {
+  /* Ensure minimum touch targets on mobile */
+  button, a, [role="button"] { min-height: 36px; }
+  /* Compact padding for cards */
+  .card { padding: 12px; }
+  /* Stack health score columns */
+  .health-grid { grid-template-columns: 1fr !important; }
+  /* Full-width modals */
+  .modal-panel { width: 100% !important; max-width: 100% !important; }
+}

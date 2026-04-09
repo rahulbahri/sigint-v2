@@ -120,7 +120,7 @@ export default function KpiDetailPanel({ kpi, onClose, periodLabel, benchmarks, 
       />
 
       {/* Panel */}
-      <div className={`fixed top-0 right-0 h-screen w-[460px] bg-white shadow-2xl z-50
+      <div className={`fixed top-0 right-0 h-screen w-full sm:w-[460px] bg-white shadow-2xl z-50
                        flex flex-col overflow-hidden
                        transition-transform duration-300 ease-in-out
                        ${isOpen ? 'translate-x-0' : 'translate-x-full'}`}>
