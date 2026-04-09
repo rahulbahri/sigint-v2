@@ -146,12 +146,12 @@ def _generate_board_pack_inner(workspace_id, body, Presentation, Inches, Pt, Emu
     company_name = body.company_name or settings.get("company_name", "Company")
     period_label = body.period_label or datetime.utcnow().strftime("%B %Y")
 
-    # Build KPI averages
+    # Build KPI averages (only numeric values — data_json may contain nested dicts)
     kpi_monthly: dict = {}
     for row in rows:
-        d = json.loads(row["data_json"])
+        d = json.loads(row["data_json"]) if isinstance(row["data_json"], str) else (row["data_json"] or {})
         for k, v in d.items():
-            if v is not None and k not in ("year","month"):
+            if isinstance(v, (int, float)) and k not in ("year", "month"):
                 kpi_monthly.setdefault(k, []).append(v)
     kpi_avgs = {k: round(sum(v) / len(v), 2) for k, v in kpi_monthly.items() if v}
 
