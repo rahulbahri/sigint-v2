@@ -363,7 +363,8 @@ def aggregate_canonical_to_monthly(conn, workspace_id: str) -> dict:
             monthly_kpis[ym] = kpis
             # Build clean prev for next month — only numeric values + required internals.
             # Prevents _diagnostics, _data_quality, and other metadata from leaking forward.
-            _INTERNAL_STATE_KEYS = {"_active_customers", "_total_revenue", "_total_expenses",
+            _INTERNAL_STATE_KEYS = {"_active_customers", "_revenue_customer_ids",
+                                    "_total_revenue", "_total_expenses",
                                     "_opex", "_cogs", "_customer_amounts", "_ending_ar"}
             prev_kpis = {}
             for _pk, _pv in kpis.items():
@@ -1184,16 +1185,21 @@ def _compute_month_kpis(
     kpis["_customer_amounts"] = dict(curr_cust_amts) if curr_cust_amts else {}
 
     # ── Customer metrics (computed before S&M so churn_rate is available) ─
+    # Use actual customer ID sets for churn — not just count difference.
+    # A customer who paid last month but NOT this month is churned,
+    # even if a new customer replaced them (net count stays the same).
     all_cust_ids = rev.get("customer_ids", set())
     n_active = len(all_cust_ids) if all_cust_ids else 0
-    if n_active > 0 and prev:
-        prev_cust = prev.get("_active_customers", 0)
-        if prev_cust > 0:
-            lost = max(prev_cust - n_active, 0)
-            _safe_set(kpis, "churn_rate", lost / prev_cust * 100)
-            _safe_set(kpis, "logo_retention", (1 - lost / prev_cust) * 100)
-            if total_rev > 0 and prev.get("_total_revenue", 0) > 0:
-                _safe_set(kpis, "nrr", total_rev / prev["_total_revenue"] * 100)
+    prev_cust_ids = prev.get("_revenue_customer_ids", set()) if prev else set()
+    prev_cust_count = len(prev_cust_ids)
+
+    if n_active > 0 and prev_cust_count > 0:
+        churned_ids = prev_cust_ids - all_cust_ids
+        lost = len(churned_ids)
+        _safe_set(kpis, "churn_rate", lost / prev_cust_count * 100)
+        _safe_set(kpis, "logo_retention", (1 - lost / prev_cust_count) * 100)
+        if total_rev > 0 and prev.get("_total_revenue", 0) > 0:
+            _safe_set(kpis, "nrr", total_rev / prev["_total_revenue"] * 100)
     elif n_active > 0 and not prev:
         _record_diagnostic(kpis, "churn_rate", None,
             "First month of data — churn rate requires at least two months to compare customer bases.")
@@ -1202,6 +1208,7 @@ def _compute_month_kpis(
         _record_diagnostic(kpis, "nrr", None,
             "First month of data — net revenue retention requires prior month revenue.")
     kpis["_active_customers"] = n_active
+    kpis["_revenue_customer_ids"] = set(all_cust_ids)  # carry forward for next month's churn
 
     # Pricing power index = ARPU change% - customer volume change%
     if prev and prev.get("_active_customers", 0) > 0 and n_active > 0:
@@ -1574,7 +1581,8 @@ def _compute_derived_kpis(
                     "Prior month's churn rate was unavailable — cannot compute delta.")
 
         # Remove internal-only keys before final output
-        for internal_key in ("_active_customers", "_total_revenue", "_total_expenses",
+        for internal_key in ("_active_customers", "_revenue_customer_ids",
+                             "_total_revenue", "_total_expenses",
                              "_opex", "_cogs", "_customer_amounts", "_ending_ar"):
             kpis.pop(internal_key, None)
 

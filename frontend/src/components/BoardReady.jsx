@@ -45,7 +45,7 @@ function applyPeriod(fingerprint, monthNums) {
       return monthNums.includes(mo) && m.value != null
     })
     const periodAvg = hits.length
-      ? hits.reduce((s, m) => s + m.value, 0) / hits.length
+      ? Math.round((hits.reduce((s, m) => s + m.value, 0) / hits.length) * 100) / 100
       : kpi.avg
     const newStatus = cellStatus(periodAvg, kpi.target, kpi.direction)
     return { ...kpi, avg: periodAvg, fy_status: newStatus }

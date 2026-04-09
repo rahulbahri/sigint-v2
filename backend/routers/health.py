@@ -189,15 +189,12 @@ def get_home(
     from core.kpi_defs import get_metric_type, TARGET_GUIDANCE
 
     def _kpi_spotlight(key: str) -> dict:
+        from core.kpi_utils import compute_kpi_avg
         t  = targets_map.get(key, {})
         kd = _KPI_DEFS_MAP.get(key, {})  # Fallback to kpi_defs for unit/direction
         mo = sorted(kpi_monthly.get(key, []), key=lambda x: x["period"])
-        # When period is filtered, use all filtered data; otherwise last 6 months
-        if has_period_filter:
-            recent_vals = [m["value"] for m in mo]
-        else:
-            recent_vals = [m["value"] for m in mo[-6:]]
-        avg  = round(sum(recent_vals) / len(recent_vals), 2) if recent_vals else None
+        all_vals = [m["value"] for m in mo]
+        avg = compute_kpi_avg(all_vals, window=6, period_filtered=has_period_filter)
         mt  = get_metric_type(key)
         return {
             "key":       key,
@@ -205,7 +202,7 @@ def get_home(
             "direction": t.get("direction") or kd.get("direction", "higher"),
             "unit":      t.get("unit") or kd.get("unit", ""),
             "avg":       avg,
-            "sparkline": [m["value"] for m in mo] if has_period_filter else [m["value"] for m in mo[-6:]],
+            "sparkline": all_vals if has_period_filter else all_vals[-6:],
             "metric_type": mt,
             "target_guidance": TARGET_GUIDANCE.get(mt, ""),
         }
@@ -266,15 +263,11 @@ def get_home(
     _directions_for_engine = {
         t_key: t_val.get("direction", "higher") for t_key, t_val in targets_map.items()
     }
+    from core.kpi_utils import compute_kpi_avg as _cka
     _kpi_avgs_for_engine = {}
     for k, entries in kpi_monthly.items():
         vals = [e["value"] for e in entries if isinstance(e.get("value"), (int, float))]
-        # When period is filtered, use all filtered data; otherwise last 6 months
-        if has_period_filter:
-            recent = vals
-        else:
-            recent = vals[-6:] if len(vals) >= 6 else vals
-        _kpi_avgs_for_engine[k] = sum(recent) / len(recent) if recent else None
+        _kpi_avgs_for_engine[k] = _cka(vals, window=6, period_filtered=has_period_filter)
 
     root_cause_analyses = _run_root_cause_analysis(
         health.get("needs_attention", []),
@@ -630,12 +623,11 @@ def get_kpi_detail(
     unit = target_row["unit"] if target_row else kpi_def.get("unit", "")
 
     # Compute current status (green / yellow / red / grey) using direction-aware helpers
-    # When period-filtered, use all values in the range; otherwise last 6 for stability
+    from core.kpi_utils import compute_kpi_avg as _cka
     status = "grey"
     pct_of_target = None
-    if time_series and target_value is not None:
-        recent_vals = [pt["value"] for pt in time_series] if has_period else [pt["value"] for pt in time_series[-6:]]
-        avg = sum(recent_vals) / len(recent_vals)
+    avg = _cka([pt["value"] for pt in time_series], window=6, period_filtered=has_period) if time_series else None
+    if avg is not None and target_value is not None:
         gap = _gap_pct(avg, target_value, direction)
         pct_of_target = round(gap * 100, 1)
         if _is_on_target(avg, target_value, direction):
@@ -838,6 +830,7 @@ def get_kpi_detail(
         "direction_label": direction_label,
         "domain":         kpi_def.get("domain", ""),
         "target":         target_value,
+        "avg":            avg,
         "pct_of_target":  pct_of_target,
         "status":         status,
         "time_series":    time_series,
@@ -854,4 +847,55 @@ def get_kpi_detail(
         "typical_range":     typical_range,
         "data_requirements": data_requirements,
         "linked_decisions":  linked_decisions,
+    }
+
+
+# ── Debug: KPI audit endpoint ────────────────────────────────────────────────
+
+@router.get("/api/debug/kpi-audit/{kpi_key}", tags=["Debug"])
+def debug_kpi_audit(kpi_key: str, request: Request):
+    """
+    Return raw data trail for a single KPI — every monthly value, diagnostics,
+    and all computed averages side-by-side.  For debugging data integrity only.
+    """
+    from core.kpi_utils import compute_kpi_avg
+    workspace_id = _require_workspace(request)
+    conn = get_db()
+
+    rows = conn.execute(
+        "SELECT upload_id, year, month, data_json FROM monthly_data "
+        "WHERE workspace_id=? ORDER BY year, month",
+        [workspace_id],
+    ).fetchall()
+    conn.close()
+
+    months = []
+    all_values = []
+    for r in rows:
+        d = json.loads(r["data_json"]) if isinstance(r["data_json"], str) else (r["data_json"] or {})
+        val = d.get(kpi_key)
+        diag = (d.get("_diagnostics") or {}).get(kpi_key)
+        period = f"{r['year']}-{r['month']:02d}"
+        entry = {
+            "period":    period,
+            "upload_id": r["upload_id"],
+            "value":     val,
+            "withheld":  diag.get("withheld", False) if diag else False,
+            "reason":    diag.get("reason", "") if diag else "",
+        }
+        months.append(entry)
+        if val is not None and isinstance(val, (int, float)):
+            all_values.append(val)
+
+    return {
+        "kpi_key":      kpi_key,
+        "total_months": len(months),
+        "none_months":  sum(1 for m in months if m["value"] is None),
+        "valid_count":  len(all_values),
+        "months":       months,
+        "computations": {
+            "avg_6mo":   compute_kpi_avg(all_values, window=6, period_filtered=False),
+            "avg_3mo":   compute_kpi_avg(all_values, window=3, period_filtered=False),
+            "avg_all":   compute_kpi_avg(all_values, window=len(all_values), period_filtered=True),
+        },
     }

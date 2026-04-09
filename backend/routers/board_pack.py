@@ -153,7 +153,8 @@ def _generate_board_pack_inner(workspace_id, body, Presentation, Inches, Pt, Emu
         for k, v in d.items():
             if isinstance(v, (int, float)) and k not in ("year", "month"):
                 kpi_monthly.setdefault(k, []).append(v)
-    kpi_avgs = {k: round(sum(v) / len(v), 2) for k, v in kpi_monthly.items() if v}
+    from core.kpi_utils import compute_kpi_avg
+    kpi_avgs = {k: compute_kpi_avg(v, window=len(v), period_filtered=True) for k, v in kpi_monthly.items() if v}
 
     # Normalise health keys that may be None or missing
     h_needs_attention = health.get("needs_attention") or []

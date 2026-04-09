@@ -95,9 +95,10 @@ def fingerprint(request: Request, year: Optional[int] = None):
         dirn = t.get("direction", "higher")
         unit = t.get("unit", kdef["unit"])
 
+        from core.kpi_utils import compute_kpi_avg as _cka
         monthly_list = [{"period": k, "value": v} for k, v in sorted(vals.items())]
         values       = [m["value"] for m in monthly_list]
-        avg          = round(np.mean(values), 2) if values else None
+        avg          = _cka(values, window=6, period_filtered=False)
 
         def status(val, target, direction):
             if val is None or target is None: return "grey"
@@ -248,9 +249,10 @@ async def query_kpi(request: Request, payload: dict):
         tval = t.get("target")
         dirn = t.get("direction", "higher")
 
+        from core.kpi_utils import compute_kpi_avg as _cka
         monthly_sorted = sorted(vals.items())
         values         = [v for _, v in monthly_sorted if v is not None]
-        avg            = round(float(np.mean(values)), 2) if values else None
+        avg            = _cka(values, window=6, period_filtered=False)
         status         = _status(avg, tval, dirn)
         status_counts[status] += 1
 
@@ -412,9 +414,10 @@ def _compute_fingerprint_data(targets_override=None, workspace_id: str = ""):
         dirn = t.get("direction", kdef.get("direction", "higher"))
         unit = t.get("unit", kdef.get("unit", "ratio"))
 
+        from core.kpi_utils import compute_kpi_avg as _cka
         monthly_list = [{"period": k, "value": v} for k, v in sorted(vals.items())]
         values = [m["value"] for m in monthly_list]
-        avg = round(np.mean(values), 2) if values else None
+        avg = _cka(values, window=6, period_filtered=False)
 
         trend = None
         if len(values) >= 2:

@@ -315,16 +315,8 @@ function KpiSlideOut({ kpi: initialKpi, status: initialStatus, onClose, onNaviga
   // When slideout opens from compact cards or navigation, currentKpi may only have {key}.
   // The detail API fetches full data — use it when available.
   // API field names: target (not target_value), no avg field (compute from time_series)
-  const _rawAvg = (() => {
-    // 1. Try card-passed avg
-    if (currentKpi?.avg != null) return currentKpi.avg
-    // 2. Compute from detail API time_series (already period-filtered by backend)
-    if (detail?.time_series?.length) {
-      const v = detail.time_series.map(p => p.value)
-      return v.reduce((a, b) => a + b, 0) / v.length
-    }
-    return null
-  })()
+  // Use backend-computed avg (single source of truth) — never recompute client-side
+  const _rawAvg = detail?.avg ?? currentKpi?.avg ?? null
   const _rawTarget = detail?.target ?? currentKpi?.target ?? null
   const _direction = detail?.direction ?? currentKpi?.direction
   const _unit = detail?.unit ?? currentKpi?.unit ?? ''

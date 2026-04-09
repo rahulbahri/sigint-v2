@@ -324,12 +324,12 @@ def compute_health_score(
                 except (ValueError, TypeError):
                     pass
 
-    # Latest-period averages (last 6 months, or all available if <6)
-    # Uses 6-month window for stability — matches display averages system-wide
+    # Latest-period averages — uses shared utility for consistency
+    from core.kpi_utils import compute_kpi_avg
+    _is_period_filtered = from_period is not None
     kpi_avgs: dict = {}
     for k, vals in time_series.items():
-        recent = vals[-6:] if len(vals) >= 6 else vals
-        kpi_avgs[k] = sum(recent) / len(recent) if recent else None
+        kpi_avgs[k] = compute_kpi_avg(vals, window=6, period_filtered=_is_period_filtered)
 
     # ── Component scores ───────────────────────────────────────────────────────
     momentum          = _compute_momentum(time_series, directions)

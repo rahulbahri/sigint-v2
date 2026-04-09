@@ -68,11 +68,12 @@ def _compute_trend(kpi_key: str, time_series: dict, direction: str,
         return {"available": False, "recent_avg": None, "prior_avg": None,
                 "delta_pct": None, "is_deteriorating": False, "is_improving": False}
 
+    from core.kpi_utils import compute_kpi_avg
     recent = vals[-lookback:]
     prior = vals[-lookback * 2:-lookback]
 
-    recent_avg = sum(recent) / len(recent)
-    prior_avg = sum(prior) / len(prior)
+    recent_avg = compute_kpi_avg(recent, window=len(recent), period_filtered=True) or 0
+    prior_avg = compute_kpi_avg(prior, window=len(prior), period_filtered=True) or 0
 
     if abs(prior_avg) < 0.01:
         delta_pct = 0.0
