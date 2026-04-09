@@ -7,7 +7,7 @@ import {
   ChevronRight, TrendingUp, TrendingDown, Minus,
   AlertTriangle, CheckCircle2, Activity, Zap, Eye, Shield,
   Target, AlertCircle, BarChart3, Layers, ArrowUpRight,
-  ArrowDownRight, Info, X, Maximize2, ExternalLink,
+  ArrowDownRight, Info, X, Maximize2, ExternalLink, Calendar,
 } from 'lucide-react'
 import { fmtKpiValue } from './kpiFormat'
 
@@ -1548,6 +1548,58 @@ export default function BoardReady({ fingerprint, bridgeData, onNavigate, period
           </div>
         </div>
       )}
+
+      {/* ── YEAR-OVER-YEAR COMPARISON ──────────────────────────────────── */}
+      {(() => {
+        // Build YoY comparison for KPIs with 12+ months of data
+        const yoyItems = fp.filter(k => k.monthly?.length >= 13).map(k => {
+          const sorted = [...(k.monthly || [])].sort((a, b) => a.period.localeCompare(b.period))
+          const latest = sorted[sorted.length - 1]
+          const yearAgo = sorted.find(m => {
+            const [ly, lm] = latest.period.split('-').map(Number)
+            const [my, mm] = m.period.split('-').map(Number)
+            return my === ly - 1 && mm === lm
+          })
+          if (!latest || !yearAgo || latest.value == null || yearAgo.value == null) return null
+          const chg = yearAgo.value !== 0 ? ((latest.value - yearAgo.value) / Math.abs(yearAgo.value)) * 100 : 0
+          return { key: k.key, name: k.name || k.key.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase()),
+                   current: latest.value, prior: yearAgo.value, change: chg, unit: k.unit,
+                   currentPeriod: latest.period, priorPeriod: yearAgo.period }
+        }).filter(Boolean).sort((a, b) => Math.abs(b.change) - Math.abs(a.change)).slice(0, 10)
+
+        if (yoyItems.length < 3) return null
+
+        return (
+          <div className="bg-white border border-slate-200 rounded-2xl px-5 py-4 shadow-sm">
+            <div className="flex items-center justify-between mb-3">
+              <div className="flex items-center gap-2">
+                <Calendar size={13} className="text-slate-500"/>
+                <h2 className="text-[11px] font-bold text-slate-700 uppercase tracking-wider">Year-over-Year</h2>
+              </div>
+              <span className="text-[10px] text-slate-400">
+                {yoyItems[0]?.priorPeriod} → {yoyItems[0]?.currentPeriod}
+              </span>
+            </div>
+            <div className="grid grid-cols-2 md:grid-cols-5 gap-2">
+              {yoyItems.map(item => {
+                const isGood = (item.change > 0)
+                return (
+                  <div key={item.key} className="bg-slate-50 rounded-xl px-3 py-2.5 border border-slate-100">
+                    <p className="text-[10px] text-slate-500 font-medium truncate mb-1">{item.name}</p>
+                    <div className="flex items-end gap-1.5">
+                      <span className="text-[14px] font-bold text-slate-800">{fmtKpiValue(item.current, item.unit)}</span>
+                      <span className={`text-[10px] font-bold ${isGood ? 'text-emerald-600' : 'text-red-500'}`}>
+                        {item.change > 0 ? '+' : ''}{item.change.toFixed(1)}%
+                      </span>
+                    </div>
+                    <p className="text-[9px] text-slate-400 mt-0.5">was {fmtKpiValue(item.prior, item.unit)}</p>
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+        )
+      })()}
 
       {/* ── KPI STATUS — Critical | Watch | Strong ───────────────────────── */}
       <div id="kpi-status-section">
