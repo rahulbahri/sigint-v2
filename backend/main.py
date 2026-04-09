@@ -108,6 +108,7 @@ from routers import (  # noqa: E402 — after middleware setup
     board_pack,
     connectors,
     decisions,
+    deferred_revenue,
     departments,
     forecast,
     segments,
@@ -123,7 +124,7 @@ from routers import (  # noqa: E402 — after middleware setup
 
 for _router_mod in [
     admin, alerts, analytics, annotations, auth, benchmarks, billing,
-    board_pack, connectors, decisions, departments, forecast, health, jobs,
+    board_pack, connectors, decisions, deferred_revenue, departments, forecast, health, jobs,
     segments,
     okrs, ontology, org, scenarios, settings, upload,
 ]:

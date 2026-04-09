@@ -6,7 +6,7 @@ import {
   Activity, GitBranch, Network, Layers, BarChart2, BookOpen, Bell, Settings2, Target,
   Shield, Menu, X, Zap, LogOut, User, ShieldCheck, AlertCircle as AlertCircleIcon,
   BookMarked, Sliders, Users, Gauge, FlaskConical, Presentation,
-  Database, Lock, PieChart,
+  Database, Lock, PieChart, Clock,
 } from 'lucide-react'
 
 // ── Critical-path imports (always loaded) ────────────────────────────────────
@@ -43,6 +43,7 @@ const DecisionLog       = lazy(() => import('./components/DecisionLog.jsx'))
 const DepartmentDashboard = lazy(() => import('./components/DepartmentDashboard.jsx'))
 const CustomerSegments    = lazy(() => import('./components/CustomerSegments.jsx'))
 const OKRPage             = lazy(() => import('./components/OKRPage.jsx'))
+const DeferredRevenuePage = lazy(() => import('./components/DeferredRevenuePage.jsx'))
 const ScenarioPlanner   = lazy(() => import('./components/ScenarioPlanner.jsx'))
 const DocsPage          = lazy(() => import('./components/DocsPage.jsx'))
 const DataHealthPage    = lazy(() => import('./components/DataHealthPage.jsx'))
@@ -105,6 +106,7 @@ const NAV_GROUPS = [
       { id: 'forecast',    label: 'Forward Signals',         Icon: BarChart2   },
       { id: 'ontology',    label: 'Causal Intelligence',     Icon: Network     },
       { id: 'segments',    label: 'Customer Segments',       Icon: PieChart    },
+      { id: 'deferred',    label: 'Revenue Recognition',    Icon: Clock       },
       { id: 'projection',  label: 'Plan vs Actual',          Icon: GitBranch   },
       { id: 'scenario',    label: 'Scenario Planner',        Icon: Sliders     },
     ],
@@ -152,6 +154,7 @@ const PAGE_TITLES = {
   projection:  'Plan vs Actual',
   departments: 'Departments',
   segments:    'Customer Segments',
+  deferred:    'Revenue Recognition',
   okrs:        'OKRs',
   ontology:    'Causal Intelligence',
   docs:        'Documentation',
@@ -909,6 +912,7 @@ function AppInner() {
               {tab === 'departments' && <DepartmentDashboard onKpiClick={openKpi} />}
               {tab === 'okrs'        && <OKRPage fingerprint={fingerprint} />}
               {tab === 'segments'    && <CustomerSegments />}
+              {tab === 'deferred'    && <DeferredRevenuePage />}
               {tab === 'decisions'   && <DecisionLog authToken={authToken} fingerprint={fingerprint} prefillDecision={prefillDecision} onPrefillConsumed={() => setPrefillDecision(null)} />}
               {tab === 'scenario'    && <ScenarioPlanner fingerprint={filteredFingerprint} authToken={authToken} onNavigateToDecisions={(data) => { setPrefillDecision(data); setTab('decisions') }} />}
               {tab === 'ontology'    && <OntologyPage />}
