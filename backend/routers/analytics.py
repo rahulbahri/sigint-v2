@@ -1199,6 +1199,12 @@ def bridge_analysis(request: Request, year: Optional[int] = None):
         else:
             proj_rows   = conn.execute("SELECT * FROM projection_monthly_data WHERE workspace_id=?", [workspace_id]).fetchall()
             actual_rows = conn.execute("SELECT * FROM monthly_data WHERE workspace_id=?", [workspace_id]).fetchall()
+        # Load targets for three-way comparison
+        target_rows = conn.execute(
+            "SELECT kpi_key, target_value, direction FROM kpi_targets WHERE workspace_id=?",
+            [workspace_id],
+        ).fetchall()
+        targets_by_kpi = {r["kpi_key"]: r["target_value"] for r in target_rows if r["target_value"] is not None}
     finally:
         conn.close()
 
@@ -1266,6 +1272,18 @@ def bridge_analysis(request: Request, year: Optional[int] = None):
             avg_gap_pct = 0.0
         overall_status = compute_gap_status(avg_gap_pct)
 
+        # Three-way: include target comparison (additive, backward-compatible)
+        target_val = targets_by_kpi.get(key)
+        actual_vs_target_pct = None
+        projected_vs_target_pct = None
+        if target_val is not None and target_val != 0:
+            if direction == "higher":
+                actual_vs_target_pct = round((avg_actual - target_val) / abs(target_val) * 100, 2)
+                projected_vs_target_pct = round((avg_projected - target_val) / abs(target_val) * 100, 2)
+            else:
+                actual_vs_target_pct = round((target_val - avg_actual) / abs(target_val) * 100, 2)
+                projected_vs_target_pct = round((target_val - avg_projected) / abs(target_val) * 100, 2)
+
         kpis_out[key] = {
             "name":           kdef["name"],
             "unit":           kdef["unit"],
@@ -1274,6 +1292,9 @@ def bridge_analysis(request: Request, year: Optional[int] = None):
             "avg_projected":  avg_projected,
             "avg_gap":        avg_gap,
             "avg_gap_pct":    avg_gap_pct,
+            "target_value":   target_val,
+            "actual_vs_target_pct":    actual_vs_target_pct,
+            "projected_vs_target_pct": projected_vs_target_pct,
             "overall_status": overall_status,
             "months":         months_data,
             "causation":      CAUSATION_RULES.get(key, {
@@ -2268,10 +2289,20 @@ def export_financial_model(request: Request):
         for r in target_rows
     }
 
+    # ── Gather projections ─────────────────────────────────────────────
+    proj_rows = conn.execute(
+        "SELECT year, month, data_json FROM projection_monthly_data WHERE workspace_id=? ORDER BY year, month",
+        [workspace_id],
+    ).fetchall()
+    projection_data = []
+    for pr in proj_rows:
+        pd_json = json.loads(pr["data_json"]) if isinstance(pr["data_json"], str) else (pr["data_json"] or {})
+        projection_data.append((int(pr["year"]), int(pr["month"]), pd_json))
+
     conn.close()
 
     # ── Build the workbook ───────────────────────────────────────────────
-    builder = ModelWorkbookBuilder(monthly_data, forecast_data, scenarios, settings, targets)
+    builder = ModelWorkbookBuilder(monthly_data, forecast_data, scenarios, settings, targets, projection_data)
     wb = builder.build()
 
     buf = io.BytesIO()
@@ -2466,6 +2497,61 @@ async def import_financial_model(request: Request, file: UploadFile = File(...))
            f"Financial model imported: {len(changes)} changes detected vs export {version}",
            workspace_id=workspace_id)
 
+    # ── Parse Projections sheet if it exists (Feature 5) ───────────────
+    projection_changes = []
+    if "Projections" in wb.sheetnames:
+        try:
+            proj_ws = wb["Projections"]
+            # Parse: Column A = KPI key, Row 1 = month headers (YYYY-MM), data in grid
+            proj_months = []
+            for c in range(2, proj_ws.max_column + 1):
+                header = str(proj_ws.cell(row=1, column=c).value or "")
+                if header and "-" in header:
+                    try:
+                        parts = header.split("-")
+                        yr, mo = int(parts[0]), int(parts[1])
+                        proj_months.append((yr, mo, c))
+                    except (ValueError, IndexError):
+                        pass
+
+            imported_projections = {}
+            for r in range(2, proj_ws.max_row + 1):
+                kpi = str(proj_ws.cell(row=r, column=1).value or "").strip()
+                if not kpi:
+                    continue
+                for yr, mo, col in proj_months:
+                    val = proj_ws.cell(row=r, column=col).value
+                    if val is not None and isinstance(val, (int, float)):
+                        imported_projections.setdefault((yr, mo), {})[kpi] = round(float(val), 4)
+
+            # Diff against stored projections
+            conn3 = get_db()
+            try:
+                stored_rows = conn3.execute(
+                    "SELECT year, month, data_json FROM projection_monthly_data WHERE workspace_id=? ORDER BY year, month",
+                    [workspace_id],
+                ).fetchall()
+                stored_proj = {}
+                for sr in stored_rows:
+                    d = json.loads(sr["data_json"]) if isinstance(sr["data_json"], str) else (sr["data_json"] or {})
+                    stored_proj[(sr["year"], sr["month"])] = d
+            finally:
+                conn3.close()
+
+            for (yr, mo), kpis in imported_projections.items():
+                stored = stored_proj.get((yr, mo), {})
+                for kpi, new_val in kpis.items():
+                    old_val = stored.get(kpi)
+                    if old_val is None or abs(new_val - (old_val or 0)) > 0.01:
+                        projection_changes.append({
+                            "period": f"{yr}-{mo:02d}", "kpi": kpi,
+                            "old_value": round(float(old_val), 4) if old_val else None,
+                            "new_value": new_val,
+                            "delta": round(new_val - (old_val or 0), 4),
+                        })
+        except Exception:
+            pass  # Projection parsing is optional — don't block assumption diff
+
     return {
         "status": "diff_computed",
         "export_version": version,
@@ -2473,7 +2559,8 @@ async def import_financial_model(request: Request, file: UploadFile = File(...))
         "imported_values": imported_values,
         "changes": changes,
         "scenario_mapping": scenario_mapping,
-        "message": f"{len(changes)} assumption(s) changed since export {version}." if changes
+        "projection_changes": projection_changes,
+        "message": f"{len(changes)} assumption(s) and {len(projection_changes)} projection value(s) changed." if (changes or projection_changes)
                    else "No changes detected since last export.",
     }
 
@@ -2488,11 +2575,50 @@ async def apply_financial_model_changes(request: Request):
     body = await request.json()
 
     scenario_mapping = body.get("scenario_mapping", {})
+    projection_changes = body.get("projection_changes", [])
     scenario_name = body.get("scenario_name", "Imported from Excel")
     run_forecast = body.get("run_forecast", False)
 
-    if not scenario_mapping:
+    if not scenario_mapping and not projection_changes:
         raise HTTPException(400, "No changes to apply.")
+
+    # Apply projection changes to projection_monthly_data
+    if projection_changes:
+        conn_proj = get_db()
+        try:
+            # Group changes by (year, month)
+            by_period = {}
+            for ch in projection_changes:
+                parts = ch["period"].split("-")
+                yr, mo = int(parts[0]), int(parts[1])
+                by_period.setdefault((yr, mo), {})[ch["kpi"]] = ch["new_value"]
+
+            for (yr, mo), kpis in by_period.items():
+                # Load existing, merge, save
+                existing_row = conn_proj.execute(
+                    "SELECT id, data_json FROM projection_monthly_data WHERE workspace_id=? AND year=? AND month=?",
+                    [workspace_id, yr, mo],
+                ).fetchone()
+                if existing_row:
+                    d = json.loads(existing_row["data_json"]) if isinstance(existing_row["data_json"], str) else (existing_row["data_json"] or {})
+                    d.update(kpis)
+                    conn_proj.execute(
+                        "UPDATE projection_monthly_data SET data_json=? WHERE id=?",
+                        [json.dumps(d), existing_row["id"]],
+                    )
+                else:
+                    conn_proj.execute(
+                        "INSERT INTO projection_monthly_data (projection_upload_id, year, month, data_json, version_label, workspace_id) "
+                        "VALUES (?,?,?,?,?,?)",
+                        [-1, yr, mo, json.dumps(kpis), "reimport", workspace_id],
+                    )
+            conn_proj.commit()
+            from core.database import _audit
+            _audit("projection_reimport", "projection", "reimport",
+                   f"Projection re-import: {len(projection_changes)} values updated across {len(by_period)} months",
+                   workspace_id=workspace_id)
+        finally:
+            conn_proj.close()
 
     # Create a saved scenario
     conn = get_db()

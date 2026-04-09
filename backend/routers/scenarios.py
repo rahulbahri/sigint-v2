@@ -226,6 +226,7 @@ class _RunForecastRequest(_BM2):
     levers:       dict          # {lever_id: float_value_in_pp}
     horizon_days: int = 90
     n_samples:    int = 400
+    projection_version: Optional[str] = None  # if set, use projection values as baseline
 
 
 @router.post("/api/scenarios/run-forecast", tags=["Scenarios"])
@@ -253,6 +254,25 @@ async def run_forecast_from_scenario(body: _RunForecastRequest, request: Request
     current_values = json.loads(model_row["current_states"])
     value_ranges = json.loads(model_row["thresholds"])
     model_kpis = json.loads(model_row["kpis"])
+
+    # If projection baseline requested, overlay projection values onto current_values
+    projection_baseline_used = False
+    if body.projection_version:
+        conn2 = get_db()
+        try:
+            proj_row = conn2.execute(
+                "SELECT data_json FROM projection_monthly_data WHERE workspace_id=? AND version_label=? "
+                "ORDER BY year DESC, month DESC LIMIT 1",
+                [workspace_id, body.projection_version],
+            ).fetchone()
+            if proj_row:
+                proj_kpis = json.loads(proj_row["data_json"]) if isinstance(proj_row["data_json"], str) else (proj_row["data_json"] or {})
+                for k, v in proj_kpis.items():
+                    if k in current_values and isinstance(v, (int, float)):
+                        current_values[k] = v
+                projection_baseline_used = True
+        finally:
+            conn2.close()
 
     # Translate lever values to forecast overrides
     # Override format: {kpi: state_idx} where state_idx 0-4 maps to p10/p25/p50/p75/p90

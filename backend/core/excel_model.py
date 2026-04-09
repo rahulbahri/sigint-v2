@@ -157,12 +157,14 @@ class ModelWorkbookBuilder:
     """
 
     def __init__(self, monthly_data: list, forecast_data: Optional[dict],
-                 scenarios: list, settings: dict, targets: dict):
+                 scenarios: list, settings: dict, targets: dict,
+                 projection_data: Optional[list] = None):
         self.monthly_data = monthly_data
         self.forecast_data = forecast_data
         self.scenarios = scenarios
         self.settings = settings
         self.targets = targets
+        self.projection_data = projection_data or []
         self.wb = Workbook()
         self.cell_map = CellMap()
 
@@ -187,6 +189,8 @@ class ModelWorkbookBuilder:
         """Build the complete workbook and return it."""
         self._build_assumptions_sheet()
         self._build_actuals_sheet()
+        if self.projection_data:
+            self._build_projections_sheet()
         self._build_forecast_sheet()
         self._build_pl_sheet()
         self._build_cashflow_sheet()
@@ -316,6 +320,51 @@ class ModelWorkbookBuilder:
         ws.protection.sheet = True
         ws.protection.password = ""
         ws.freeze_panes = "C2"
+        _auto_width(ws)
+
+    # ── Sheet: Projections (user-uploaded plan/budget data) ────────────
+
+    def _build_projections_sheet(self):
+        """Build a Projections sheet from user-uploaded plan/budget data.
+        Layout mirrors the Actuals sheet: KPI keys in column A, months across top."""
+        ws = self.wb.create_sheet("Projections")
+
+        if not self.projection_data:
+            ws.cell(row=1, column=1, value="No projection data uploaded.").font = \
+                Font(size=12, color="94A3B8", italic=True)
+            return
+
+        # Collect all KPI keys across projection months
+        all_kpis = set()
+        for _, _, kpi_dict in self.projection_data:
+            for k in kpi_dict:
+                if not k.startswith("_") and k not in ("year", "month"):
+                    all_kpis.add(k)
+        sorted_kpis = sorted(all_kpis)
+
+        # Header row
+        ws.cell(row=1, column=1, value="KPI").font = _HEADER_FONT
+        ws.cell(row=1, column=1).fill = _HEADER_FILL
+        for i, (y, m, _) in enumerate(self.projection_data):
+            col = 2 + i
+            ws.cell(row=1, column=col, value=f"{y}-{m:02d}").font = _HEADER_FONT
+            ws.cell(row=1, column=col).fill = PatternFill(
+                start_color="1E3A5F", end_color="1E3A5F", fill_type="solid")
+
+        # Data rows
+        for r_idx, kpi in enumerate(sorted_kpis):
+            row = 2 + r_idx
+            ws.cell(row=row, column=1, value=kpi).font = Font(size=10, color="1E293B")
+            for m_idx, (y, m, kpi_dict) in enumerate(self.projection_data):
+                col = 2 + m_idx
+                val = kpi_dict.get(kpi)
+                if val is not None and isinstance(val, (int, float)):
+                    ws.cell(row=row, column=col, value=round(float(val), 2))
+                    ws.cell(row=row, column=col).number_format = '#,##0.00'
+                # Register in cell_map for cross-sheet references
+                self.cell_map.register("Projections", kpi, row, col, month_idx=m_idx)
+
+        ws.freeze_panes = "B2"
         _auto_width(ws)
 
     # ── Sheet 3: Forecast ────────────────────────────────────────────────

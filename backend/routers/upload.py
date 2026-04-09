@@ -738,15 +738,19 @@ def seed_demo_projection(request: Request):
 
 @router.post("/api/projection/upload", tags=["Projection"])
 async def upload_projection(request: Request, file: UploadFile = File(...), version_label: Optional[str] = None):
-    """Upload a projection CSV (same format as actuals). Replaces any existing projection with the same version label."""
+    """Upload a projection CSV or XLSX. Replaces any existing projection with the same version label."""
     workspace_id = _require_workspace(request)
-    if not file.filename.endswith((".csv", ".CSV")):
-        raise HTTPException(400, "Only CSV files are accepted.")
+    allowed_ext = {".csv", ".CSV", ".xlsx", ".xls"}
+    if not any(file.filename.endswith(ext) for ext in allowed_ext):
+        raise HTTPException(400, "Accepted formats: CSV, XLSX")
     content = await file.read()
     try:
-        df = pd.read_csv(io.StringIO(content.decode("utf-8", errors="replace")))
+        if file.filename.endswith((".xlsx", ".xls")):
+            df = _parse_excel_upload(content)
+        else:
+            df = pd.read_csv(io.StringIO(content.decode("utf-8", errors="replace")))
     except Exception as e:
-        raise HTTPException(400, f"Could not parse CSV: {e}")
+        raise HTTPException(400, f"Could not parse file: {e}")
 
     vlabel = version_label or "v1"
     col_map     = normalize_columns(df)

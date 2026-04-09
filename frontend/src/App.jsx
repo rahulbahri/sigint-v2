@@ -45,6 +45,8 @@ const CustomerSegments    = lazy(() => import('./components/CustomerSegments.jsx
 const OKRPage             = lazy(() => import('./components/OKRPage.jsx'))
 const DeferredRevenuePage = lazy(() => import('./components/DeferredRevenuePage.jsx'))
 const PlatformHealth      = lazy(() => import('./components/PlatformHealth.jsx'))
+const ProjectionUpload    = lazy(() => import('./components/ProjectionUpload.jsx'))
+const ThreeWayComparison  = lazy(() => import('./components/ThreeWayComparison.jsx'))
 const ScenarioPlanner   = lazy(() => import('./components/ScenarioPlanner.jsx'))
 const DocsPage          = lazy(() => import('./components/DocsPage.jsx'))
 const DataHealthPage    = lazy(() => import('./components/DataHealthPage.jsx'))
@@ -146,8 +148,14 @@ const LABS_TABS_BASE = [
   { id: 'devdocs',   label: 'Dev Docs',                       Icon: BookOpen        },
 ]
 
+// Roadmapped features — wired but under testing
+const ROADMAP_TABS = [
+  { id: 'proj_upload',  label: 'Projection Upload',     Icon: Upload         },
+  { id: 'three_way',    label: 'Three-Way Comparison',  Icon: GitBranch      },
+]
+
 // Flat list for tab iteration
-const TABS_BASE = [...NAV_GROUPS.flatMap(g => g.tabs), ...LABS_TABS_BASE]
+const TABS_BASE = [...NAV_GROUPS.flatMap(g => g.tabs), ...LABS_TABS_BASE, ...ROADMAP_TABS]
 
 const PAGE_TITLES = {
   home:        'Home',
@@ -163,6 +171,8 @@ const PAGE_TITLES = {
   segments:    'Customer Segments',
   deferred:    'Revenue Recognition',
   platform_health: 'Platform Health',
+  proj_upload:     'Projection Upload',
+  three_way:       'Three-Way Comparison',
   okrs:        'OKRs',
   ontology:    'Causal Intelligence',
   docs:        'Documentation',
@@ -244,6 +254,7 @@ function AppInner() {
   const [benchmarks, setBenchmarks]               = useState({})
   const [showOnboarding, setShowOnboarding]       = useState(() => !localStorage.getItem('axiom_onboarded'))
   const [labsOpen, setLabsOpen]                   = useState(false)
+  const [roadmapOpen, setRoadmapOpen]             = useState(false)
   const [devMode]                                 = useState(() => localStorage.getItem('axiom_dev_mode') === 'true')
   const [companySettings, setCompanySettings]     = useState({})
   const [authToken, setAuthToken]                 = useState('')
@@ -719,6 +730,26 @@ function AppInner() {
                 </button>
               ))}
             </div>
+
+            {/* Roadmapped section — features under testing */}
+            <div className="mt-1">
+              <button
+                onClick={() => setRoadmapOpen(!roadmapOpen)}
+                className="flex items-center gap-2 w-full px-3 py-1.5 text-[10px] font-bold text-amber-400 uppercase tracking-widest hover:text-amber-300 transition-colors"
+              >
+                <ChevronRight size={10} className={`transition-transform ${roadmapOpen ? 'rotate-90' : ''}`}/>
+                <Target size={10}/>
+                Roadmapped
+              </button>
+              {roadmapOpen && ROADMAP_TABS.map(({ id, label, Icon }) => (
+                <button key={id} onClick={() => setTab(id)}
+                  className={`sidebar-link w-full text-left ${tab === id ? 'active' : ''}`}>
+                  <Icon size={15} className="flex-shrink-0"/>
+                  <span className="flex-1 truncate">{label}</span>
+                  {tab === id && <ChevronRight size={12} className="text-amber-400"/>}
+                </button>
+              ))}
+            </div>
           </nav>
 
           {/* AI Query Panel — collapsed by default, opened via Anika CTA */}
@@ -928,6 +959,8 @@ function AppInner() {
               {tab === 'docs'        && <DocsPage />}
               {tab === 'tutorial'    && <TutorialPage onNavigate={setTab} />}
               {tab === 'platform_health' && <PlatformHealth />}
+              {tab === 'proj_upload'     && <ProjectionUpload />}
+              {tab === 'three_way'       && <ThreeWayComparison />}
               {tab === 'admin'       && isAdmin && <AdminPanel />}
               {tab === 'departments' && <DepartmentDashboard onKpiClick={openKpi} />}
               {tab === 'okrs'        && <OKRPage fingerprint={fingerprint} />}
