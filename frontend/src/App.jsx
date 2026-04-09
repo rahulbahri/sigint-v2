@@ -93,9 +93,16 @@ const NAV_GROUPS = [
       { id: 'board',      label: 'Executive Brief',     Icon: Layers     },
       { id: 'board_pack', label: 'Board Pack',          Icon: Presentation},
       { id: 'variance',   label: 'Variance Command',    Icon: Activity   },
-      { id: 'departments', label: 'Departments',        Icon: Users      },
-      { id: 'okrs',       label: 'OKRs',               Icon: Target     },
       { id: 'decisions',  label: 'Decision Log',        Icon: BookMarked },
+    ],
+  },
+  {
+    label: 'Strategy',
+    tabs: [
+      { id: 'okrs',        label: 'OKRs',               Icon: Target     },
+      { id: 'departments', label: 'Departments',        Icon: Users      },
+      { id: 'scenario',    label: 'Scenario Planner',   Icon: Sliders    },
+      { id: 'projection',  label: 'Plan vs Actual',     Icon: GitBranch  },
     ],
   },
   {
@@ -106,9 +113,7 @@ const NAV_GROUPS = [
       { id: 'forecast',    label: 'Forward Signals',         Icon: BarChart2   },
       { id: 'ontology',    label: 'Causal Intelligence',     Icon: Network     },
       { id: 'segments',    label: 'Customer Segments',       Icon: PieChart    },
-      { id: 'deferred',    label: 'Revenue Recognition',    Icon: Clock       },
-      { id: 'projection',  label: 'Plan vs Actual',          Icon: GitBranch   },
-      { id: 'scenario',    label: 'Scenario Planner',        Icon: Sliders     },
+      { id: 'deferred',    label: 'Revenue Recognition',     Icon: Clock       },
     ],
   },
   {
@@ -246,6 +251,7 @@ function AppInner() {
   const [prefillDecision, setPrefillDecision]     = useState(null)
   const [decisionMarkers, setDecisionMarkers]     = useState({})
   const [dataFreshness, setDataFreshness]         = useState(null)
+  const [collapsedGroups, setCollapsedGroups]     = useState({})
 
   // ── Validate stored token with backend on every load ─────────────────────
   useEffect(() => {
@@ -588,11 +594,11 @@ function AppInner() {
               }
             </div>
             <div className="min-w-0">
-              <p className="text-white font-bold text-sm leading-none">
-                {companySettings.company_name || 'Axiom'}
+              <p className="text-white font-bold text-sm leading-none truncate">
+                {companySettings.company_name || 'Acme Corp'}
               </p>
               <p className="text-[#00AEEF] text-[10px] mt-0.5 tracking-widest uppercase truncate">
-                Intelligence
+                Axiom Intelligence
               </p>
             </div>
           </div>
@@ -645,12 +651,21 @@ function AppInner() {
         <div className="flex-1 flex flex-col min-h-0">
 
           <nav className="flex-1 min-h-0 py-2 overflow-y-auto">
-            {NAV_GROUPS.map(group => (
-              <div key={group.label} className="mb-1">
-                <p className="text-slate-500 text-[9px] uppercase tracking-widest font-semibold px-5 py-1.5">
-                  {group.label}
-                </p>
-                {group.tabs.map(({ id, label, Icon }) => (
+            {NAV_GROUPS.map(group => {
+              // Auto-expand if current tab is in this group, or if it's Intelligence
+              const hasActiveTab = group.tabs.some(t => t.id === tab)
+              const isExpanded = hasActiveTab || collapsedGroups?.[group.label] === false
+              const isCollapsed = !hasActiveTab && collapsedGroups?.[group.label] !== false && group.label !== 'Intelligence'
+              return (
+              <div key={group.label} className="mb-0.5">
+                <button
+                  onClick={() => setCollapsedGroups(prev => ({ ...prev, [group.label]: isCollapsed ? false : true }))}
+                  className="w-full flex items-center justify-between text-slate-500 text-[9px] uppercase tracking-widest font-semibold px-5 py-1.5 hover:text-slate-300 transition-colors"
+                >
+                  <span>{group.label}</span>
+                  <ChevronRight size={9} className={`transition-transform ${isCollapsed ? '' : 'rotate-90'}`} />
+                </button>
+                {!isCollapsed && group.tabs.map(({ id, label, Icon }) => (
                   <button
                     key={id}
                     onClick={() => setTab(id)}
@@ -662,7 +677,8 @@ function AppInner() {
                   </button>
                 ))}
               </div>
-            ))}
+              )
+            })}
 
             {/* Admin tab — only for rahul@axiomsync.ai */}
             {isAdmin && (
