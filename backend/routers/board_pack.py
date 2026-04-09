@@ -101,6 +101,8 @@ async def generate_board_pack(request: Request, body: BoardPackRequest):
     """
     Generate a PPTX board pack. Returns the file as a download.
     """
+    workspace_id = _require_workspace(request)
+
     try:
         from pptx import Presentation
         from pptx.util import Inches, Pt, Emu
@@ -110,7 +112,17 @@ async def generate_board_pack(request: Request, body: BoardPackRequest):
     except ImportError:
         raise HTTPException(status_code=500, detail="python-pptx not installed")
 
-    workspace_id = _require_workspace(request)
+    try:
+        return _generate_board_pack_inner(workspace_id, body, Presentation, Inches, Pt, Emu, RGBColor, PP_ALIGN)
+    except Exception as e:
+        import traceback
+        tb = traceback.format_exc()
+        print(f"[ERROR] Board pack generation failed: {e}\n{tb}")
+        raise HTTPException(status_code=500, detail=f"Board pack generation failed: {str(e)}")
+
+
+def _generate_board_pack_inner(workspace_id, body, Presentation, Inches, Pt, Emu, RGBColor, PP_ALIGN):
+    """Inner function — separated so exceptions are caught by the caller."""
     theme = THEMES.get(body.theme, THEMES["corporate"])
     conn = get_db()
 

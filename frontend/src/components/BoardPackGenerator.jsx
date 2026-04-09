@@ -66,8 +66,9 @@ export default function BoardPackGenerator({ companySettings }) {
       window.URL.revokeObjectURL(url)
       setSuccess(true)
       setTimeout(() => setSuccess(false), 5000)
-    } catch {
-      setError('Generation failed — ensure data is loaded and try again.')
+    } catch (err) {
+      const detail = err?.response?.data?.detail
+      setError(detail || 'Generation failed — ensure data is loaded and try again.')
     } finally {
       setGenerating(false)
     }
