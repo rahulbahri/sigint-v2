@@ -560,10 +560,20 @@ def _build_causal_chain(
 
 
 @router.get("/api/kpi-detail/{kpi_key}", tags=["Intelligence"])
-def get_kpi_detail(kpi_key: str, request: Request):
+def get_kpi_detail(
+    kpi_key: str,
+    request: Request,
+    from_year: Optional[int] = Query(None),
+    from_month: Optional[int] = Query(None),
+    to_year: Optional[int] = Query(None),
+    to_month: Optional[int] = Query(None),
+):
     """
     Return rich detail for a single KPI: definition, causation rules,
     benchmarks, monthly time series, target, and current status.
+
+    When period params are provided, time_series and avg are scoped to
+    that range.  Without params, returns all available data.
     """
     workspace_id = _require_workspace(request)
     conn = get_db()
@@ -577,11 +587,18 @@ def get_kpi_detail(kpi_key: str, request: Request):
     # Benchmarks
     benchmark = BENCHMARKS.get(kpi_key, {})
 
-    # Full monthly time series
-    rows = conn.execute(
-        "SELECT year, month, data_json FROM monthly_data WHERE workspace_id=? ORDER BY year, month",
-        [workspace_id],
-    ).fetchall()
+    # Monthly time series — filtered by period when params are provided
+    has_period = from_year is not None and from_month is not None
+    query = "SELECT year, month, data_json FROM monthly_data WHERE workspace_id=?"
+    params: list = [workspace_id]
+    if from_year is not None and from_month is not None:
+        query += " AND (year > ? OR (year = ? AND month >= ?))"
+        params.extend([from_year, from_year, from_month])
+    if to_year is not None and to_month is not None:
+        query += " AND (year < ? OR (year = ? AND month <= ?))"
+        params.extend([to_year, to_year, to_month])
+    query += " ORDER BY year, month"
+    rows = conn.execute(query, params).fetchall()
 
     time_series = []
     for row in rows:
@@ -606,10 +623,11 @@ def get_kpi_detail(kpi_key: str, request: Request):
     unit = target_row["unit"] if target_row else kpi_def.get("unit", "")
 
     # Compute current status (green / yellow / red / grey) using direction-aware helpers
+    # When period-filtered, use all values in the range; otherwise last 6 for stability
     status = "grey"
     pct_of_target = None
     if time_series and target_value is not None:
-        recent_vals = [pt["value"] for pt in time_series[-6:]]
+        recent_vals = [pt["value"] for pt in time_series] if has_period else [pt["value"] for pt in time_series[-6:]]
         avg = sum(recent_vals) / len(recent_vals)
         gap = _gap_pct(avg, target_value, direction)
         pct_of_target = round(gap * 100, 1)

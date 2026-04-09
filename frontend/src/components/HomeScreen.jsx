@@ -275,7 +275,7 @@ function Sparkline({ data, color = '#059669', width = 64, height = 24 }) {
 }
 
 // ── KPI Slide-out drawer (enriched with navigation history + causal chain) ──
-function KpiSlideOut({ kpi: initialKpi, status: initialStatus, onClose, onNavigate }) {
+function KpiSlideOut({ kpi: initialKpi, status: initialStatus, onClose, onNavigate, periodDates }) {
   // Navigation history for drilling into downstream KPIs
   const [history, setHistory] = useState([])
   const [currentKpi, setCurrentKpi] = useState(initialKpi)
@@ -290,7 +290,14 @@ function KpiSlideOut({ kpi: initialKpi, status: initialStatus, onClose, onNaviga
     if (!currentKpi?.key) return
     setDetail(null) // Clear stale detail when navigating to a new KPI
     setDetailLoading(true)
-    axios.get(`/api/kpi-detail/${currentKpi.key}`)
+    const detailParams = {}
+    if (periodDates?.fromYear) {
+      detailParams.from_year = periodDates.fromYear
+      detailParams.from_month = periodDates.fromMonth
+      detailParams.to_year = periodDates.toYear
+      detailParams.to_month = periodDates.toMonth
+    }
+    axios.get(`/api/kpi-detail/${currentKpi.key}`, { params: detailParams })
       .then(r => {
         setDetail(r.data)
         // Override status from API's direction-aware computation (never trust the prop)
@@ -298,7 +305,7 @@ function KpiSlideOut({ kpi: initialKpi, status: initialStatus, onClose, onNaviga
       })
       .catch(() => setDetail(null))
       .finally(() => setDetailLoading(false))
-  }, [currentKpi?.key])
+  }, [currentKpi?.key, periodDates?.fromYear, periodDates?.fromMonth, periodDates?.toYear, periodDates?.toMonth])
 
   // ── Computed display values ─────────────────────────────────────────────
   const info = KPI_INFO[currentKpi?.key] || {}
@@ -311,9 +318,9 @@ function KpiSlideOut({ kpi: initialKpi, status: initialStatus, onClose, onNaviga
   const _rawAvg = (() => {
     // 1. Try card-passed avg
     if (currentKpi?.avg != null) return currentKpi.avg
-    // 2. Compute from detail API time_series (last 6 months)
+    // 2. Compute from detail API time_series (already period-filtered by backend)
     if (detail?.time_series?.length) {
-      const v = detail.time_series.slice(-6).map(p => p.value)
+      const v = detail.time_series.map(p => p.value)
       return v.reduce((a, b) => a + b, 0) / v.length
     }
     return null
@@ -2525,6 +2532,7 @@ export default function HomeScreen({ onNavigate, onAskAnika }) {
           status={slideOut.status}
           onClose={() => setSlideOut(null)}
           onNavigate={onNavigate}
+          periodDates={periodDates}
         />
       )}
       {showScoreModal && (
