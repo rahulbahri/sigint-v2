@@ -67,7 +67,17 @@ export default function BoardPackGenerator({ companySettings }) {
       setSuccess(true)
       setTimeout(() => setSuccess(false), 5000)
     } catch (err) {
-      const detail = err?.response?.data?.detail
+      // responseType: 'blob' means error body is a Blob, not JSON — read it
+      let detail = null
+      try {
+        if (err?.response?.data instanceof Blob) {
+          const text = await err.response.data.text()
+          const parsed = JSON.parse(text)
+          detail = parsed.detail
+        } else {
+          detail = err?.response?.data?.detail
+        }
+      } catch {}
       setError(detail || 'Generation failed — ensure data is loaded and try again.')
     } finally {
       setGenerating(false)
