@@ -1,16 +1,18 @@
 import { useState } from 'react'
-import { Zap, AlertCircle, ShieldCheck, GitBranch, FileSpreadsheet } from 'lucide-react'
+import { Zap, AlertCircle, ShieldCheck, GitBranch, Shield, FileSpreadsheet } from 'lucide-react'
 import axios from 'axios'
-import DataSourcesPage  from './DataSourcesPage.jsx'
-import DataGapsPage     from './DataGapsPage.jsx'
-import DataQualityPage  from './DataQualityPage.jsx'
-import FieldMappingPage from './FieldMappingPage.jsx'
+import DataSourcesPage    from './DataSourcesPage.jsx'
+import DataGapsPage       from './DataGapsPage.jsx'
+import DataQualityPage    from './DataQualityPage.jsx'
+import FieldMappingPage   from './FieldMappingPage.jsx'
+import DataIntegrityPage  from './DataIntegrityPage.jsx'
 
 const TABS = [
-  { id: 'sources',  label: 'Data Sources',   Icon: Zap,          Component: DataSourcesPage  },
-  { id: 'gaps',     label: 'Data Gaps',      Icon: AlertCircle,  Component: DataGapsPage     },
-  { id: 'quality',  label: 'Data Quality',   Icon: ShieldCheck,  Component: DataQualityPage  },
-  { id: 'mappings', label: 'Field Mappings', Icon: GitBranch,    Component: FieldMappingPage },
+  { id: 'sources',   label: 'Data Sources',   Icon: Zap,          Component: DataSourcesPage  },
+  { id: 'gaps',      label: 'Data Gaps',      Icon: AlertCircle,  Component: DataGapsPage     },
+  { id: 'quality',   label: 'Data Quality',   Icon: ShieldCheck,  Component: DataQualityPage  },
+  { id: 'mappings',  label: 'Field Mappings', Icon: GitBranch,    Component: FieldMappingPage },
+  { id: 'integrity', label: 'Integrity',      Icon: Shield,       Component: DataIntegrityPage },
 ]
 
 export default function DataHealthPage() {

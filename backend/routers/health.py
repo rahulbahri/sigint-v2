@@ -899,3 +899,47 @@ def debug_kpi_audit(kpi_key: str, request: Request):
             "avg_all":   compute_kpi_avg(all_values, window=len(all_values), period_filtered=True),
         },
     }
+
+
+# ── Integrity check endpoints ────────────────────────────────────────────────
+
+@router.get("/api/integrity-check", tags=["Intelligence"])
+def run_integrity_check(request: Request):
+    """Run full data integrity validation (read-only, no correction)."""
+    workspace_id = _require_workspace(request)
+    conn = get_db()
+    try:
+        from core.integrity import DataIntegrityValidator
+        validator = DataIntegrityValidator(conn, workspace_id)
+        return validator.run_all(trigger="manual", auto_correct=False)
+    finally:
+        conn.close()
+
+
+@router.post("/api/integrity-check/correct", tags=["Intelligence"])
+def run_integrity_correction(request: Request):
+    """Run integrity check WITH auto-correction enabled."""
+    workspace_id = _require_workspace(request)
+    conn = get_db()
+    try:
+        from core.integrity import DataIntegrityValidator
+        validator = DataIntegrityValidator(conn, workspace_id)
+        return validator.run_all(trigger="manual", auto_correct=True)
+    finally:
+        conn.close()
+
+
+@router.get("/api/integrity-check/history", tags=["Intelligence"])
+def integrity_check_history(request: Request):
+    """Return recent integrity check results."""
+    workspace_id = _require_workspace(request)
+    conn = get_db()
+    rows = conn.execute(
+        "SELECT id, run_id, trigger, started_at, completed_at, "
+        "overall_status, stage0_status, stage1_status, stage2_status, stage3_status, stage4_status, "
+        "correction_attempted, correction_succeeded "
+        "FROM integrity_checks WHERE workspace_id=? ORDER BY started_at DESC LIMIT 20",
+        [workspace_id],
+    ).fetchall()
+    conn.close()
+    return {"checks": [dict(r) for r in rows]}

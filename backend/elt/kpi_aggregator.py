@@ -162,6 +162,26 @@ def _check_cross_kpi_consistency(kpis: dict) -> list[dict]:
     if dso is not None and acp is not None and abs(dso - acp) > 1:
         _chk(True, f"DSO ({dso:.0f} days) and Avg Collection Period ({acp:.0f} days) should be identical but differ.")
 
+    # ARR = MRR * 12
+    mrr = kpis.get("mrr")
+    arr = kpis.get("arr")
+    if mrr is not None and arr is not None and mrr > 0 and abs(arr - mrr * 12) > mrr * 0.5:
+        _chk(True, f"ARR ({arr:,.0f}) should be MRR ({mrr:,.0f}) x 12 = {mrr*12:,.0f}. Verify subscription revenue classification.")
+
+    # NRR > 100% requires expansion > contraction
+    nrr = kpis.get("nrr")
+    er = kpis.get("expansion_rate")
+    ct = kpis.get("contraction_rate")
+    if nrr is not None and nrr > 100 and er is not None and ct is not None and er <= ct:
+        _chk(True, f"NRR ({nrr:.1f}%) > 100% but expansion ({er:.1f}%) <= contraction ({ct:.1f}%). Revenue growth must come from existing customers.")
+
+    # Burn multiple sign: positive when burning cash
+    bm = kpis.get("burn_multiple")
+    cb = kpis.get("cash_burn")
+    if bm is not None and cb is not None:
+        if cb > 0 and bm < 0:
+            _chk(True, f"Cash burn is positive (${cb:,.0f}) but burn multiple is negative ({bm:.1f}x). Sign convention may be inverted.")
+
     return issues
 
 
@@ -337,6 +357,16 @@ def aggregate_canonical_to_monthly(conn, workspace_id: str) -> dict:
             return _finalise_summary(summary)
 
         sorted_months = sorted(all_months)
+
+        # ── Gap detection: flag missing months ──
+        for i in range(1, len(sorted_months)):
+            py, pm = sorted_months[i - 1]
+            cy, cm = sorted_months[i]
+            ey = py + (pm // 12)
+            em = (pm % 12) + 1
+            if (cy, cm) != (ey, em):
+                summary.setdefault("data_warnings", []).append(
+                    f"Gap: data jumps from {py}-{pm:02d} to {cy}-{cm:02d}")
 
         # ── Step 3: Compute KPIs for each month ──
         monthly_kpis: dict[tuple[int, int], dict[str, float]] = {}
@@ -518,13 +548,25 @@ def _extract_monthly_revenue(conn, workspace_id: str, summary: dict) -> dict:
     try:
         rows = _safe_query(
             conn,
-            "SELECT amount, period, subscription_type, customer_id, source "
+            "SELECT amount, period, subscription_type, customer_id, source, currency "
             "FROM canonical_revenue WHERE workspace_id=?",
             [workspace_id],
         )
         if not rows:
             summary["skipped"].append("canonical_revenue: no rows")
             return {}
+
+        # Currency validation: detect mixed currencies
+        currencies_seen = set()
+        for r in rows:
+            cur = (r.get("currency") if isinstance(r, dict) else (r[5] if len(r) > 5 else None)) or ""
+            if cur and str(cur).strip():
+                currencies_seen.add(str(cur).strip().upper())
+        if len(currencies_seen) > 1:
+            summary.setdefault("data_warnings", []).append(
+                f"Mixed currencies in revenue: {', '.join(sorted(currencies_seen))}. "
+                f"All amounts are summed as-is — totals may be unreliable."
+            )
 
         for r in rows:
             amount = _safe_float(r.get("amount") if isinstance(r, dict) else r[0])

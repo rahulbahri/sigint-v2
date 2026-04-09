@@ -2417,6 +2417,15 @@ async def upload_canonical_xlsx(request: Request, file: UploadFile = File(...)):
     except Exception as e:
         agg_error = str(e)
 
+    # Run integrity check after aggregation (non-blocking)
+    integrity_result = None
+    try:
+        from core.integrity import DataIntegrityValidator
+        validator = DataIntegrityValidator(conn, workspace_id)
+        integrity_result = validator.run_all(trigger="upload", auto_correct=True)
+    except Exception:
+        pass
+
     conn.commit()
     conn.close()
 
@@ -2432,6 +2441,10 @@ async def upload_canonical_xlsx(request: Request, file: UploadFile = File(...)):
             "kpi_keys": kpis_list[:20],
             "error": agg_error,
         },
+        "integrity": {
+            "status": integrity_result.get("overall_status") if integrity_result else "skipped",
+            "run_id": integrity_result.get("run_id") if integrity_result else None,
+        } if integrity_result else None,
         "message": (
             f"Uploaded {total_upserted} records across {len(sheet_results)} sheets. "
             f"Aggregator computed {len(kpis_list)} KPIs across "

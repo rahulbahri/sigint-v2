@@ -523,6 +523,36 @@ def init_db():
             conn.commit()
         except Exception:
             pass  # Column already exists
+    # ── Integrity checks table ──────────────────────────────────────────────
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS integrity_checks (
+            id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+            workspace_id          TEXT NOT NULL DEFAULT '',
+            run_id                TEXT NOT NULL,
+            trigger               TEXT NOT NULL DEFAULT 'manual',
+            started_at            TEXT NOT NULL,
+            completed_at          TEXT,
+            overall_status        TEXT NOT NULL DEFAULT 'pending',
+            stage0_status         TEXT,
+            stage0_report         TEXT DEFAULT '{}',
+            stage1_status         TEXT,
+            stage1_report         TEXT DEFAULT '{}',
+            stage2_status         TEXT,
+            stage2_report         TEXT DEFAULT '{}',
+            stage3_status         TEXT,
+            stage3_report         TEXT DEFAULT '{}',
+            stage4_status         TEXT,
+            stage4_report         TEXT DEFAULT '{}',
+            correction_attempted  INTEGER DEFAULT 0,
+            correction_succeeded  INTEGER DEFAULT 0,
+            correction_log        TEXT DEFAULT '[]',
+            upload_id             INTEGER,
+            source_name           TEXT,
+            created_at            TEXT DEFAULT (datetime('now'))
+        )
+    """)
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_integrity_ws ON integrity_checks(workspace_id, started_at)")
+    conn.commit()
     # ALTER TABLE migrations for existing tables (add workspace_id if missing)
     for tbl in ["uploads","monthly_data","kpi_targets","projection_uploads",
                 "projection_monthly_data","kpi_accountability","annotations",
