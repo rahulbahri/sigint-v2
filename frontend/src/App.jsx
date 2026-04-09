@@ -98,6 +98,7 @@ const NAV_GROUPS = [
       { id: 'fingerprint', label: 'Performance Fingerprint', Icon: Fingerprint },
       { id: 'trends',      label: 'Trend Explorer',          Icon: TrendingUp  },
       { id: 'forecast',    label: 'Forward Signals',         Icon: BarChart2   },
+      { id: 'ontology',    label: 'Causal Intelligence',     Icon: Network     },
       { id: 'projection',  label: 'Plan vs Actual',          Icon: GitBranch   },
       { id: 'scenario',    label: 'Scenario Planner',        Icon: Sliders     },
     ],
@@ -124,7 +125,6 @@ const NAV_GROUPS = [
 // Labs tabs — hidden features, fully wired, accessible under Labs
 const LABS_TABS_BASE = [
   { id: 'dashboard', label: 'Command Center (Full KPI Grid)', Icon: LayoutDashboard },
-  { id: 'ontology',  label: 'KPI Causal Map',                 Icon: Network         },
   { id: 'tutorial',  label: 'Platform Manual',                 Icon: BookOpen        },
   { id: 'docs',      label: 'Documentation',                  Icon: BookOpen        },
   { id: 'api',       label: 'API Reference',                  Icon: Code2           },
@@ -144,7 +144,7 @@ const PAGE_TITLES = {
   fingerprint: 'Performance Fingerprint',
   trends:      'Trend Explorer',
   projection:  'Plan vs Actual',
-  ontology:    'KPI Causal Map',
+  ontology:    'Causal Intelligence',
   docs:        'Documentation',
   forecast:    'Forward Signals — 90-Day Outlook',
   data_health: 'Data Health',
@@ -233,6 +233,7 @@ function AppInner() {
   const [cockpitMode, setCockpitMode]             = useState(() => localStorage.getItem('axiom_cockpit_mode') || null)
   const [prefillDecision, setPrefillDecision]     = useState(null)
   const [decisionMarkers, setDecisionMarkers]     = useState({})
+  const [dataFreshness, setDataFreshness]         = useState(null)
 
   // ── Validate stored token with backend on every load ─────────────────────
   useEffect(() => {
@@ -447,8 +448,11 @@ function AppInner() {
       setSummary(s.data); setKpiDefs(k.data)
       setMonthly(m.data); setFingerprint(f.data)
       setBridgeData(b.data); setProjectionMonthly(pm.data)
-      // Fetch lightweight health score for sidebar widget (non-blocking)
-      axios.get('/api/home').then(r => setSidebarHealth(r.data?.health)).catch(() => {})
+      // Fetch lightweight health score + data freshness for sidebar widget (non-blocking)
+      axios.get('/api/home').then(r => {
+        setSidebarHealth(r.data?.health)
+        setDataFreshness(r.data?.data_period || null)
+      }).catch(() => {})
       // Fetch decision markers for trend chart annotations (non-blocking)
       axios.get('/api/decision-markers').then(r => setDecisionMarkers(r.data?.markers || {})).catch(() => {})
       if (Array.isArray(ay.data) && ay.data.length) setAvailableYears(ay.data)
@@ -758,8 +762,23 @@ function AppInner() {
               {' · '}
               {selectedMonths.length === 0 ? 'All Months' : `${selectedMonths.length} month${selectedMonths.length > 1 ? 's' : ''}`}
             </span>
-            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse hidden lg:block"/>
-            <span className="hidden lg:block text-emerald-600 font-medium">Live</span>
+            {dataFreshness?.uploaded_at ? (() => {
+              const ago = Math.floor((Date.now() - new Date(dataFreshness.uploaded_at).getTime()) / 1000)
+              const label = ago < 3600 ? `${Math.floor(ago / 60)}m ago` : ago < 86400 ? `${Math.floor(ago / 3600)}h ago` : `${Math.floor(ago / 86400)}d ago`
+              const isStale = ago > 7 * 86400
+              return <>
+                <span className={`w-1.5 h-1.5 rounded-full hidden lg:block ${isStale ? 'bg-amber-400' : 'bg-emerald-400 animate-pulse'}`}/>
+                <span className={`hidden lg:block font-medium ${isStale ? 'text-amber-500' : 'text-emerald-600'}`}
+                  title={`Last upload: ${dataFreshness.uploaded_at?.slice(0, 16)}\nData: ${dataFreshness.from || '?'} to ${dataFreshness.to || '?'}`}>
+                  {isStale ? `Stale (${label})` : label}
+                </span>
+              </>
+            })() : (
+              <>
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse hidden lg:block"/>
+                <span className="hidden lg:block text-emerald-600 font-medium">Live</span>
+              </>
+            )}
           </div>
         </header>
 

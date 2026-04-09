@@ -11,6 +11,7 @@ import {
 } from 'lucide-react'
 import { fmtKpiValue, fmtKpiRange } from './kpiFormat'
 import IntelligenceFeed from './IntelligenceFeed.jsx'
+import WeeklyDigest from './WeeklyDigest.jsx'
 
 // ── KPI contextual info dictionary ───────────────────────────────────────────
 const KPI_INFO = {
@@ -2178,6 +2179,10 @@ export default function HomeScreen({ onNavigate, onAskAnika, externalPeriodDates
           ))}
         </div>
       )}
+
+      {/* ── Weekly Digest (CEO action-oriented summary) ─────────────── */}
+      {data && <WeeklyDigest data={data} onNavigate={onNavigate}
+        onKpiClick={(kpi) => setSlideOut({ kpi, status: 'red' })} />}
 
       {/* ── Intelligence Feed (autonomous agent insights) ────────────── */}
       <IntelligenceFeed compact />
