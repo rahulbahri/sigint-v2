@@ -997,3 +997,340 @@ def run_agents_manually(request: Request):
     from core.agents.orchestrator import run_learning_pipeline
     run_learning_pipeline(workspace_id, trigger="manual")
     return {"status": "triggered", "message": "Learning pipeline started in background"}
+
+
+# ── Platform Health Command Center ───────────────────────────────────────────
+
+@router.get("/api/platform-health", tags=["Intelligence"])
+def platform_health(request: Request):
+    """
+    Unified platform health dashboard. Aggregates all health data sources
+    into a single score with subsystem breakdown, self-healing log,
+    user action items, and triage guide.
+    """
+    workspace_id = _require_workspace(request)
+    conn = get_db()
+    try:
+        subsystems = {}
+        all_scores = []
+
+        # ── 1. Data Pipeline ──────────────────────────────────────────
+        dp_checks = []
+        dp_score = 100
+
+        # Freshness
+        period_row = conn.execute(
+            "SELECT MAX(year*100+month) as mx FROM monthly_data WHERE workspace_id=?",
+            [workspace_id],
+        ).fetchone()
+        upload_row = conn.execute(
+            "SELECT uploaded_at FROM uploads WHERE workspace_id=? ORDER BY id DESC LIMIT 1",
+            [workspace_id],
+        ).fetchone()
+        from datetime import datetime, date
+        uploaded_at = upload_row["uploaded_at"] if upload_row else None
+        if uploaded_at:
+            try:
+                days_stale = (datetime.utcnow() - datetime.fromisoformat(uploaded_at.replace("Z", "+00:00").split("+")[0])).days
+            except Exception:
+                days_stale = 999
+            if days_stale > 90:
+                dp_checks.append({"name": "Data freshness", "status": "fail", "detail": f"Last upload {days_stale} days ago"})
+                dp_score -= 30
+            elif days_stale > 30:
+                dp_checks.append({"name": "Data freshness", "status": "warn", "detail": f"Last upload {days_stale} days ago"})
+                dp_score -= 10
+            else:
+                dp_checks.append({"name": "Data freshness", "status": "pass", "detail": f"Last upload {days_stale}d ago"})
+        else:
+            dp_checks.append({"name": "Data freshness", "status": "warn", "detail": "No upload timestamp found"})
+            dp_score -= 10
+
+        # Canonical tables
+        canon_count = 0
+        for tbl in ["canonical_revenue", "canonical_expenses", "canonical_customers",
+                     "canonical_pipeline", "canonical_invoices", "canonical_employees"]:
+            try:
+                r = conn.execute(f"SELECT COUNT(*) as cnt FROM {tbl} WHERE workspace_id=?", [workspace_id]).fetchone()
+                if r and r["cnt"] > 0:
+                    canon_count += 1
+            except Exception:
+                pass
+        dp_checks.append({"name": "Canonical tables", "status": "pass" if canon_count >= 3 else "warn",
+                          "detail": f"{canon_count}/6 populated"})
+        if canon_count < 3:
+            dp_score -= 15
+
+        # Monthly data count
+        md_row = conn.execute(
+            "SELECT COUNT(*) as cnt FROM monthly_data WHERE workspace_id=?", [workspace_id]
+        ).fetchone()
+        months = md_row["cnt"] if md_row else 0
+        dp_checks.append({"name": "Monthly data", "status": "pass" if months >= 6 else "warn",
+                          "detail": f"{months} months loaded"})
+
+        # Currency check
+        try:
+            cur_rows = conn.execute(
+                "SELECT DISTINCT currency FROM canonical_revenue WHERE workspace_id=? AND currency IS NOT NULL AND currency != ''",
+                [workspace_id],
+            ).fetchall()
+            currencies = [r["currency"] for r in cur_rows]
+            if len(currencies) > 1:
+                dp_checks.append({"name": "Currency", "status": "fail", "detail": f"Mixed: {', '.join(currencies)}"})
+                dp_score -= 20
+            else:
+                dp_checks.append({"name": "Currency", "status": "pass", "detail": currencies[0] if currencies else "USD"})
+        except Exception:
+            pass
+
+        subsystems["data_pipeline"] = {"status": "healthy" if dp_score >= 70 else ("degraded" if dp_score >= 40 else "critical"),
+                                       "score": max(dp_score, 0), "checks": dp_checks}
+        all_scores.append(max(dp_score, 0))
+
+        # ── 2. Computation ────────────────────────────────────────────
+        comp_checks = []
+        comp_score = 100
+
+        # KPI count
+        kpi_count = 0
+        withheld_count = 0
+        latest_md = conn.execute(
+            "SELECT data_json FROM monthly_data WHERE workspace_id=? ORDER BY year DESC, month DESC LIMIT 1",
+            [workspace_id],
+        ).fetchone()
+        if latest_md:
+            d = json.loads(latest_md["data_json"]) if isinstance(latest_md["data_json"], str) else (latest_md["data_json"] or {})
+            kpi_count = sum(1 for k, v in d.items() if not k.startswith("_") and isinstance(v, (int, float)))
+            diags = d.get("_diagnostics", {})
+            withheld_count = sum(1 for v in diags.values() if isinstance(v, dict) and v.get("withheld"))
+        comp_checks.append({"name": "KPIs computed", "status": "pass", "detail": f"{kpi_count} KPIs"})
+        if withheld_count > 0:
+            comp_checks.append({"name": "Withheld KPIs", "status": "warn",
+                                "detail": f"{withheld_count} withheld (near-zero denominators)"})
+            comp_score -= min(withheld_count * 3, 15)
+
+        # Display consistency — check latest integrity run
+        try:
+            ic_row = conn.execute(
+                "SELECT stage3_status, stage2_status FROM integrity_checks "
+                "WHERE workspace_id=? ORDER BY started_at DESC LIMIT 1",
+                [workspace_id],
+            ).fetchone()
+            if ic_row:
+                s3 = ic_row["stage3_status"]
+                comp_checks.append({"name": "Display consistency", "status": s3 or "unknown",
+                                    "detail": "All avg paths agree" if s3 == "pass" else "Inconsistency detected"})
+                if s3 != "pass":
+                    comp_score -= 20
+            else:
+                comp_checks.append({"name": "Display consistency", "status": "unknown", "detail": "No integrity check run yet"})
+        except Exception:
+            pass
+
+        # Targets set
+        try:
+            tgt_row = conn.execute(
+                "SELECT COUNT(*) as cnt FROM kpi_targets WHERE workspace_id=? AND target_value IS NOT NULL",
+                [workspace_id],
+            ).fetchone()
+            targets_set = tgt_row["cnt"] if tgt_row else 0
+            comp_checks.append({"name": "KPI targets", "status": "pass" if targets_set >= 10 else "warn",
+                                "detail": f"{targets_set} targets configured"})
+            if targets_set < 5:
+                comp_score -= 10
+        except Exception:
+            pass
+
+        subsystems["computation"] = {"status": "healthy" if comp_score >= 70 else ("degraded" if comp_score >= 40 else "critical"),
+                                     "score": max(comp_score, 0), "checks": comp_checks}
+        all_scores.append(max(comp_score, 0))
+
+        # ── 3. Intelligence ───────────────────────────────────────────
+        intel_checks = []
+        intel_score = 100
+
+        # Health score
+        try:
+            from core.health_score import compute_health_score
+            h = compute_health_score(conn, workspace_id)
+            hs = h.get("score")
+            if hs is not None:
+                intel_checks.append({"name": "Health score", "status": "pass", "detail": f"{hs}/100 ({h.get('label', '')})"})
+            else:
+                intel_checks.append({"name": "Health score", "status": "warn", "detail": "Could not compute"})
+                intel_score -= 15
+        except Exception:
+            intel_checks.append({"name": "Health score", "status": "fail", "detail": "Computation error"})
+            intel_score -= 25
+
+        # Ontology edges
+        try:
+            edge_row = conn.execute("SELECT COUNT(*) as cnt FROM ontology_edges").fetchone()
+            edges = edge_row["cnt"] if edge_row else 0
+            intel_checks.append({"name": "Ontology edges", "status": "pass" if edges >= 10 else "warn",
+                                 "detail": f"{edges} causal edges"})
+        except Exception:
+            intel_checks.append({"name": "Ontology edges", "status": "warn", "detail": "Table not found"})
+
+        # Forecast model staleness
+        try:
+            model_row = conn.execute(
+                "SELECT trained_at FROM markov_models WHERE workspace_id=? ORDER BY trained_at DESC LIMIT 1",
+                [workspace_id],
+            ).fetchone()
+            if model_row and model_row["trained_at"]:
+                try:
+                    trained_dt = datetime.fromisoformat(model_row["trained_at"].split("+")[0])
+                    model_age_days = (datetime.utcnow() - trained_dt).days
+                    if model_age_days > 90:
+                        intel_checks.append({"name": "Forecast model", "status": "fail", "detail": f"{model_age_days}d stale"})
+                        intel_score -= 15
+                    elif model_age_days > 30:
+                        intel_checks.append({"name": "Forecast model", "status": "warn", "detail": f"{model_age_days}d stale"})
+                        intel_score -= 5
+                    else:
+                        intel_checks.append({"name": "Forecast model", "status": "pass", "detail": f"Trained {model_age_days}d ago"})
+                except Exception:
+                    pass
+            else:
+                intel_checks.append({"name": "Forecast model", "status": "warn", "detail": "No model trained yet"})
+        except Exception:
+            pass
+
+        subsystems["intelligence"] = {"status": "healthy" if intel_score >= 70 else ("degraded" if intel_score >= 40 else "critical"),
+                                      "score": max(intel_score, 0), "checks": intel_checks}
+        all_scores.append(max(intel_score, 0))
+
+        # ── 4. Agents ─────────────────────────────────────────────────
+        agent_checks = []
+        agent_score = 100
+        agent_names = ["anomaly_detector", "causal_learner", "regime_learner", "threshold_learner", "decision_learner", "industry_learner"]
+        try:
+            for an in agent_names:
+                row = conn.execute(
+                    "SELECT COUNT(*) as cnt FROM agent_insights WHERE workspace_id=? AND agent_name=?",
+                    [workspace_id, an],
+                ).fetchone()
+                cnt = row["cnt"] if row else 0
+                agent_checks.append({"name": an.replace("_", " ").title(), "status": "pass" if cnt > 0 else "skip",
+                                     "detail": f"{cnt} insights" if cnt > 0 else "No data yet"})
+        except Exception:
+            agent_checks.append({"name": "Agents", "status": "warn", "detail": "Could not query"})
+
+        subsystems["agents"] = {"status": "healthy", "score": agent_score, "checks": agent_checks}
+        all_scores.append(agent_score)
+
+        # ── 5. Connectors ─────────────────────────────────────────────
+        conn_checks = []
+        conn_score = 100
+        try:
+            sync_rows = conn.execute(
+                "SELECT source_name, sync_status, last_sync_at, last_error "
+                "FROM connector_configs WHERE workspace_id=?",
+                [workspace_id],
+            ).fetchall()
+            active = [r for r in sync_rows if r["sync_status"] == "connected"]
+            errored = [r for r in sync_rows if r["last_error"]]
+            conn_checks.append({"name": "Active connectors", "status": "pass" if active else "warn",
+                                "detail": f"{len(active)} connected"})
+            if errored:
+                conn_checks.append({"name": "Sync errors", "status": "warn",
+                                    "detail": f"{len(errored)} with errors"})
+                conn_score -= len(errored) * 10
+            else:
+                conn_checks.append({"name": "Sync errors", "status": "pass", "detail": "No errors"})
+        except Exception:
+            conn_checks.append({"name": "Connectors", "status": "pass", "detail": "No connectors configured"})
+
+        subsystems["connectors"] = {"status": "healthy" if conn_score >= 70 else "degraded",
+                                    "score": max(conn_score, 0), "checks": conn_checks}
+        all_scores.append(max(conn_score, 0))
+
+        # ── Self-healing log ──────────────────────────────────────────
+        self_healing = {"corrections_attempted": 0, "corrections_succeeded": 0, "recent": []}
+        try:
+            sh_rows = conn.execute(
+                "SELECT run_id, started_at, correction_attempted, correction_succeeded, correction_log "
+                "FROM integrity_checks WHERE workspace_id=? AND correction_attempted=1 "
+                "ORDER BY started_at DESC LIMIT 10",
+                [workspace_id],
+            ).fetchall()
+            for r in sh_rows:
+                self_healing["corrections_attempted"] += 1
+                if r["correction_succeeded"]:
+                    self_healing["corrections_succeeded"] += 1
+                try:
+                    log = json.loads(r["correction_log"] or "[]")
+                    for entry in log:
+                        self_healing["recent"].append({
+                            "when": entry.get("started_at", r["started_at"]),
+                            "what": entry.get("action", "re_aggregation"),
+                            "trigger": f"Stage {entry.get('stage', '?')} failure",
+                            "success": entry.get("succeeded", False),
+                        })
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+        # ── User action items ─────────────────────────────────────────
+        user_actions = []
+
+        # Missing targets
+        if comp_checks:
+            tgt_check = next((c for c in comp_checks if c["name"] == "KPI targets"), None)
+            if tgt_check and tgt_check["status"] == "warn":
+                user_actions.append({"priority": "high", "action": "Set KPI targets",
+                                     "detail": f"{tgt_check['detail']} — health score cannot classify untagged KPIs",
+                                     "link": "targets"})
+
+        # Stale model
+        if any(c["name"] == "Forecast model" and c["status"] in ("warn", "fail") for c in intel_checks):
+            user_actions.append({"priority": "medium", "action": "Rebuild forecast model",
+                                 "detail": "Model is stale — predictions may be inaccurate",
+                                 "link": "forecast"})
+
+        # Unresolved insights
+        try:
+            new_insights = conn.execute(
+                "SELECT COUNT(*) as cnt FROM agent_insights WHERE workspace_id=? AND status='new'",
+                [workspace_id],
+            ).fetchone()
+            if new_insights and new_insights["cnt"] > 5:
+                user_actions.append({"priority": "low", "action": f"Review {new_insights['cnt']} agent insights",
+                                     "detail": "New anomalies and suggestions waiting for review",
+                                     "link": "data_health"})
+        except Exception:
+            pass
+
+        # Missing canonical tables
+        if canon_count < 4:
+            user_actions.append({"priority": "medium", "action": "Connect more data sources",
+                                 "detail": f"Only {canon_count}/6 canonical tables have data",
+                                 "link": "data_health"})
+
+        # ── Triage guide ──────────────────────────────────────────────
+        triage = {
+            "numbers_wrong": "Data Health → Integrity tab → Run Check. Stage 2 shows computation discrepancies. Use 'Run & Correct' to auto-fix.",
+            "kpi_missing": "Data Health → Gaps tab shows missing canonical fields. Upload data with the required columns.",
+            "narrative_stale": "Narratives reflect the selected period. Change the year/month filter at the top. If still wrong, data may not cover that period.",
+            "board_pack_fails": "Usually caused by null health score fields. Check Data Health → Integrity for Stage 1 failures.",
+            "connector_broken": "Data Health → Sources shows sync status. Re-authenticate if token expired. Check last_error for details.",
+            "health_score_low": "Click the health score to see component breakdown. Focus on the lowest component (Momentum, Target Achievement, or Risk).",
+        }
+
+        # ── Composite score ───────────────────────────────────────────
+        platform_score = round(sum(all_scores) / len(all_scores)) if all_scores else 0
+        platform_status = "healthy" if platform_score >= 70 else ("degraded" if platform_score >= 40 else "critical")
+
+        return {
+            "platform_score": platform_score,
+            "platform_status": platform_status,
+            "subsystems": subsystems,
+            "self_healing": self_healing,
+            "user_actions": user_actions,
+            "triage_guide": triage,
+        }
+    finally:
+        conn.close()

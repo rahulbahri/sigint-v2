@@ -44,6 +44,7 @@ const DepartmentDashboard = lazy(() => import('./components/DepartmentDashboard.
 const CustomerSegments    = lazy(() => import('./components/CustomerSegments.jsx'))
 const OKRPage             = lazy(() => import('./components/OKRPage.jsx'))
 const DeferredRevenuePage = lazy(() => import('./components/DeferredRevenuePage.jsx'))
+const PlatformHealth      = lazy(() => import('./components/PlatformHealth.jsx'))
 const ScenarioPlanner   = lazy(() => import('./components/ScenarioPlanner.jsx'))
 const DocsPage          = lazy(() => import('./components/DocsPage.jsx'))
 const DataHealthPage    = lazy(() => import('./components/DataHealthPage.jsx'))
@@ -137,6 +138,7 @@ const NAV_GROUPS = [
 
 // Labs tabs — hidden features, fully wired, accessible under Labs
 const LABS_TABS_BASE = [
+  { id: 'platform_health', label: 'Platform Health',          Icon: Shield          },
   { id: 'dashboard', label: 'Command Center (Full KPI Grid)', Icon: LayoutDashboard },
   { id: 'tutorial',  label: 'Platform Manual',                 Icon: BookOpen        },
   { id: 'docs',      label: 'Documentation',                  Icon: BookOpen        },
@@ -160,6 +162,7 @@ const PAGE_TITLES = {
   departments: 'Departments',
   segments:    'Customer Segments',
   deferred:    'Revenue Recognition',
+  platform_health: 'Platform Health',
   okrs:        'OKRs',
   ontology:    'Causal Intelligence',
   docs:        'Documentation',
@@ -924,6 +927,7 @@ function AppInner() {
               {tab === 'devdocs'     && <DevDocs />}
               {tab === 'docs'        && <DocsPage />}
               {tab === 'tutorial'    && <TutorialPage onNavigate={setTab} />}
+              {tab === 'platform_health' && <PlatformHealth />}
               {tab === 'admin'       && isAdmin && <AdminPanel />}
               {tab === 'departments' && <DepartmentDashboard onKpiClick={openKpi} />}
               {tab === 'okrs'        && <OKRPage fingerprint={fingerprint} />}
