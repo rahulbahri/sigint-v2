@@ -11,6 +11,17 @@ const DOMAINS = {
 
 const UNIT_LABELS = { pct: '%', ratio: 'x', days: 'days', months: 'mo', usd: '$k', score: 'pts' }
 
+// Guidance for each unit type — helps users understand what basis to enter
+const UNIT_GUIDANCE = {
+  pct: 'Monthly rate',
+  ratio: 'Target ratio',
+  days: 'Target days',
+  months: 'Target months',
+  usd: 'Monthly level',
+  score: 'Target score',
+  count: 'Monthly avg',
+}
+
 export default function TargetsEditor() {
   const [kpis, setKpis] = useState([])
   const [edited, setEdited] = useState({})
@@ -48,7 +59,7 @@ export default function TargetsEditor() {
     <div className="space-y-6">
       <div>
         <h2 className="text-[15px] font-bold text-slate-800">KPI Targets</h2>
-        <p className="text-[12px] text-slate-500 mt-0.5">Set the targets your business is working toward. These drive all red/yellow/green status indicators.</p>
+        <p className="text-[12px] text-slate-500 mt-0.5">Set the desired monthly level for each metric. Targets are compared to the rolling average of monthly data — they stay the same regardless of which period you select.</p>
       </div>
 
       {Object.entries(DOMAINS).map(([domainKey, domainMeta]) => {
@@ -70,7 +81,7 @@ export default function TargetsEditor() {
                     <div>
                       <div className="text-[12px] font-medium text-slate-700">{kpi.name}</div>
                       <div className="text-[10px] text-slate-400">
-                        {kpi.direction === 'higher' ? '↑ Higher is better' : '↓ Lower is better'} · Current avg: {kpi.avg != null ? kpi.avg : '—'}{unit}
+                        {kpi.direction === 'higher' ? '↑ Higher is better' : '↓ Lower is better'} · Current avg: {kpi.avg != null ? kpi.avg : '—'}{unit} · {UNIT_GUIDANCE[kpi.unit] || 'Target level'}
                       </div>
                     </div>
                     <div className="flex items-center gap-1.5">

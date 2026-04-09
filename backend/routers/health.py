@@ -186,6 +186,8 @@ def get_home(
                 continue
             kpi_monthly.setdefault(k, []).append({"period": period, "value": v})
 
+    from core.kpi_defs import get_metric_type, TARGET_GUIDANCE
+
     def _kpi_spotlight(key: str) -> dict:
         t  = targets_map.get(key, {})
         kd = _KPI_DEFS_MAP.get(key, {})  # Fallback to kpi_defs for unit/direction
@@ -193,6 +195,7 @@ def get_home(
         # Use last 6 months for average — matches health_score.py kpi_avgs window
         recent_vals = [m["value"] for m in mo[-6:]]
         avg  = round(sum(recent_vals) / len(recent_vals), 2) if recent_vals else None
+        mt  = get_metric_type(key)
         return {
             "key":       key,
             "target":    t.get("target"),
@@ -200,6 +203,8 @@ def get_home(
             "unit":      t.get("unit") or kd.get("unit", ""),
             "avg":       avg,
             "sparkline": [m["value"] for m in mo[-6:]],
+            "metric_type": mt,
+            "target_guidance": TARGET_GUIDANCE.get(mt, ""),
         }
 
     # ── Company stage (for benchmark positioning) ──────────────────────────
@@ -692,6 +697,33 @@ def get_kpi_detail(kpi_key: str, request: Request):
     except Exception:
         pass
 
+    # ── Decisions linked to this KPI ──────────────────────────────────────
+    linked_decisions = []
+    try:
+        dec_rows = conn.execute(
+            "SELECT id, title, status, outcome, decided_by, decided_at, "
+            "kpi_context, kpi_snapshot, resolved_kpi_snapshot "
+            "FROM decisions WHERE workspace_id=? ORDER BY decided_at DESC",
+            [workspace_id],
+        ).fetchall()
+        for dr in dec_rows:
+            ctx = json.loads(dr["kpi_context"] or "[]")
+            if kpi_key in ctx:
+                snap = json.loads(dr["kpi_snapshot"] or "{}")
+                resolved_snap = json.loads(dr["resolved_kpi_snapshot"] or "{}")
+                linked_decisions.append({
+                    "id":             dr["id"],
+                    "title":          dr["title"],
+                    "status":         dr["status"],
+                    "outcome":        dr["outcome"] or "",
+                    "decided_by":     dr["decided_by"],
+                    "decided_at":     dr["decided_at"],
+                    "baseline_value": snap.get(kpi_key),
+                    "resolved_value": resolved_snap.get(kpi_key),
+                })
+    except Exception:
+        pass
+
     conn.close()
 
     rca = _analyze_rca(kpi_key, {}, _ts_for_rca, {}, _dirs_for_rca, _edges_for_rca)
@@ -798,4 +830,5 @@ def get_kpi_detail(kpi_key: str, request: Request):
         "correlations":      correlations,
         "typical_range":     typical_range,
         "data_requirements": data_requirements,
+        "linked_decisions":  linked_decisions,
     }

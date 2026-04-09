@@ -812,12 +812,16 @@ BENCHMARKS = {
         "series_b": {"p25": -22, "p50":  -8, "p75":   8},
         "series_c": {"p25":  -8, "p50":   5, "p75":  22},
     },
-    # NRR: monthly equivalents — annual NRR of X% = monthly (X/100)^(1/12) × 100
+    # NRR: computed as total_rev / prev_total_rev × 100 (includes new customer
+    # revenue, so it tracks total revenue retention + growth, not pure cohort
+    # NRR).  Benchmarks are 100 + revenue_growth MoM benchmarks.
+    # True cohort-based NRR would be lower (98-102 monthly); these match
+    # the actual computation to avoid false red/green status.
     "nrr": {
-        "seed":     {"p25": 98.6, "p50": 99.8, "p75": 100.6},  # was 85/98/108 annual
-        "series_a": {"p25": 99.1, "p50": 100.3,"p75": 101.2},  # was 90/104/115 annual
-        "series_b": {"p25": 99.6, "p50": 100.6,"p75": 101.4},  # was 95/108/118 annual
-        "series_c": {"p25": 100.0,"p50": 101.0,"p75": 101.9},  # was 100/112/125 annual
+        "seed":     {"p25": 102.2, "p50": 104.0, "p75": 106.8},
+        "series_a": {"p25": 103.4, "p50": 105.0, "p75": 107.2},
+        "series_b": {"p25": 102.5, "p50": 104.0, "p75": 105.5},
+        "series_c": {"p25": 101.5, "p50": 102.8, "p75": 104.2},
     },
     # ARR growth: monthly MoM equivalents from annual benchmarks
     "arr_growth": {
@@ -941,6 +945,90 @@ BENCHMARKS = {
         "series_c": {"p25": 5,   "p50": 8,   "p75": 12},
     },
 }
+# ── KPI Metric Type Classification ──────────────────────────────────────────
+# Every KPI stored in monthly_data is a point-in-time level or a per-period
+# rate.  Targets are compared to the rolling average of these monthly values,
+# so NO proration is needed when the period selector changes — the target
+# represents the desired monthly level regardless of how many months are
+# in the viewing window.
+#
+# Types:
+#   rate     — percentage/proportion (margins, retention rates, utilisation)
+#   growth   — month-over-month growth/change rate (revenue_growth, arr_growth)
+#   ratio    — dimensionless ratio (burn_multiple, LTV:CAC)
+#   score    — qualitative index (NPS, CSAT, brand awareness)
+#   duration — time measurement (DSO in days, CAC payback in months)
+#   currency — absolute USD value, monthly snapshot (ARR, MRR, deal size)
+#   count    — discrete count (support tickets)
+KPI_METRIC_TYPES = {
+    # ── Rate metrics (pct) ──
+    "gross_margin": "rate", "operating_margin": "rate", "ebitda_margin": "rate",
+    "contribution_margin": "rate", "opex_ratio": "rate", "nrr": "rate",
+    "churn_rate": "rate", "logo_retention": "rate", "revenue_quality": "rate",
+    "recurring_revenue": "rate", "customer_concentration": "rate",
+    "cei": "rate", "ar_aging_current": "rate", "ar_aging_overdue": "rate",
+    "billable_utilization": "rate", "expansion_rate": "rate",
+    "gross_dollar_ret": "rate", "contraction_rate": "rate",
+    "mql_sql_rate": "rate", "win_rate": "rate", "quota_attainment": "rate",
+    "feature_adoption": "rate", "activation_rate": "rate",
+    "automation_rate": "rate", "marketing_roi": "rate",
+    "pipeline_conversion": "rate",
+    # ── Growth/change metrics (MoM %) ──
+    "revenue_growth": "growth", "arr_growth": "growth",
+    "organic_traffic": "growth", "customer_decay_slope": "growth",
+    "pricing_power_index": "growth", "burn_convexity": "growth",
+    "margin_volatility": "growth", "revenue_momentum": "growth",
+    # ── Ratio metrics ──
+    "burn_multiple": "ratio", "sales_efficiency": "ratio",
+    "operating_leverage": "ratio", "ltv_cac": "ratio",
+    "current_ratio": "ratio", "working_capital": "ratio",
+    "growth_efficiency": "ratio", "revenue_fragility": "ratio",
+    "ar_turnover": "ratio", "pipeline_velocity": "ratio",
+    "headcount_eff": "ratio",
+    # ── Score metrics ──
+    "product_nps": "score", "csat": "score", "health_score": "score",
+    "brand_awareness": "score",
+    # ── Duration metrics ──
+    "dso": "duration", "avg_collection_period": "duration",
+    "cash_conv_cycle": "duration", "time_to_value": "duration",
+    "cac_payback": "duration", "cash_runway": "duration",
+    "ramp_time": "duration", "payback_period": "duration",
+    # ── Currency metrics (USD snapshot) ──
+    "arr": "currency", "mrr": "currency", "cash_burn": "currency",
+    "avg_deal_size": "currency", "customer_ltv": "currency",
+    "cpl": "currency", "rev_per_employee": "currency", "cac": "currency",
+    # ── Count metrics ──
+    "support_volume": "count",
+}
+
+
+def get_metric_type(key: str) -> str:
+    """Return the metric type for a KPI key. Falls back to unit-based inference."""
+    if key in KPI_METRIC_TYPES:
+        return KPI_METRIC_TYPES[key]
+    # Fallback: infer from unit in KPI_DEFS / EXTENDED_ONTOLOGY_METRICS
+    _all = {d["key"]: d for d in KPI_DEFS + EXTENDED_ONTOLOGY_METRICS}
+    defn = _all.get(key, {})
+    unit = defn.get("unit", "")
+    return {"pct": "rate", "ratio": "ratio", "score": "score",
+            "days": "duration", "months": "duration",
+            "usd": "currency", "count": "count"}.get(unit, "rate")
+
+
+# ── Target Guidance ─────────────────────────────────────────────────────────
+# Human-readable descriptions for each metric type, shown in the Targets UI
+# to help users set targets on the correct basis.
+TARGET_GUIDANCE = {
+    "rate":     "Monthly level — compared to avg of recent months",
+    "growth":   "Monthly MoM rate — compared to avg monthly change",
+    "ratio":    "Target ratio — compared to avg of recent months",
+    "score":    "Target score — compared to avg of recent months",
+    "duration": "Target value — compared to avg of recent months",
+    "currency": "Target level — compared to avg monthly snapshot",
+    "count":    "Target count — compared to avg monthly volume",
+}
+
+
 ONTOLOGY_DOMAIN = {
     "revenue_growth":        "growth",
     "arr_growth":            "growth",

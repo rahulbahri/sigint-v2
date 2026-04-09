@@ -558,8 +558,8 @@ def seed_targets(conn):
         "margin_volatility": (3, "lower", "pct"), "burn_multiple": (2, "lower", "ratio"),
         "payback_period": (18, "lower", "months"),
         # Retention
-        "churn_rate": (3, "lower", "pct"), "nrr": (110, "higher", "pct"),
-        "logo_retention": (95, "higher", "pct"), "customer_decay_slope": (0, "lower", "pct"),
+        "churn_rate": (3, "lower", "pct"), "nrr": (105, "higher", "pct"),
+        "logo_retention": (97, "higher", "pct"), "customer_decay_slope": (0, "lower", "pct"),
         "ltv_cac": (3, "higher", "ratio"), "contraction_rate": (2, "lower", "pct"),
         # Efficiency
         "cac_payback": (12, "lower", "months"), "sales_efficiency": (1.2, "higher", "ratio"),

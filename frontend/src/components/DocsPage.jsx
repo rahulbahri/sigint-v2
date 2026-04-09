@@ -25,7 +25,7 @@ const SECTIONS = [
     isIntro: true,
     steps: [
       { label: 'Connect your data', detail: 'Go to Data Sources and connect at least one revenue source (Stripe, QuickBooks, or Shopify recommended for first connection).' },
-      { label: 'Set KPI targets', detail: 'Navigate to KPI Targets and enter your annual plan figures for each metric. Variance and Forecast features depend on these values.' },
+      { label: 'Set KPI targets', detail: 'Navigate to KPI Targets and set the desired monthly level for each metric. For percentages (margins, rates), enter the target rate. For absolute values (ARR, deal size), enter the target level. All targets are compared to the rolling monthly average.' },
       { label: 'Review Executive Brief', detail: 'Check the Executive Brief for an AI-generated summary of your current performance. This becomes your weekly board-prep starting point.' },
       { label: 'Act on Variance Command', detail: 'Open Variance Command to see which KPIs are at risk. Assign owners and due dates to any red or yellow KPIs.' },
       { label: 'Log decisions', detail: 'Every time your team makes a strategic decision informed by platform data, record it in the Decision Log with its rationale and expected outcome.' },
@@ -326,7 +326,7 @@ const SECTIONS = [
       'Open KPI Targets from the Settings section.',
       'Click "Edit" next to any KPI to enter or update its target value.',
       'Set the target direction (higher is better vs. lower is better) — this affects how variance is calculated.',
-      'Optionally set monthly sub-targets if your plan is non-linear across the year.',
+      'Each target represents the desired monthly level for that metric. Percentage metrics are compared directly; absolute metrics are compared to the monthly average.',
       'Click "Save All" when done.',
       'Return to Variance Command — it will immediately reflect the new targets.',
     ],

@@ -1459,7 +1459,10 @@ def _compute_month_kpis(
     if kpis.get("gross_margin") is not None:
         health_inputs.append(min(kpis["gross_margin"] / 70 * 100, 100))
     if kpis.get("nrr") is not None:
-        health_inputs.append(min(kpis["nrr"] / 110 * 100, 100))
+        # NRR is computed as total_rev / prev_rev × 100; typical healthy
+        # value is 103-108 for growth-stage companies.  Use 105 (series_a
+        # p50 benchmark) as the reference point, not 110.
+        health_inputs.append(min(kpis["nrr"] / 105 * 100, 100))
     if kpis.get("churn_rate") is not None:
         health_inputs.append(max(0, 100 - kpis["churn_rate"] * 10))
     if kpis.get("revenue_growth") is not None:

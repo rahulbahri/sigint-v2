@@ -185,6 +185,75 @@ def _compute_risk_flags(
     return round(max(0.0, (1 - red / scored) * 100), 1)
 
 
+def _validate_targets(
+    targets: dict,
+    kpi_avgs: dict,
+    directions: dict,
+) -> list:
+    """
+    Check for target configuration issues that would produce misleading
+    health scores.  Returns a list of warning dicts, each with:
+      type  — category of issue
+      kpis  — affected KPI key(s)
+      message — human-readable explanation
+    """
+    warnings: list = []
+
+    # 1. Churn rate / logo retention consistency
+    cr_t = targets.get("churn_rate")
+    lr_t = targets.get("logo_retention")
+    if cr_t is not None and lr_t is not None:
+        expected_lr = 100 - cr_t
+        if abs(lr_t - expected_lr) > 1:
+            warnings.append({
+                "type": "inconsistent_targets",
+                "kpis": ["churn_rate", "logo_retention"],
+                "message": (
+                    f"Churn rate target ({cr_t}%) implies logo retention "
+                    f"of {expected_lr}%, but logo retention target is "
+                    f"{lr_t}%. These should be complementary (sum to 100)."
+                ),
+            })
+
+    # 2. Magnitude mismatch — target and actual differ by > 10x
+    for key, tval in targets.items():
+        if tval is None or tval == 0:
+            continue
+        avg = kpi_avgs.get(key)
+        if avg is None or avg == 0:
+            continue
+        ratio = abs(avg / tval)
+        if ratio > 10 or ratio < 0.1:
+            warnings.append({
+                "type": "magnitude_mismatch",
+                "kpis": [key],
+                "message": (
+                    f"{_friendly_name(key)} target ({tval}) and actual avg "
+                    f"({avg:.1f}) differ by {ratio:.0f}x — verify the "
+                    f"target is on the correct basis (monthly, not annual)."
+                ),
+            })
+
+    # 3. NRR / revenue_growth redundancy check
+    nrr_t = targets.get("nrr")
+    rg_t = targets.get("revenue_growth")
+    if nrr_t is not None and rg_t is not None:
+        # NRR as computed ≈ 100 + revenue_growth; flag if inconsistent
+        expected_nrr = 100 + rg_t
+        if abs(nrr_t - expected_nrr) > 3:
+            warnings.append({
+                "type": "inconsistent_targets",
+                "kpis": ["nrr", "revenue_growth"],
+                "message": (
+                    f"Revenue growth target ({rg_t}%) implies NRR of "
+                    f"~{expected_nrr:.0f}%, but NRR target is {nrr_t}%. "
+                    f"NRR is computed as total revenue ratio (100 + growth%)."
+                ),
+            })
+
+    return warnings
+
+
 def compute_health_score(
     conn,
     workspace_id: str,
@@ -523,6 +592,9 @@ def compute_health_score(
             f"Investigate root causes and develop a 30-day recovery plan."
         )
 
+    # ── Target validation warnings ────────────────────────────────────────────
+    target_warnings = _validate_targets(targets, kpi_avgs, directions)
+
     return {
         "score":              score,
         "grade":              grade,
@@ -574,4 +646,5 @@ def compute_health_score(
         "composite_ranked":   composite_ranked,
         "domain_groups":      domain_groups,
         "kpi_diagnostics":    kpi_diagnostics,
+        "target_warnings":    target_warnings,
     }
