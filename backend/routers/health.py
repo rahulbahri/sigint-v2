@@ -192,8 +192,11 @@ def get_home(
         t  = targets_map.get(key, {})
         kd = _KPI_DEFS_MAP.get(key, {})  # Fallback to kpi_defs for unit/direction
         mo = sorted(kpi_monthly.get(key, []), key=lambda x: x["period"])
-        # Use last 6 months for average — matches health_score.py kpi_avgs window
-        recent_vals = [m["value"] for m in mo[-6:]]
+        # When period is filtered, use all filtered data; otherwise last 6 months
+        if has_period_filter:
+            recent_vals = [m["value"] for m in mo]
+        else:
+            recent_vals = [m["value"] for m in mo[-6:]]
         avg  = round(sum(recent_vals) / len(recent_vals), 2) if recent_vals else None
         mt  = get_metric_type(key)
         return {
@@ -202,7 +205,7 @@ def get_home(
             "direction": t.get("direction") or kd.get("direction", "higher"),
             "unit":      t.get("unit") or kd.get("unit", ""),
             "avg":       avg,
-            "sparkline": [m["value"] for m in mo[-6:]],
+            "sparkline": [m["value"] for m in mo] if has_period_filter else [m["value"] for m in mo[-6:]],
             "metric_type": mt,
             "target_guidance": TARGET_GUIDANCE.get(mt, ""),
         }
@@ -266,7 +269,11 @@ def get_home(
     _kpi_avgs_for_engine = {}
     for k, entries in kpi_monthly.items():
         vals = [e["value"] for e in entries if isinstance(e.get("value"), (int, float))]
-        recent = vals[-6:] if len(vals) >= 6 else vals
+        # When period is filtered, use all filtered data; otherwise last 6 months
+        if has_period_filter:
+            recent = vals
+        else:
+            recent = vals[-6:] if len(vals) >= 6 else vals
         _kpi_avgs_for_engine[k] = sum(recent) / len(recent) if recent else None
 
     root_cause_analyses = _run_root_cause_analysis(
@@ -669,12 +676,10 @@ def get_kpi_detail(
         recent_avg = sum(pt["value"] for pt in time_series[-3:]) / min(len(time_series), 3)
         bench_pos = benchmark_position(kpi_key, recent_avg, direction, company_stage)
 
-    # Data-driven correlations
+    # Data-driven correlations — use the SAME period-filtered rows (line 601)
+    # so correlations and RCA reflect the user's selected date range
     kpi_monthly_all: dict = {}
-    for row in conn.execute(
-        "SELECT year, month, data_json FROM monthly_data WHERE workspace_id=? ORDER BY year, month",
-        [workspace_id],
-    ).fetchall():
+    for row in rows:
         d = json.loads(row["data_json"])
         period = f"{row['year']}-{row['month']:02d}"
         for k, v in d.items():

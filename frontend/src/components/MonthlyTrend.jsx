@@ -138,7 +138,7 @@ export default function MonthlyTrend({ fingerprint, onKpiClick, periodLabel, dec
   const active = fingerprint.filter(k => selected.includes(k.key))
 
   return (
-    <div className="space-y-5">
+    <div className="space-y-5 max-w-7xl">
       {/* KPI selector — compact multi-select dropdown */}
       <div className="card p-4">
         <div className="flex items-center justify-between mb-2">

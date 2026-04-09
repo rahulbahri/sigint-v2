@@ -197,7 +197,7 @@ export default function VarianceCommand({ fingerprint, bridgeData, benchmarks, c
 
   // ── Render ───────────────────────────────────────────────────────────────
   return (
-    <div className="space-y-5">
+    <div className="space-y-5 max-w-7xl">
       {/* ── Top Banner ──────────────────────────────────────────────────── */}
       <div className="flex items-start justify-between">
         <div>
@@ -378,7 +378,7 @@ export default function VarianceCommand({ fingerprint, bridgeData, benchmarks, c
             <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
               {missingKpis.map(d => (
                 <div key={d.key} className="flex items-start gap-2.5 bg-white rounded-xl px-3 py-2.5 border border-slate-100">
-                  <div className="w-1.5 h-1.5 rounded-full bg-slate-300 flex-shrink-0 mt-1.5" />
+                  <div className="w-1.5 h-1.5 rounded-full bg-slate-300 flex-shrink-0 mt-[7px]" />
                   <div>
                     <p className="text-[11px] font-semibold text-slate-500">{d.name}</p>
                     <p className="text-[10px] text-slate-400 mt-0.5">Needs: {d.needs}</p>

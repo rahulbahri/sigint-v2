@@ -164,7 +164,7 @@ const PAGE_TITLES = {
   tutorial:    'Platform Manual',
 }
 
-const FILTER_TABS = new Set(['variance', 'dashboard', 'fingerprint', 'trends', 'projection'])
+const FILTER_TABS = new Set(['variance', 'dashboard', 'fingerprint', 'trends', 'projection', 'board', 'home', 'decisions', 'scenario'])
 
 // ── Cockpit modes: curated KPI sets per audience ──────────────────────────────
 export const COCKPIT_MODES = {
@@ -326,6 +326,19 @@ function AppInner() {
     if (mos.length === 1)  return `${PLABELS[mos[0] - 1]}${suffix}`
     return `${PLABELS[mos[0] - 1]}–${PLABELS[mos[mos.length - 1] - 1]}${suffix}`
   }, [selectedYears, selectedMonths, availableYears]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ── Period dates for backend API calls (derived from filter state) ───────
+  const periodDates = useMemo(() => {
+    const yrs = selectedYears.length ? [...selectedYears].sort((a, b) => a - b) : (availableYears.length ? [...availableYears].sort((a, b) => a - b) : [])
+    const mos = selectedMonths.length ? [...selectedMonths].sort((a, b) => a - b) : []
+    if (!yrs.length) return null
+    return {
+      fromYear:  yrs[0],
+      fromMonth: mos.length ? mos[0] : 1,
+      toYear:    yrs[yrs.length - 1],
+      toMonth:   mos.length ? mos[mos.length - 1] : 12,
+    }
+  }, [selectedYears, selectedMonths, availableYears])
 
   // ── Derived / filtered data ──────────────────────────────────────────────
 
@@ -845,6 +858,8 @@ function AppInner() {
                 <HomeScreen
                   onNavigate={setTab}
                   onAskAnika={(q) => { setPrefillQuestion(q); document.querySelector('[data-anika-toggle]')?.click() }}
+                  externalPeriodDates={periodDates}
+                  externalPeriodLabel={periodLabel}
                 />
               )}
 

@@ -39,7 +39,7 @@ export default function DataHealthPage() {
   }
 
   return (
-    <div>
+    <div className="max-w-7xl space-y-5">
       {/* Sub-navigation + download */}
       <div className="flex items-center justify-between mb-6">
         <div className="flex gap-1 bg-white border border-slate-200 rounded-xl p-1 w-fit shadow-sm">

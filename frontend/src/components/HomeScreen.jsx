@@ -1751,7 +1751,7 @@ function PeriodSelector({ selected, periodDates, onSelect }) {
 }
 
 // ── Main component ────────────────────────────────────────────────────────────
-export default function HomeScreen({ onNavigate, onAskAnika }) {
+export default function HomeScreen({ onNavigate, onAskAnika, externalPeriodDates, externalPeriodLabel }) {
   const [data, setData]               = useState(null)
   const [loading, setLoading]         = useState(true)
   const [error, setError]             = useState(false)
@@ -1766,6 +1766,14 @@ export default function HomeScreen({ onNavigate, onAskAnika }) {
   const [activeWeights, setActiveWeights] = useState(null)
   const [critWeights, setCritWeights]     = useState(null)
   const [settingsLoaded, setSettingsLoaded] = useState(false)
+
+  // Sync with App.jsx's centralized period filter when it changes
+  useEffect(() => {
+    if (externalPeriodDates) {
+      setPeriodDates(externalPeriodDates)
+      setSelectedPeriod(externalPeriodLabel || 'Custom')
+    }
+  }, [externalPeriodDates?.fromYear, externalPeriodDates?.fromMonth, externalPeriodDates?.toYear, externalPeriodDates?.toMonth]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Load persisted period selection + criticality weights from company_settings on mount
   useEffect(() => {
@@ -1866,19 +1874,20 @@ export default function HomeScreen({ onNavigate, onAskAnika }) {
   // Initial load: wait for settings, then load with persisted period
   useEffect(() => {
     if (!settingsLoaded) return
-    if (selectedPeriod === 'All Data') {
+    if (selectedPeriod === 'All Data' && !externalPeriodDates) {
       load()
     } else {
-      // Rebuild params from persisted dates
+      // Use external dates if available, otherwise persisted dates
+      const dates = externalPeriodDates || periodDates
       const params = {
-        from_year: periodDates.fromYear,
-        from_month: periodDates.fromMonth,
-        to_year: periodDates.toYear,
-        to_month: periodDates.toMonth,
+        from_year: dates.fromYear,
+        from_month: dates.fromMonth,
+        to_year: dates.toYear,
+        to_month: dates.toMonth,
       }
       load(params)
     }
-  }, [settingsLoaded]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [settingsLoaded, externalPeriodDates?.fromYear, externalPeriodDates?.fromMonth, externalPeriodDates?.toYear, externalPeriodDates?.toMonth]) // eslint-disable-line react-hooks/exhaustive-deps
 
   if (loading) return (
     <div className="flex items-center justify-center h-64">
@@ -2180,86 +2189,80 @@ export default function HomeScreen({ onNavigate, onAskAnika }) {
         </div>
       )}
 
-      {/* ── Domain Narratives + Period Comparison ─────────────────────── */}
-      {(data?.domain_narratives?.length > 0 || data?.period_comparison) && (
-        <div className="grid grid-cols-1 lg:grid-cols-[1fr_1fr] gap-4">
+      {/* ── Domain Intelligence (full-width) ──────────────────────────── */}
+      {data?.domain_narratives?.length > 0 && (
+        <div className="card p-4 shadow-sm">
+          <div className="flex items-center gap-2 mb-3">
+            <FileText size={13} className="text-slate-400" />
+            <h2 className="text-slate-700 text-[11px] font-bold uppercase tracking-wider">Domain Intelligence</h2>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-2">
+            {data.domain_narratives.map((dn, i) => (
+              <div key={i} className="flex gap-2.5 py-1">
+                <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 mt-[7px] ${
+                  dn.severity === 'critical' ? 'bg-red-500' :
+                  dn.severity === 'warning'  ? 'bg-amber-500' :
+                  'bg-emerald-500'
+                }`} />
+                <p className="text-[11px] leading-relaxed min-w-0">
+                  <span className="text-slate-600 font-semibold">{dn.domain_label || dn.domain}: </span>
+                  <span className="text-slate-500">{dn.narrative}</span>
+                </p>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
-          {/* Domain narratives */}
-          {data?.domain_narratives?.length > 0 && (
-            <div className="card p-4 shadow-sm">
-              <div className="flex items-center gap-2 mb-3">
-                <FileText size={13} className="text-slate-400" />
-                <h2 className="text-slate-700 text-[11px] font-bold uppercase tracking-wider">Domain Intelligence</h2>
+      {/* ── vs Prior Period (full-width) ──────────────────────────────── */}
+      {data?.period_comparison && (data.period_comparison.improved?.length > 0 || data.period_comparison.deteriorated?.length > 0) && (
+        <div className="card p-4 shadow-sm">
+          <div className="flex items-center gap-2 mb-3">
+            <Zap size={13} className="text-slate-400" />
+            <h2 className="text-slate-700 text-[11px] font-bold uppercase tracking-wider">vs Prior Period</h2>
+          </div>
+          <div className="space-y-3">
+            {data.period_comparison.improved?.length > 0 && (
+              <div>
+                <div className="flex items-center gap-1.5 mb-1.5">
+                  <TrendingUp size={11} className="text-emerald-500" />
+                  <span className="text-[10px] font-bold text-emerald-600 uppercase tracking-wider">Improved ({data.period_comparison.improved.length})</span>
+                </div>
+                <div className="flex flex-wrap gap-1.5">
+                  {data.period_comparison.improved.map(kpi => {
+                    const pct = kpi.delta_pct ?? (kpi.prev ? Math.max(-999, Math.min(999, (kpi.delta / Math.abs(kpi.prev)) * 100)) : kpi.delta)
+                    const currVal = kpi.curr != null ? fmtKpiValue(kpi.curr, kpi.unit) : null
+                    return (
+                      <button key={kpi.key} onClick={() => setSlideOut({ kpi: { key: kpi.key, avg: kpi.curr, unit: kpi.unit, direction: kpi.direction }, status: 'green' })}
+                        className="text-[10px] font-medium text-emerald-700 bg-emerald-50 px-2 py-1 rounded-lg hover:bg-emerald-100 transition-colors cursor-pointer">
+                        {formatKpiLabel(kpi.key)} {currVal && <span className="font-bold">{currVal}</span>} <span className="opacity-70">({pct > 0 ? '+' : ''}{pct?.toFixed?.(1) ?? pct}%)</span>
+                      </button>
+                    )
+                  })}
+                </div>
               </div>
-              <div className="space-y-2">
-                {data.domain_narratives.map((dn, i) => (
-                  <div key={i} className="flex items-start gap-2.5">
-                    <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 mt-1.5 ${
-                      dn.severity === 'critical' ? 'bg-red-500' :
-                      dn.severity === 'warning'  ? 'bg-amber-500' :
-                      'bg-emerald-500'
-                    }`} />
-                    <div className="min-w-0">
-                      <span className="text-slate-600 text-[11px] font-semibold">{dn.domain_label || dn.domain}: </span>
-                      <span className="text-slate-500 text-[11px] leading-relaxed">{dn.narrative}</span>
-                    </div>
-                  </div>
-                ))}
+            )}
+            {data.period_comparison.deteriorated?.length > 0 && (
+              <div>
+                <div className="flex items-center gap-1.5 mb-1.5">
+                  <TrendingDown size={11} className="text-red-500" />
+                  <span className="text-[10px] font-bold text-red-600 uppercase tracking-wider">Deteriorated ({data.period_comparison.deteriorated.length})</span>
+                </div>
+                <div className="flex flex-wrap gap-1.5">
+                  {data.period_comparison.deteriorated.map(kpi => {
+                    const pct = kpi.delta_pct ?? (kpi.prev ? Math.max(-999, Math.min(999, (kpi.delta / Math.abs(kpi.prev)) * 100)) : kpi.delta)
+                    const currVal = kpi.curr != null ? fmtKpiValue(kpi.curr, kpi.unit) : null
+                    return (
+                      <button key={kpi.key} onClick={() => setSlideOut({ kpi: { key: kpi.key, avg: kpi.curr, unit: kpi.unit, direction: kpi.direction }, status: kpi.status || 'red' })}
+                        className="text-[10px] font-medium text-red-700 bg-red-50 px-2 py-1 rounded-lg hover:bg-red-100 transition-colors cursor-pointer">
+                        {formatKpiLabel(kpi.key)} {currVal && <span className="font-bold">{currVal}</span>} <span className="opacity-70">({pct > 0 ? '+' : ''}{pct?.toFixed?.(1) ?? pct}%)</span>
+                      </button>
+                    )
+                  })}
+                </div>
               </div>
-            </div>
-          )}
-
-          {/* Period comparison */}
-          {data?.period_comparison && (data.period_comparison.improved?.length > 0 || data.period_comparison.deteriorated?.length > 0) && (
-            <div className="card p-4 shadow-sm">
-              <div className="flex items-center gap-2 mb-3">
-                <Zap size={13} className="text-slate-400" />
-                <h2 className="text-slate-700 text-[11px] font-bold uppercase tracking-wider">vs Prior Period</h2>
-              </div>
-              <div className="space-y-3">
-                {data.period_comparison.improved?.length > 0 && (
-                  <div>
-                    <div className="flex items-center gap-1.5 mb-1.5">
-                      <TrendingUp size={11} className="text-emerald-500" />
-                      <span className="text-[10px] font-bold text-emerald-600 uppercase tracking-wider">Improved ({data.period_comparison.improved.length})</span>
-                    </div>
-                    <div className="flex flex-wrap gap-1.5">
-                      {data.period_comparison.improved.map(kpi => {
-                        const pct = kpi.delta_pct ?? (kpi.prev ? Math.max(-999, Math.min(999, (kpi.delta / Math.abs(kpi.prev)) * 100)) : kpi.delta)
-                        const currVal = kpi.curr != null ? fmtKpiValue(kpi.curr, kpi.unit) : null
-                        return (
-                          <button key={kpi.key} onClick={() => setSlideOut({ kpi: { key: kpi.key, avg: kpi.curr, unit: kpi.unit, direction: kpi.direction }, status: 'green' })}
-                            className="text-[10px] font-medium text-emerald-700 bg-emerald-50 px-2 py-1 rounded-lg hover:bg-emerald-100 transition-colors cursor-pointer">
-                            {formatKpiLabel(kpi.key)} {currVal && <span className="font-bold">{currVal}</span>} <span className="opacity-70">({pct > 0 ? '+' : ''}{pct?.toFixed?.(1) ?? pct}%)</span>
-                          </button>
-                        )
-                      })}
-                    </div>
-                  </div>
-                )}
-                {data.period_comparison.deteriorated?.length > 0 && (
-                  <div>
-                    <div className="flex items-center gap-1.5 mb-1.5">
-                      <TrendingDown size={11} className="text-red-500" />
-                      <span className="text-[10px] font-bold text-red-600 uppercase tracking-wider">Deteriorated ({data.period_comparison.deteriorated.length})</span>
-                    </div>
-                    <div className="flex flex-wrap gap-1.5">
-                      {data.period_comparison.deteriorated.map(kpi => {
-                        const pct = kpi.delta_pct ?? (kpi.prev ? Math.max(-999, Math.min(999, (kpi.delta / Math.abs(kpi.prev)) * 100)) : kpi.delta)
-                        const currVal = kpi.curr != null ? fmtKpiValue(kpi.curr, kpi.unit) : null
-                        return (
-                          <button key={kpi.key} onClick={() => setSlideOut({ kpi: { key: kpi.key, avg: kpi.curr, unit: kpi.unit, direction: kpi.direction }, status: kpi.status || 'red' })}
-                            className="text-[10px] font-medium text-red-700 bg-red-50 px-2 py-1 rounded-lg hover:bg-red-100 transition-colors cursor-pointer">
-                            {formatKpiLabel(kpi.key)} {currVal && <span className="font-bold">{currVal}</span>} <span className="opacity-70">({pct > 0 ? '+' : ''}{pct?.toFixed?.(1) ?? pct}%)</span>
-                          </button>
-                        )
-                      })}
-                    </div>
-                  </div>
-                )}
-              </div>
-            </div>
-          )}
+            )}
+          </div>
         </div>
       )}
 
@@ -2427,7 +2430,7 @@ export default function HomeScreen({ onNavigate, onAskAnika }) {
               const requirement = gInfo?.how || 'Target configuration required'
               return (
                 <div key={gKey} className="flex items-start gap-2.5 px-2 py-1.5 bg-white/60 rounded-lg">
-                  <div className="w-1.5 h-1.5 rounded-full bg-slate-300 flex-shrink-0 mt-1.5" />
+                  <div className="w-1.5 h-1.5 rounded-full bg-slate-300 flex-shrink-0 mt-[7px]" />
                   <div className="flex-1 min-w-0">
                     <span className="text-[11px] font-semibold text-slate-600">{gLabel}</span>
                     <p className="text-[10px] text-slate-400 leading-snug">Requires: {requirement}</p>

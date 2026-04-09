@@ -566,7 +566,7 @@ export default function Fingerprint({ fingerprint, onKpiClick }) {
   }))
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6 max-w-7xl">
 
       {/* ── Radar ──────────────────────────────────────────────────────── */}
       <div className="card p-6">

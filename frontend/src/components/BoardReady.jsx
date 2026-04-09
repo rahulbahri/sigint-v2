@@ -1090,7 +1090,7 @@ export default function BoardReady({ fingerprint, bridgeData, onNavigate, period
   const periodDisplay = globalPeriodLabel || 'All Data'
 
   return (
-    <div className="space-y-5 max-w-screen-xl">
+    <div className="space-y-5 max-w-7xl">
 
       {/* ── HEADER: Status distribution + period delta ────────────────────── */}
       <div className="bg-white border border-slate-200 rounded-2xl px-6 py-4 shadow-sm">
