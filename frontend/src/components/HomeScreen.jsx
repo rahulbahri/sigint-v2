@@ -1951,12 +1951,9 @@ export default function HomeScreen({ onNavigate, onAskAnika, externalPeriodDates
             <span className="text-slate-400 italic">No data uploaded yet</span>
           )}
         </div>
-        <div className="flex items-center gap-2">
-          <PeriodSelector selected={selectedPeriod} periodDates={periodDates} onSelect={handlePeriodChange} />
-          <button onClick={() => load()} className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-400 hover:text-slate-600 transition-colors" title="Refresh">
-            <RefreshCw size={13} />
-          </button>
-        </div>
+        <button onClick={() => load()} className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-400 hover:text-slate-600 transition-colors" title="Refresh">
+          <RefreshCw size={13} />
+        </button>
       </div>
 
       {/* ── Health Score + Most Critical (side-by-side) ────────────────── */}
