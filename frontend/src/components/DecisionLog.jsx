@@ -2,8 +2,8 @@ import { useState, useEffect } from 'react'
 import axios from 'axios'
 import {
   BookMarked, Plus, X, ChevronDown, ChevronUp, Trash2,
-  CheckCircle2, TrendingUp, User, Calendar, FileText, Lightbulb,
-  RotateCcw,
+  CheckCircle2, TrendingUp, TrendingDown, User, Calendar,
+  FileText, Lightbulb, RotateCcw, Pencil, Save,
 } from 'lucide-react'
 
 const STATUS_STYLES = {
@@ -17,6 +17,11 @@ function fmt(dtStr) {
   return dtStr.slice(0, 10)
 }
 
+function fmtVal(v) {
+  if (v == null) return '-'
+  return typeof v === 'number' ? v.toFixed(1) : String(v)
+}
+
 export default function DecisionLog({ authToken, fingerprint, prefillDecision, onPrefillConsumed }) {
   const [decisions, setDecisions] = useState([])
   const [loading, setLoading]     = useState(true)
@@ -28,6 +33,11 @@ export default function DecisionLog({ authToken, fingerprint, prefillDecision, o
   const [saving, setSaving]       = useState(false)
   const [formError, setFormError] = useState('')
   const [outcomeInput, setOutcomeInput] = useState({})
+
+  // Inline edit state
+  const [editingId, setEditingId]     = useState(null)
+  const [editForm, setEditForm]       = useState({})
+  const [editSaving, setEditSaving]   = useState(false)
 
   // Pre-fill from Scenario Planner "Push to Decision Log"
   useEffect(() => {
@@ -92,8 +102,38 @@ export default function DecisionLog({ authToken, fingerprint, prefillDecision, o
     load()
   }
 
+  function startEditing(d) {
+    setEditingId(d.id)
+    setEditForm({
+      title:        d.title,
+      the_decision: d.the_decision,
+      rationale:    d.rationale,
+      decided_by:   d.decided_by,
+      kpi_context:  d.kpi_context || [],
+    })
+  }
+
+  async function handleEditSave(id) {
+    setEditSaving(true)
+    try {
+      await axios.put(`/api/decisions/${id}`, editForm, { headers })
+      setEditingId(null)
+      load()
+    } catch {
+      // keep editing state on failure
+    } finally {
+      setEditSaving(false)
+    }
+  }
+
   // KPI keys available to link
   const availableKpis = (fingerprint || []).map(k => k.key).filter(Boolean)
+
+  // Lookup for KPI direction (for delta coloring)
+  const kpiDirection = {}
+  ;(fingerprint || []).forEach(k => {
+    if (k.key && k.direction) kpiDirection[k.key] = k.direction
+  })
 
   if (loading) {
     return (
@@ -267,7 +307,10 @@ export default function DecisionLog({ authToken, fingerprint, prefillDecision, o
         <div className="space-y-3">
           {decisions.map(d => {
             const isExpanded = expanded === d.id
+            const isEditing  = editingId === d.id
             const style = STATUS_STYLES[d.status] || STATUS_STYLES.active
+            const hasSnapshot = d.kpi_snapshot && Object.keys(d.kpi_snapshot).length > 0
+            const hasResolvedSnapshot = d.resolved_kpi_snapshot && Object.keys(d.resolved_kpi_snapshot).length > 0
             return (
               <div key={d.id} className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
 
@@ -300,38 +343,144 @@ export default function DecisionLog({ authToken, fingerprint, prefillDecision, o
                 {isExpanded && (
                   <div className="px-5 pb-5 pt-4 border-t border-slate-50 space-y-4">
 
-                    <div>
-                      <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1.5 flex items-center gap-1">
-                        <FileText size={9} /> Decision
-                      </p>
-                      <p className="text-sm text-slate-700 leading-relaxed">{d.the_decision}</p>
-                    </div>
-
-                    {d.rationale && (
-                      <div>
-                        <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1.5 flex items-center gap-1">
-                          <Lightbulb size={9} /> Rationale
-                        </p>
-                        <p className="text-sm text-slate-600 leading-relaxed">{d.rationale}</p>
-                      </div>
-                    )}
-
-                    {d.kpi_context?.length > 0 && (
-                      <div>
-                        <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-2">
-                          Linked KPIs
-                        </p>
-                        <div className="flex flex-wrap gap-1.5">
-                          {d.kpi_context.map(k => (
-                            <span
-                              key={k}
-                              className="bg-blue-50 text-blue-700 text-[10px] font-mono font-bold border border-blue-100 rounded px-2 py-0.5"
+                    {/* ── Inline edit mode ── */}
+                    {isEditing ? (
+                      <div className="space-y-3 bg-slate-50 rounded-xl p-4 border border-slate-100">
+                        <div>
+                          <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Title</label>
+                          <input
+                            className="mt-1 w-full border border-slate-200 rounded-lg px-3 py-2 text-sm text-slate-800 focus:outline-none focus:border-[#0055A4]"
+                            value={editForm.title}
+                            onChange={e => setEditForm(v => ({ ...v, title: e.target.value }))}
+                          />
+                        </div>
+                        <div>
+                          <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Decision</label>
+                          <textarea
+                            className="mt-1 w-full border border-slate-200 rounded-lg px-3 py-2 text-sm text-slate-800 focus:outline-none focus:border-[#0055A4] resize-none"
+                            rows={2}
+                            value={editForm.the_decision}
+                            onChange={e => setEditForm(v => ({ ...v, the_decision: e.target.value }))}
+                          />
+                        </div>
+                        <div>
+                          <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Rationale</label>
+                          <textarea
+                            className="mt-1 w-full border border-slate-200 rounded-lg px-3 py-2 text-sm text-slate-800 focus:outline-none focus:border-[#0055A4] resize-none"
+                            rows={3}
+                            value={editForm.rationale}
+                            onChange={e => setEditForm(v => ({ ...v, rationale: e.target.value }))}
+                          />
+                        </div>
+                        <div className="grid grid-cols-2 gap-4">
+                          <div>
+                            <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Decision Maker</label>
+                            <input
+                              className="mt-1 w-full border border-slate-200 rounded-lg px-3 py-2 text-sm text-slate-800 focus:outline-none focus:border-[#0055A4]"
+                              value={editForm.decided_by}
+                              onChange={e => setEditForm(v => ({ ...v, decided_by: e.target.value }))}
+                            />
+                          </div>
+                          <div>
+                            <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Linked KPIs</label>
+                            <select
+                              className="mt-1 w-full border border-slate-200 rounded-lg px-3 py-2 text-sm text-slate-800 focus:outline-none focus:border-[#0055A4]"
+                              multiple size={3}
+                              value={editForm.kpi_context}
+                              onChange={e => setEditForm(v => ({ ...v, kpi_context: [...e.target.selectedOptions].map(o => o.value) }))}
                             >
-                              {k}
-                            </span>
-                          ))}
+                              {availableKpis.map(k => (
+                                <option key={k} value={k}>{k}</option>
+                              ))}
+                            </select>
+                          </div>
+                        </div>
+                        <div className="flex justify-end gap-2 pt-1">
+                          <button onClick={() => setEditingId(null)} className="text-sm text-slate-500 hover:text-slate-700 px-3 py-1.5">Cancel</button>
+                          <button
+                            onClick={() => handleEditSave(d.id)}
+                            disabled={editSaving}
+                            className="flex items-center gap-1.5 bg-[#0055A4] text-white text-sm font-semibold px-4 py-1.5 rounded-lg hover:bg-blue-700 disabled:opacity-50 transition-colors"
+                          >
+                            <Save size={12} /> {editSaving ? 'Saving...' : 'Save Changes'}
+                          </button>
                         </div>
                       </div>
+                    ) : (
+                      /* ── Read-only view ── */
+                      <>
+                        <div>
+                          <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1.5 flex items-center gap-1">
+                            <FileText size={9} /> Decision
+                          </p>
+                          <p className="text-sm text-slate-700 leading-relaxed">{d.the_decision}</p>
+                        </div>
+
+                        {d.rationale && (
+                          <div>
+                            <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1.5 flex items-center gap-1">
+                              <Lightbulb size={9} /> Rationale
+                            </p>
+                            <p className="text-sm text-slate-600 leading-relaxed">{d.rationale}</p>
+                          </div>
+                        )}
+
+                        {d.kpi_context?.length > 0 && (
+                          <div>
+                            <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-2">
+                              Linked KPIs
+                            </p>
+                            <div className="flex flex-wrap gap-1.5">
+                              {d.kpi_context.map(k => (
+                                <span
+                                  key={k}
+                                  className="bg-blue-50 text-blue-700 text-[10px] font-mono font-bold border border-blue-100 rounded px-2 py-0.5"
+                                >
+                                  {k}
+                                </span>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+
+                        {/* ── KPI Snapshot (before/after) ── */}
+                        {hasSnapshot && (
+                          <div className="bg-slate-50 border border-slate-100 rounded-xl p-4">
+                            <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-2.5">
+                              {hasResolvedSnapshot ? 'KPI Impact' : 'KPI Baseline at Decision Time'}
+                            </p>
+                            <div className="grid grid-cols-1 gap-1.5">
+                              {Object.entries(d.kpi_snapshot).map(([k, baseline]) => {
+                                const resolved = hasResolvedSnapshot ? d.resolved_kpi_snapshot[k] : null
+                                const delta = resolved != null ? resolved - baseline : null
+                                const dir = kpiDirection[k] || 'up'
+                                // For "up" KPIs, positive delta = good. For "down" KPIs, negative = good.
+                                const isGood = delta != null && ((dir === 'up' && delta > 0) || (dir === 'down' && delta < 0))
+                                const isBad  = delta != null && !isGood && delta !== 0
+                                return (
+                                  <div key={k} className="flex items-center justify-between py-1.5 px-3 bg-white rounded-lg border border-slate-50">
+                                    <span className="text-[11px] font-mono font-semibold text-slate-600">{k}</span>
+                                    <div className="flex items-center gap-3 text-[12px]">
+                                      <span className="text-slate-500">{fmtVal(baseline)}</span>
+                                      {delta != null && (
+                                        <>
+                                          <span className="text-slate-300">&#8594;</span>
+                                          <span className="text-slate-700 font-medium">{fmtVal(resolved)}</span>
+                                          <span className={`font-bold flex items-center gap-0.5 ${isGood ? 'text-emerald-600' : isBad ? 'text-red-500' : 'text-slate-400'}`}>
+                                            {isGood && <TrendingUp size={10} />}
+                                            {isBad && <TrendingDown size={10} />}
+                                            {delta > 0 ? '+' : ''}{delta.toFixed(1)}
+                                          </span>
+                                        </>
+                                      )}
+                                    </div>
+                                  </div>
+                                )
+                              })}
+                            </div>
+                          </div>
+                        )}
+                      </>
                     )}
 
                     {d.outcome && (
@@ -344,7 +493,7 @@ export default function DecisionLog({ authToken, fingerprint, prefillDecision, o
                     )}
 
                     {/* Outcome entry & status actions */}
-                    {d.status === 'active' && (
+                    {d.status === 'active' && !isEditing && (
                       <div className="border border-slate-100 rounded-xl p-4 space-y-3">
                         <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">
                           Record Outcome (optional)
@@ -373,7 +522,7 @@ export default function DecisionLog({ authToken, fingerprint, prefillDecision, o
                       </div>
                     )}
 
-                    {d.status === 'resolved' && (
+                    {d.status === 'resolved' && !isEditing && (
                       <div className="flex gap-2">
                         <button
                           onClick={() => handleStatusUpdate(d.id, 'active')}
@@ -384,14 +533,22 @@ export default function DecisionLog({ authToken, fingerprint, prefillDecision, o
                       </div>
                     )}
 
-                    <div className="flex justify-end pt-1 border-t border-slate-50">
-                      <button
-                        onClick={() => handleDelete(d.id)}
-                        className="flex items-center gap-1 text-[11px] text-slate-300 hover:text-red-400 transition-colors"
-                      >
-                        <Trash2 size={11} /> Delete entry
-                      </button>
-                    </div>
+                    {!isEditing && (
+                      <div className="flex justify-between pt-1 border-t border-slate-50">
+                        <button
+                          onClick={(e) => { e.stopPropagation(); startEditing(d) }}
+                          className="flex items-center gap-1 text-[11px] text-slate-400 hover:text-[#0055A4] transition-colors"
+                        >
+                          <Pencil size={11} /> Edit
+                        </button>
+                        <button
+                          onClick={() => handleDelete(d.id)}
+                          className="flex items-center gap-1 text-[11px] text-slate-300 hover:text-red-400 transition-colors"
+                        >
+                          <Trash2 size={11} /> Delete entry
+                        </button>
+                      </div>
+                    )}
                   </div>
                 )}
               </div>

@@ -143,13 +143,17 @@ async def generate_board_pack(request: Request, body: BoardPackRequest):
                 kpi_monthly.setdefault(k, []).append(v)
     kpi_avgs = {k: round(sum(v) / len(v), 2) for k, v in kpi_monthly.items() if v}
 
+    # Normalise health keys that may be None or missing
+    h_needs_attention = health.get("needs_attention") or []
+    h_doing_well      = health.get("doing_well") or []
+
     # Select KPIs to show
     if body.kpi_keys:
         show_keys = body.kpi_keys[:12]
     else:
         # Auto-select: red first, then yellow, then green — max 12
-        red    = [k for k in health["needs_attention"] if k in kpi_avgs]
-        green  = [k for k in health["doing_well"]      if k in kpi_avgs]
+        red    = [k for k in h_needs_attention if k in kpi_avgs]
+        green  = [k for k in h_doing_well     if k in kpi_avgs]
         others = [k for k in kpi_avgs if k not in red and k not in green]
         show_keys = (red + green + others)[:12]
 
@@ -232,19 +236,23 @@ async def generate_board_pack(request: Request, body: BoardPackRequest):
     slide = prs.slides.add_slide(blank_layout)
     _fill_slide_bg(slide, prs, bg)
 
-    score = health["score"]
+    score = health.get("score") or 0
     score_color = pos if score >= 70 else (wrn if score >= 50 else crt)
+    health_label = health.get("label") or "No Data"
+    h_momentum = health.get("momentum") or 0
+    h_target   = health.get("target_achievement") or 0
+    h_risk     = health.get("risk_flags") or 0
 
     _add_textbox(slide, "HEALTH SCORE", 0.5, 0.3, 9, 0.35, font_size=9, bold=True, color=sub)
     _add_textbox(slide, f"{score}", 0.5, 0.65, 2.5, 1.4, font_size=72, bold=True, color=score_color)
     _add_textbox(slide, f"/ 100", 2.7, 1.1, 1.5, 0.6, font_size=18, color=sub)
-    _add_textbox(slide, health["label"], 0.5, 2.0, 3, 0.5, font_size=18, bold=True, color=score_color)
+    _add_textbox(slide, health_label, 0.5, 2.0, 3, 0.5, font_size=18, bold=True, color=score_color)
 
     # Component breakdown right side
     components = [
-        ("Momentum",           health["momentum"],           "30%"),
-        ("Target Achievement", health["target_achievement"], "40%"),
-        ("Risk Score",         health["risk_flags"],         "30%"),
+        ("Momentum",           h_momentum,  "30%"),
+        ("Target Achievement", h_target,    "40%"),
+        ("Risk Score",         h_risk,      "30%"),
     ]
     y = 0.6
     for name, val, weight in components:
@@ -265,10 +273,10 @@ async def generate_board_pack(request: Request, body: BoardPackRequest):
     _add_textbox(slide, "KPI STATUS DISTRIBUTION", 0.5, 3.25, 9, 0.3, font_size=8, bold=True, color=sub)
 
     status_items = [
-        (str(health["kpis_green"]),  "On Target",  pos),
-        (str(health["kpis_yellow"]), "Watch",      wrn),
-        (str(health["kpis_red"]),    "Critical",   crt),
-        (str(health["kpis_grey"]),   "No Target",  sub),
+        (str(health.get("kpis_green", 0)),  "On Target",  pos),
+        (str(health.get("kpis_yellow", 0)), "Watch",      wrn),
+        (str(health.get("kpis_red", 0)),    "Critical",   crt),
+        (str(health.get("kpis_grey", 0)),   "No Target",  sub),
     ]
     x = 0.5
     for val, label, color in status_items:
@@ -279,18 +287,18 @@ async def generate_board_pack(request: Request, body: BoardPackRequest):
     if body.include_talk_tracks:
         momentum_words = {"improving": "trending upward", "stable": "holding steady", "declining": "under pressure"}
         slide.notes_slide.notes_text_frame.text = (
-            f"Health Score: {score}/100 — {health['label']}\n\n"
-            f"Talk Track: The company's overall health score is {score} out of 100, rated {health['label']}. "
-            f"Momentum is {momentum_words.get(health['momentum_trend'], 'stable')} at {health['momentum']:.0f} points. "
-            f"We are hitting targets on {health['target_achievement']:.0f}% of our KPIs. "
-            f"There are {health['kpis_red']} KPIs in critical territory that we will address on the next slide. "
-            f"The risk score of {health['risk_flags']:.0f} reflects our overall exposure."
+            f"Health Score: {score}/100 — {health_label}\n\n"
+            f"Talk Track: The company's overall health score is {score} out of 100, rated {health_label}. "
+            f"Momentum is {momentum_words.get(health.get('momentum_trend', ''), 'stable')} at {h_momentum:.0f} points. "
+            f"We are hitting targets on {h_target:.0f}% of our KPIs. "
+            f"There are {health.get('kpis_red', 0)} KPIs in critical territory that we will address on the next slide. "
+            f"The risk score of {h_risk:.0f} reflects our overall exposure."
         )
 
     # ─────────────────────────────────────────────────────────────────────────
     # SLIDE 3: Needs Attention
     # ─────────────────────────────────────────────────────────────────────────
-    if health["needs_attention"]:
+    if h_needs_attention:
         slide = prs.slides.add_slide(blank_layout)
         _fill_slide_bg(slide, prs, bg)
 
@@ -298,7 +306,7 @@ async def generate_board_pack(request: Request, body: BoardPackRequest):
         _add_textbox(slide, "KPIs Below Target Threshold", 0.5, 0.65, 9, 0.5, font_size=20, bold=True, color=txt)
 
         y = 1.4
-        for key in health["needs_attention"][:5]:
+        for key in h_needs_attention[:5]:
             avg   = kpi_avgs.get(key)
             tval  = targets_map.get(key, {}).get("target")
             dirn  = targets_map.get(key, {}).get("direction", "higher")
@@ -324,7 +332,7 @@ async def generate_board_pack(request: Request, body: BoardPackRequest):
             y += 0.82
 
         if body.include_talk_tracks:
-            kpi_names = ", ".join(k.replace("_"," ").title() for k in health["needs_attention"][:4])
+            kpi_names = ", ".join(k.replace("_"," ").title() for k in h_needs_attention[:4])
             slide.notes_slide.notes_text_frame.text = (
                 f"KPIs Needing Attention\n\n"
                 f"Talk Track: The following KPIs are below the 90% target threshold and require management focus: {kpi_names}. "
@@ -335,7 +343,7 @@ async def generate_board_pack(request: Request, body: BoardPackRequest):
     # ─────────────────────────────────────────────────────────────────────────
     # SLIDE 4: Doing Well
     # ─────────────────────────────────────────────────────────────────────────
-    if health["doing_well"]:
+    if h_doing_well:
         slide = prs.slides.add_slide(blank_layout)
         _fill_slide_bg(slide, prs, bg)
 
@@ -343,7 +351,7 @@ async def generate_board_pack(request: Request, body: BoardPackRequest):
         _add_textbox(slide, "KPIs Outperforming Target", 0.5, 0.65, 9, 0.5, font_size=20, bold=True, color=txt)
 
         y = 1.4
-        for key in health["doing_well"][:5]:
+        for key in h_doing_well[:5]:
             avg  = kpi_avgs.get(key)
             tval = targets_map.get(key, {}).get("target")
             dirn = targets_map.get(key, {}).get("direction", "higher")
@@ -368,7 +376,7 @@ async def generate_board_pack(request: Request, body: BoardPackRequest):
             y += 0.82
 
         if body.include_talk_tracks:
-            kpi_names = ", ".join(k.replace("_"," ").title() for k in health["doing_well"][:4])
+            kpi_names = ", ".join(k.replace("_"," ").title() for k in h_doing_well[:4])
             slide.notes_slide.notes_text_frame.text = (
                 f"KPIs Doing Well\n\nTalk Track: I want to highlight the areas where we are outperforming: {kpi_names}. "
                 "These represent genuine strengths we should protect and, where possible, leverage as competitive advantages. "

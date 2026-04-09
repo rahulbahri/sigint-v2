@@ -513,6 +513,16 @@ def init_db():
     """)
     conn.execute("CREATE INDEX IF NOT EXISTS idx_decisions_workspace ON decisions(workspace_id)")
     conn.commit()
+    # ALTER TABLE migrations for decisions (add snapshot columns)
+    for _mig in [
+        "ALTER TABLE decisions ADD COLUMN kpi_snapshot TEXT DEFAULT '{}'",
+        "ALTER TABLE decisions ADD COLUMN resolved_kpi_snapshot TEXT DEFAULT '{}'",
+    ]:
+        try:
+            conn.execute(_mig)
+            conn.commit()
+        except Exception:
+            pass  # Column already exists
     # ALTER TABLE migrations for existing tables (add workspace_id if missing)
     for tbl in ["uploads","monthly_data","kpi_targets","projection_uploads",
                 "projection_monthly_data","kpi_accountability","annotations",

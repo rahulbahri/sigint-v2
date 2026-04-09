@@ -15,12 +15,29 @@ from fastapi.responses import StreamingResponse, HTMLResponse
 from pydantic import BaseModel
 
 from core.database import get_db
-from core.deps import _require_workspace
+from core.deps import _get_workspace, _require_workspace
 from core.kpi_defs import (
     KPI_DEFS, CAUSATION_RULES, ALL_CAUSATION_RULES, BENCHMARKS,
     EXTENDED_ONTOLOGY_METRICS, ONTOLOGY_DOMAIN, compute_gap_status,
 )
 from core.criticality import DOMAIN_URGENCY, DEFAULT_WEIGHTS as CRIT_DEFAULT_WEIGHTS
+
+# ── PPTX helpers (used by board-deck export) ─────────────────────────────────
+from pptx import Presentation
+from pptx.util import Inches, Pt
+from pptx.dml.color import RGBColor
+from pptx.enum.text import PP_ALIGN
+
+def _hex_to_rgb(hex_str: str) -> RGBColor:
+    h = hex_str.lstrip("#")
+    return RGBColor(int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16))
+
+_DECK_DARK_BLUE  = _hex_to_rgb("071e45")
+_DECK_HEADER_BLUE = _hex_to_rgb("0055A4")
+_DECK_WHITE      = RGBColor(0xFF, 0xFF, 0xFF)
+_DECK_RED_FG     = _hex_to_rgb("dc2626")
+_DECK_GREEN_FG   = _hex_to_rgb("059669")
+_DECK_YELLOW_FG  = _hex_to_rgb("d97706")
 
 router = APIRouter()
 
@@ -423,7 +440,7 @@ def _compute_fingerprint_data(targets_override=None, workspace_id: str = ""):
 @router.get("/api/export/board-deck.pptx", tags=["Board Deck"])
 def export_board_deck(request: Request, stage: str = "series_b"):
     """Generate a narrative-driven PPTX board deck with charts, executive summary, and data-backed actions."""
-    workspace_id = _require_workspace(request)
+    workspace_id = _get_workspace(request)
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
@@ -817,7 +834,69 @@ def export_board_deck(request: Request, stage: str = "series_b"):
 
     _add_narrative(slide6, 0.5, 1.2, 12, 5.5, action_paras)
 
-    # ── Slide 7: Closing — Bright Spots + Next Review ─────────────────────
+    # ── Slide 7: Key Decisions & Outcomes ────────────────────────────────
+    try:
+        dec_conn = get_db()
+        dec_rows = dec_conn.execute(
+            "SELECT title, status, outcome, decided_by, decided_at, "
+            "kpi_context, kpi_snapshot, resolved_kpi_snapshot "
+            "FROM decisions WHERE workspace_id=? ORDER BY decided_at DESC LIMIT 10",
+            [workspace_id],
+        ).fetchall()
+        dec_conn.close()
+    except Exception:
+        dec_rows = []
+
+    if dec_rows:
+        slide_dec = prs.slides.add_slide(blank_layout)
+        _add_narrative(slide_dec, 0.5, 0.3, 10, 0.7, [
+            ("Key Decisions & Outcomes", 28, True, _hex_to_rgb("1e293b")),
+        ])
+
+        dec_paras = []
+        active_decs  = [dict(r) for r in dec_rows if (r["status"] or "active") == "active"]
+        resolved_decs = [dict(r) for r in dec_rows if (r["status"] or "") in ("resolved", "reversed")]
+
+        if active_decs:
+            dec_paras.append(("Active Decisions", 14, True, _hex_to_rgb("2563eb")))
+            for d in active_decs[:4]:
+                snap = json.loads(d.get("kpi_snapshot") or "{}")
+                kpi_str = ""
+                if snap:
+                    kpi_parts = [f"{k}: {v:.1f}" for k, v in list(snap.items())[:3] if isinstance(v, (int, float))]
+                    if kpi_parts:
+                        kpi_str = f" (baseline: {', '.join(kpi_parts)})"
+                decided_at = (d.get("decided_at") or "")[:10]
+                dec_paras.append(
+                    (f"  {d['title']}{kpi_str}", 11, False, _hex_to_rgb("334155"))
+                )
+                dec_paras.append(
+                    (f"     {d.get('decided_by', '')} | {decided_at}", 10, False, _hex_to_rgb("94a3b8"))
+                )
+            dec_paras.append(("", 6, False, None))
+
+        if resolved_decs:
+            dec_paras.append(("Recently Resolved", 14, True, _DECK_GREEN_FG))
+            for d in resolved_decs[:4]:
+                baseline = json.loads(d.get("kpi_snapshot") or "{}")
+                current  = json.loads(d.get("resolved_kpi_snapshot") or "{}")
+                delta_parts = []
+                for k in baseline:
+                    if k in current and isinstance(baseline[k], (int, float)) and isinstance(current[k], (int, float)):
+                        diff = current[k] - baseline[k]
+                        delta_parts.append(f"{k}: {'+' if diff >= 0 else ''}{diff:.1f}")
+                delta_str = f" ({', '.join(delta_parts[:3])})" if delta_parts else ""
+                outcome_str = ""
+                if d.get("outcome"):
+                    outcome_str = f" — {d['outcome'][:80]}"
+                dec_paras.append(
+                    (f"  {d['title']}{delta_str}{outcome_str}", 11, False, _hex_to_rgb("334155"))
+                )
+
+        if dec_paras:
+            _add_narrative(slide_dec, 0.5, 1.2, 12, 5.5, dec_paras)
+
+    # ── Slide 8: Closing — Bright Spots + Next Review ─────────────────────
     slide7 = prs.slides.add_slide(blank_layout)
     bg7 = slide7.background
     fill7 = bg7.fill
@@ -918,7 +997,7 @@ def weekly_briefing(request: Request, stage: Optional[str] = "series_b"):
     Generate and return a self-contained HTML weekly briefing document.
     Opens directly in the browser — no download needed.
     """
-    workspace_id = _require_workspace(request)
+    workspace_id = _get_workspace(request)
     conn = get_db()
     try:
         rows = conn.execute(
@@ -933,6 +1012,15 @@ def weekly_briefing(request: Request, stage: Optional[str] = "series_b"):
             "SELECT value FROM company_settings WHERE key='company_name' AND workspace_id=?",
             [workspace_id]
         ).fetchone() if True else None
+        # Fetch active decisions for briefing section
+        try:
+            decision_rows = conn.execute(
+                "SELECT title, decided_by, decided_at FROM decisions "
+                "WHERE workspace_id=? AND status='active' ORDER BY decided_at DESC LIMIT 5",
+                [workspace_id],
+            ).fetchall()
+        except Exception:
+            decision_rows = []
     finally:
         conn.close()
 
@@ -1069,6 +1157,15 @@ def weekly_briefing(request: Request, stage: Optional[str] = "series_b"):
     <div class="section-title"><span class="dot" style="background:#059669"></span> On Target ({len(green)} KPIs)</div>
     <table><tbody>{rows_html(green, "#059669")}</tbody></table>
   </div>
+
+  {"".join(f'''
+  <div class="section">
+    <div class="section-title"><span class="dot" style="background:#0055A4"></span> Active Decisions ({len(decision_rows)})</div>
+    <table><tbody>
+    {"".join(f'<tr style="border-bottom:1px solid #f1f5f9"><td style="padding:10px 0;font-weight:600;color:#1e293b">{dr["title"]}</td><td style="padding:10px 8px;color:#64748b;font-size:13px">{dr["decided_by"] or ""}</td><td style="padding:10px 0;text-align:right;font-size:12px;color:#94a3b8">{(dr["decided_at"] or "")[:10]}</td></tr>' for dr in decision_rows)}
+    </tbody></table>
+  </div>
+  ''' if decision_rows else [])}
 
   <div class="footer">
     This briefing is generated automatically by Axiom Intelligence from your live KPI data.

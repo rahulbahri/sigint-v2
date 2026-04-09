@@ -232,6 +232,7 @@ function AppInner() {
   const [showLegal, setShowLegal]                 = useState(false)
   const [cockpitMode, setCockpitMode]             = useState(() => localStorage.getItem('axiom_cockpit_mode') || null)
   const [prefillDecision, setPrefillDecision]     = useState(null)
+  const [decisionMarkers, setDecisionMarkers]     = useState({})
 
   // ── Validate stored token with backend on every load ─────────────────────
   useEffect(() => {
@@ -433,6 +434,8 @@ function AppInner() {
       setBridgeData(b.data); setProjectionMonthly(pm.data)
       // Fetch lightweight health score for sidebar widget (non-blocking)
       axios.get('/api/home').then(r => setSidebarHealth(r.data?.health)).catch(() => {})
+      // Fetch decision markers for trend chart annotations (non-blocking)
+      axios.get('/api/decision-markers').then(r => setDecisionMarkers(r.data?.markers || {})).catch(() => {})
       if (Array.isArray(ay.data) && ay.data.length) setAvailableYears(ay.data)
       // Auto-run ontology discovery if no nodes exist yet
       try {
@@ -943,7 +946,7 @@ function AppInner() {
                 </>
               )}
               {!noData && tab === 'fingerprint' && <Fingerprint2 fingerprint={yearFilteredFingerprint} onKpiClick={openKpi}/>}
-              {!noData && tab === 'trends'      && <MonthlyTrend fingerprint={filteredFingerprint} monthly={filteredMonthly} onKpiClick={openKpi} periodLabel={periodLabel}/>}
+              {!noData && tab === 'trends'      && <MonthlyTrend fingerprint={filteredFingerprint} monthly={filteredMonthly} onKpiClick={openKpi} periodLabel={periodLabel} decisionMarkers={decisionMarkers}/>}
             </Suspense>
           )}
         </main>

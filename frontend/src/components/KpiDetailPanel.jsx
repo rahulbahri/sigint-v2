@@ -3,7 +3,7 @@ import AnnotationPanel from './AnnotationPanel.jsx'
 import {
   X, TrendingUp, TrendingDown, Minus,
   Target, FlaskConical, Calendar, Star, AlertTriangle,
-  ArrowRight, Lightbulb, AlertOctagon, CheckCircle2
+  ArrowRight, Lightbulb, AlertOctagon, CheckCircle2, BookMarked
 } from 'lucide-react'
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid,
@@ -626,6 +626,53 @@ export default function KpiDetailPanel({ kpi, onClose, periodLabel, benchmarks, 
                 </div>
               )
             })()}
+
+            {/* ── Linked Decisions ───────────────────── */}
+            {kpi?.linked_decisions?.length > 0 && (
+              <div className="mt-6 pt-5 border-t border-slate-100 px-5">
+                <p className="text-xs font-semibold text-slate-600 mb-3 flex items-center gap-1.5">
+                  <BookMarked size={12} className="text-[#0055A4]"/>
+                  Linked Decisions ({kpi.linked_decisions.length})
+                </p>
+                <div className="space-y-2">
+                  {kpi.linked_decisions.map(dec => {
+                    const statusStyle = {
+                      active:   'bg-blue-50 text-blue-700 border-blue-200',
+                      resolved: 'bg-emerald-50 text-emerald-700 border-emerald-200',
+                      reversed: 'bg-amber-50 text-amber-700 border-amber-200',
+                    }[dec.status] || 'bg-slate-50 text-slate-600 border-slate-200'
+                    const delta = dec.baseline_value != null && dec.resolved_value != null
+                      ? dec.resolved_value - dec.baseline_value : null
+                    return (
+                      <div key={dec.id} className="bg-slate-50 rounded-xl p-3 border border-slate-100">
+                        <div className="flex items-center justify-between mb-1">
+                          <span className="text-[12px] font-semibold text-slate-700 truncate mr-2">{dec.title}</span>
+                          <span className={`text-[9px] font-bold px-2 py-0.5 rounded-full border shrink-0 ${statusStyle}`}>
+                            {dec.status}
+                          </span>
+                        </div>
+                        <div className="flex items-center gap-3 text-[11px]">
+                          {dec.baseline_value != null && (
+                            <span className="text-slate-500">
+                              Baseline: {fmt(dec.baseline_value, kpi.unit)}
+                            </span>
+                          )}
+                          {delta != null && (
+                            <span className={`font-bold ${delta >= 0 ? 'text-emerald-600' : 'text-red-500'}`}>
+                              {delta > 0 ? '+' : ''}{fmt(delta, kpi.unit)}
+                            </span>
+                          )}
+                        </div>
+                        <p className="text-[10px] text-slate-400 mt-1">
+                          {dec.decided_by} &middot; {dec.decided_at?.slice(0,10)}
+                          {dec.outcome && <span className="ml-2 text-emerald-600">&mdash; {dec.outcome.slice(0, 60)}{dec.outcome.length > 60 ? '...' : ''}</span>}
+                        </p>
+                      </div>
+                    )
+                  })}
+                </div>
+              </div>
+            )}
 
             {/* Annotations */}
             <div className="mt-6 pt-5 border-t border-slate-100 px-5 pb-4">

@@ -3,7 +3,7 @@ import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip,
   ReferenceLine, ReferenceArea, ResponsiveContainer, Legend
 } from 'recharts'
-import { ChevronRight, Pin, X } from 'lucide-react'
+import { ChevronRight, Pin, X, BookMarked } from 'lucide-react'
 
 const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']
 const COLORS  = ['#0055A4','#059669','#d97706','#dc2626','#7c3aed','#ea580c','#0891b2','#db2777']
@@ -35,7 +35,21 @@ function AnnotationLabel({ viewBox, month }) {
   )
 }
 
-export default function MonthlyTrend({ fingerprint, onKpiClick, periodLabel }) {
+// ── Decision marker label rendered inside the SVG ───────────────────────
+function DecisionLabel({ viewBox, count }) {
+  if (!viewBox) return null
+  const { x, y } = viewBox
+  return (
+    <g>
+      <rect x={x - 7} y={y + 2} width={14} height={14} rx={3} fill="#0055A4" opacity={0.85}/>
+      <text x={x} y={y + 13} textAnchor="middle" fontSize="8" fill="#fff" fontWeight="700">
+        {count > 1 ? count : 'D'}
+      </text>
+    </g>
+  )
+}
+
+export default function MonthlyTrend({ fingerprint, onKpiClick, periodLabel, decisionMarkers = {} }) {
   const [selected, setSelected]     = useState(fingerprint?.slice(0, 4).map(k => k.key) || [])
   const [normMode, setNormMode]     = useState(false)
   const [annotations, setAnnotations] = useState(() => {
@@ -263,6 +277,16 @@ export default function MonthlyTrend({ fingerprint, onKpiClick, periodLabel }) {
                   stroke="#f59e0b" strokeWidth={1.5} strokeDasharray="3 3" opacity={0.7}
                   label={<AnnotationLabel month={month}/>}/>
               ))}
+              {/* Decision markers — blue vertical lines */}
+              {Object.entries(decisionMarkers).map(([period, decs]) => {
+                const tick = periodTick(period)
+                if (!chartData.find(d => d.month === tick)) return null
+                return (
+                  <ReferenceLine key={`dec-${period}`} x={tick}
+                    stroke="#0055A4" strokeWidth={1.5} strokeDasharray="5 3" opacity={0.6}
+                    label={<DecisionLabel count={decs.length}/>}/>
+                )
+              })}
             </LineChart>
           </ResponsiveContainer>
 
@@ -305,6 +329,21 @@ export default function MonthlyTrend({ fingerprint, onKpiClick, periodLabel }) {
                   <button
                     onClick={e => { e.stopPropagation(); deleteAnnotation(month) }}
                     className="ml-0.5 text-amber-400 hover:text-amber-700 font-bold leading-none">×</button>
+                </span>
+              ))}
+            </div>
+          )}
+
+          {/* Decision markers legend */}
+          {Object.keys(decisionMarkers).length > 0 && (
+            <div className="mt-2 flex flex-wrap gap-2">
+              {Object.entries(decisionMarkers)
+                .filter(([period]) => chartData.find(d => d.month === periodTick(period)))
+                .map(([period, decs]) => (
+                <span key={`dec-tag-${period}`}
+                  className="inline-flex items-center gap-1.5 text-[11px] bg-blue-50 border border-blue-200 text-blue-700 px-2.5 py-1 rounded-full">
+                  <BookMarked size={9} className="text-[#0055A4]"/>
+                  <strong>{periodTick(period)}:</strong> {decs.map(d => d.title).join(', ')}
                 </span>
               ))}
             </div>

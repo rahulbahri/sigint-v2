@@ -2162,7 +2162,7 @@ export default function HomeScreen({ onNavigate, onAskAnika }) {
                     <span className="text-slate-700 text-[12px] font-bold">{ci.title}</span>
                     <span className="text-[9px] font-medium text-blue-600 bg-blue-100 px-1.5 py-0.5 rounded-full">{ci.days_since}d ago</span>
                   </div>
-                  <p className="text-slate-500 text-[11px] leading-snug">{ci.reason}</p>
+                  <p className="text-slate-500 text-[11px] leading-snug">{ci.prompt}</p>
                 </div>
                 <span className="text-[10px] text-blue-500 font-semibold flex items-center gap-1 flex-shrink-0 group-hover:text-blue-700">
                   Review <ArrowRight size={10}/>
