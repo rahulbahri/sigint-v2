@@ -40,6 +40,7 @@ const PricingPage       = lazy(() => import('./components/PricingPage'))
 const AdminPanel        = lazy(() => import('./components/AdminPanel.jsx'))
 const LegalPage         = lazy(() => import('./components/LegalPage.jsx'))
 const DecisionLog       = lazy(() => import('./components/DecisionLog.jsx'))
+const DepartmentDashboard = lazy(() => import('./components/DepartmentDashboard.jsx'))
 const ScenarioPlanner   = lazy(() => import('./components/ScenarioPlanner.jsx'))
 const DocsPage          = lazy(() => import('./components/DocsPage.jsx'))
 const DataHealthPage    = lazy(() => import('./components/DataHealthPage.jsx'))
@@ -89,6 +90,7 @@ const NAV_GROUPS = [
       { id: 'board',      label: 'Executive Brief',     Icon: Layers     },
       { id: 'board_pack', label: 'Board Pack',          Icon: Presentation},
       { id: 'variance',   label: 'Variance Command',    Icon: Activity   },
+      { id: 'departments', label: 'Departments',        Icon: Users      },
       { id: 'decisions',  label: 'Decision Log',        Icon: BookMarked },
     ],
   },
@@ -144,6 +146,7 @@ const PAGE_TITLES = {
   fingerprint: 'Performance Fingerprint',
   trends:      'Trend Explorer',
   projection:  'Plan vs Actual',
+  departments: 'Departments',
   ontology:    'Causal Intelligence',
   docs:        'Documentation',
   forecast:    'Forward Signals — 90-Day Outlook',
@@ -897,6 +900,7 @@ function AppInner() {
               {tab === 'docs'        && <DocsPage />}
               {tab === 'tutorial'    && <TutorialPage onNavigate={setTab} />}
               {tab === 'admin'       && isAdmin && <AdminPanel />}
+              {tab === 'departments' && <DepartmentDashboard onKpiClick={openKpi} />}
               {tab === 'decisions'   && <DecisionLog authToken={authToken} fingerprint={fingerprint} prefillDecision={prefillDecision} onPrefillConsumed={() => setPrefillDecision(null)} />}
               {tab === 'scenario'    && <ScenarioPlanner fingerprint={filteredFingerprint} authToken={authToken} onNavigateToDecisions={(data) => { setPrefillDecision(data); setTab('decisions') }} />}
               {tab === 'ontology'    && <OntologyPage />}

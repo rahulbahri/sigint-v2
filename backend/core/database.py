@@ -597,6 +597,20 @@ def init_db():
         )
     """)
     conn.commit()
+    # ── Departments table ─────────────────────────────────────────────────
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS departments (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            workspace_id    TEXT NOT NULL DEFAULT '',
+            name            TEXT NOT NULL,
+            owner           TEXT DEFAULT '',
+            domains         TEXT DEFAULT '[]',
+            color           TEXT DEFAULT '#0055A4',
+            created_at      TEXT DEFAULT (datetime('now'))
+        )
+    """)
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_dept_ws ON departments(workspace_id)")
+    conn.commit()
     # ALTER TABLE migrations for existing tables (add workspace_id if missing)
     for tbl in ["uploads","monthly_data","kpi_targets","projection_uploads",
                 "projection_monthly_data","kpi_accountability","annotations",
