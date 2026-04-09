@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from 'react'
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import axios from 'axios'
 import {
   ComposedChart, Area, Line, XAxis, YAxis, CartesianGrid,
@@ -6,7 +6,8 @@ import {
 } from 'recharts'
 import {
   TrendingUp, TrendingDown, Minus, Zap, Play, RefreshCw,
-  ChevronRight, Info, AlertCircle, X, Plus, RotateCcw, Download
+  ChevronRight, Info, AlertCircle, X, Plus, RotateCcw, Download,
+  Search, Check, ChevronsUpDown
 } from 'lucide-react'
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -226,6 +227,153 @@ function NarrativePanel({ narrative }) {
 
 // ── Tooltip ───────────────────────────────────────────────────────────────────
 
+// ── KPI Multi-Select Dropdown ─────────────────────────────────────────────────
+
+function KpiMultiSelect({ kpis, selected, active, onToggle, onSetActive, trajectories, valueRanges, scenarios, result }) {
+  const [open, setOpen]     = useState(false)
+  const [search, setSearch] = useState('')
+  const containerRef        = useRef(null)
+
+  // Close on outside click
+  useEffect(() => {
+    if (!open) return
+    function handleClick(e) {
+      if (containerRef.current && !containerRef.current.contains(e.target)) { setOpen(false); setSearch('') }
+    }
+    document.addEventListener('mousedown', handleClick)
+    return () => document.removeEventListener('mousedown', handleClick)
+  }, [open])
+
+  const filtered = kpis.filter(k =>
+    formatKpiKey(k).toLowerCase().includes(search.toLowerCase())
+  )
+
+  function getDirectionDot(kpi) {
+    if (!result) return null
+    const traj = trajectories[kpi] ?? []
+    const last = traj.at(-1)
+    const first = traj[0]
+    if (!last || !first) return null
+    const dir = last.p50 - first.p50
+    const pct = first.p50 !== 0 ? Math.abs(dir / Math.abs(first.p50)) : 0
+    const good = LOWER_BETTER.has(kpi) ? dir < 0 : dir > 0
+    if (pct < 0.015) return 'bg-slate-300'
+    return good ? 'bg-emerald-400' : 'bg-red-400'
+  }
+
+  return (
+    <div ref={containerRef} className="relative">
+      {/* Trigger */}
+      <button
+        onClick={() => setOpen(o => !o)}
+        className="w-full flex items-center justify-between px-3 py-2 rounded-lg border border-slate-200
+                   bg-white text-sm text-slate-600 hover:border-slate-300 transition-colors"
+      >
+        <span className="text-slate-400 text-xs">
+          {selected.length === 0 ? 'Select signals to track...' : `${selected.length} signal${selected.length > 1 ? 's' : ''} selected`}
+        </span>
+        <ChevronsUpDown size={14} className="text-slate-300" />
+      </button>
+
+      {/* Dropdown */}
+      {open && (
+        <div className="absolute z-50 mt-1 w-full rounded-xl border border-slate-200 bg-white shadow-xl
+                        max-h-64 flex flex-col overflow-hidden animate-in fade-in slide-in-from-top-1 duration-150">
+          {/* Search */}
+          <div className="flex items-center gap-2 px-3 py-2 border-b border-slate-100">
+            <Search size={13} className="text-slate-300 flex-shrink-0" />
+            <input
+              autoFocus
+              value={search}
+              onChange={e => setSearch(e.target.value)}
+              placeholder="Search KPIs..."
+              className="w-full text-xs text-slate-600 placeholder:text-slate-300 outline-none bg-transparent"
+            />
+          </div>
+          {/* Options */}
+          <div className="overflow-y-auto flex-1 py-1">
+            {filtered.length === 0 && (
+              <p className="px-3 py-4 text-xs text-slate-400 text-center">No matching signals</p>
+            )}
+            {filtered.map(kpi => {
+              const isSelected = selected.includes(kpi)
+              const hasScenario = scenarios.some(s => s.kpi === kpi)
+              return (
+                <button
+                  key={kpi}
+                  onClick={() => { onToggle(kpi); }}
+                  className={`w-full flex items-center gap-2.5 px-3 py-2 text-left text-xs transition-colors
+                              ${isSelected ? 'bg-sky-50/60' : 'hover:bg-slate-50'}`}
+                >
+                  <span className={`w-4 h-4 rounded flex items-center justify-center flex-shrink-0 border transition-colors ${
+                    isSelected ? 'bg-[#00AEEF] border-[#00AEEF]' : 'border-slate-200'
+                  }`}>
+                    {isSelected && <Check size={10} className="text-white" strokeWidth={3} />}
+                  </span>
+                  <span className={`font-medium ${isSelected ? 'text-slate-700' : 'text-slate-500'}`}>
+                    {formatKpiKey(kpi)}
+                  </span>
+                  {hasScenario && (
+                    <span className="text-[8px] px-1 py-0.5 rounded uppercase tracking-wide"
+                      style={{ backgroundColor: ACCENT + '18', color: ACCENT }}>
+                      pinned
+                    </span>
+                  )}
+                </button>
+              )
+            })}
+          </div>
+          {/* Footer */}
+          <div className="border-t border-slate-100 px-3 py-2 flex items-center justify-between">
+            <button
+              onClick={() => { kpis.forEach(k => { if (!selected.includes(k)) onToggle(k) }); }}
+              className="text-[10px] text-slate-400 hover:text-[#00AEEF] transition-colors"
+            >Select all</button>
+            <button
+              onClick={() => { selected.forEach(k => onToggle(k)); }}
+              className="text-[10px] text-slate-400 hover:text-red-400 transition-colors"
+            >Clear</button>
+          </div>
+        </div>
+      )}
+
+      {/* Selected tags row */}
+      {selected.length > 0 && (
+        <div className="flex flex-wrap gap-1.5 mt-2">
+          {selected.map(kpi => {
+            const isActive = kpi === active
+            const dot = getDirectionDot(kpi)
+            return (
+              <button
+                key={kpi}
+                onClick={() => onSetActive(kpi)}
+                className={`group flex items-center gap-1.5 pl-2.5 pr-1.5 py-1 rounded-lg text-[11px] font-medium
+                            transition-all border ${
+                  isActive
+                    ? 'text-white border-transparent shadow-sm'
+                    : 'bg-white text-slate-600 border-slate-200 hover:border-slate-300'
+                }`}
+                style={isActive ? { backgroundColor: ACCENT } : {}}
+              >
+                {dot && <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${isActive ? 'bg-white/50' : dot}`} />}
+                {formatKpiKey(kpi)}
+                <span
+                  onClick={e => { e.stopPropagation(); onToggle(kpi); }}
+                  className={`ml-0.5 rounded-full p-0.5 transition-colors ${
+                    isActive ? 'hover:bg-white/20' : 'hover:bg-slate-100'
+                  }`}
+                >
+                  <X size={10} className={isActive ? 'text-white/70' : 'text-slate-400'} />
+                </span>
+              </button>
+            )
+          })}
+        </div>
+      )}
+    </div>
+  )
+}
+
 function ChartTooltip({ active, payload, label, kpi }) {
   if (!active || !payload?.length) return null
   const p50 = payload.find(p => p.dataKey === 'p50')?.value
@@ -305,6 +453,7 @@ export default function ForecastPage() {
   const [horizonDays, setHorizonDays] = useState(90)
   const [nSamples, setNSamples]       = useState(400)
   const [selectedKpi, setSelectedKpi] = useState(null)
+  const [selectedKpis, setSelectedKpis] = useState([])
 
   // Scenario inputs: [{kpi, state}], max 5
   const [scenarios, setScenarios]     = useState([])
@@ -317,6 +466,7 @@ export default function ForecastPage() {
       setModel(res.data)
       if (res.data?.kpis?.length && !selectedKpi) {
         setSelectedKpi(res.data.kpis[0])
+        setSelectedKpis(prev => prev.length ? prev : res.data.kpis.slice(0, 6))
       }
     } catch (e) {
       console.error(e)
@@ -340,7 +490,10 @@ export default function ForecastPage() {
         const s = res.data?.status
         if (s === 'ready') {
           setModel(res.data)
-          if (res.data.kpis?.length && !selectedKpi) setSelectedKpi(res.data.kpis[0])
+          if (res.data.kpis?.length && !selectedKpi) {
+            setSelectedKpi(res.data.kpis[0])
+            setSelectedKpis(prev => prev.length ? prev : res.data.kpis.slice(0, 6))
+          }
           setBuilding(false)
           return
         }
@@ -373,7 +526,10 @@ export default function ForecastPage() {
         overrides,
       })
       setResult(res.data)
-      if (!selectedKpi && res.data.kpis?.length) setSelectedKpi(res.data.kpis[0])
+      if (!selectedKpi && res.data.kpis?.length) {
+        setSelectedKpi(res.data.kpis[0])
+        setSelectedKpis(prev => prev.length ? prev : res.data.kpis.slice(0, 6))
+      }
     } catch (e) {
       setError('Projection failed. ' + (e.response?.data?.detail ?? ''))
     }
@@ -404,6 +560,24 @@ export default function ForecastPage() {
 
   function removeScenario(kpi) {
     setScenarios(prev => prev.filter(s => s.kpi !== kpi))
+  }
+
+  function toggleKpiSelection(kpi) {
+    setSelectedKpis(prev => {
+      if (prev.includes(kpi)) {
+        const next = prev.filter(k => k !== kpi)
+        // If removing the active KPI, switch to the first remaining
+        if (kpi === selectedKpi && next.length) setSelectedKpi(next[0])
+        return next
+      }
+      return [...prev, kpi]
+    })
+  }
+
+  function setActiveKpi(kpi) {
+    setSelectedKpi(kpi)
+    // Ensure it's in the selected set
+    setSelectedKpis(prev => prev.includes(kpi) ? prev : [...prev, kpi])
   }
 
   const kpis         = model?.kpis ?? []
@@ -639,48 +813,24 @@ export default function ForecastPage() {
 
         {/* KPI Selector */}
         {kpis.length > 0 && (
-          <div className="card p-4">
-            <h3 className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-3">Select Signal to View</h3>
-            <div className="flex flex-wrap gap-2">
-              {kpis.map(kpi => {
-                const isActive   = kpi === selectedKpi
-                const hasScenario = scenarios.some(s => s.kpi === kpi)
-                const vr = valueRanges?.[kpi]
-                return (
-                  <button
-                    key={kpi}
-                    onClick={() => setSelectedKpi(kpi)}
-                    className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium
-                                transition-all border ${
-                      isActive
-                        ? 'text-white border-transparent'
-                        : 'bg-white text-slate-600 border-slate-200 hover:border-slate-300'
-                    }`}
-                    style={isActive ? { backgroundColor: ACCENT, borderColor: ACCENT } : {}}
-                  >
-                    {vr && result && (() => {
-                      const traj = trajectories[kpi] ?? []
-                      const last = traj.at(-1)
-                      const dir  = last ? last.p50 - traj[0]?.p50 : 0
-                      const good = LOWER_BETTER.has(kpi) ? dir < 0 : dir > 0
-                      return <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${
-                        Math.abs(dir / (Math.abs(traj[0]?.p50) || 1)) > 0.015
-                          ? good ? 'bg-emerald-400' : 'bg-red-400'
-                          : 'bg-slate-300'
-                      }`} />
-                    })()}
-                    {!result && <span className="w-1.5 h-1.5 rounded-full flex-shrink-0 bg-slate-200" />}
-                    {formatKpiKey(kpi)}
-                    {hasScenario && (
-                      <span className="text-[8px] px-1 py-0.5 rounded uppercase tracking-wide"
-                        style={{ backgroundColor: isActive ? 'rgba(255,255,255,0.25)' : ACCENT + '22', color: isActive ? 'white' : ACCENT }}>
-                        pinned
-                      </span>
-                    )}
-                  </button>
-                )
-              })}
-            </div>
+          <div className="card p-4 flex-shrink-0">
+            <h3 className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-2.5">
+              Tracked Signals
+              <span className="ml-2 font-normal normal-case text-slate-400">
+                Click a tag to view its trajectory
+              </span>
+            </h3>
+            <KpiMultiSelect
+              kpis={kpis}
+              selected={selectedKpis}
+              active={selectedKpi}
+              onToggle={toggleKpiSelection}
+              onSetActive={setActiveKpi}
+              trajectories={trajectories}
+              valueRanges={valueRanges}
+              scenarios={scenarios}
+              result={result}
+            />
           </div>
         )}
 
@@ -735,7 +885,7 @@ export default function ForecastPage() {
                 </div>
               </div>
 
-              <ResponsiveContainer width="100%" height={260}>
+              <ResponsiveContainer width="100%" height={340}>
                 <ComposedChart data={chartData} margin={{ top: 8, right: 16, left: 0, bottom: 0 }}>
                   <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
                   <XAxis dataKey="label" tick={{ fontSize: 11, fill: '#94a3b8' }} axisLine={false} tickLine={false} />
@@ -807,9 +957,9 @@ export default function ForecastPage() {
         )}
 
         {/* KPI summary cards */}
-        {result?.status === 'ok' && (
+        {result?.status === 'ok' && selectedKpis.length > 1 && (
           <div className="grid grid-cols-4 gap-3">
-            {kpis.slice(0, 4).map(kpi => {
+            {selectedKpis.filter(k => k !== selectedKpi).slice(0, 4).map(kpi => {
               const traj  = trajectories[kpi] ?? []
               const last  = traj.at(-1)
               const first = traj[0]

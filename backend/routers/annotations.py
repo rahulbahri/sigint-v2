@@ -76,14 +76,18 @@ def upsert_annotation(request: Request, body: _AnnotationBody):
 
 
 @router.delete("/api/annotations/{annotation_id}", tags=["Annotations"])
-def delete_annotation(annotation_id: int):
-    """Delete a KPI annotation by its ID."""
+def delete_annotation(annotation_id: int, request: Request):
+    """Delete a KPI annotation by its ID (workspace-scoped)."""
+    workspace_id = _require_workspace(request)
     conn = get_db()
-    existing = conn.execute("SELECT id FROM kpi_annotations WHERE id=?", (annotation_id,)).fetchone()
+    existing = conn.execute(
+        "SELECT id FROM kpi_annotations WHERE id=? AND workspace_id=?",
+        (annotation_id, workspace_id),
+    ).fetchone()
     if not existing:
         conn.close()
         raise HTTPException(status_code=404, detail="Annotation not found")
-    conn.execute("DELETE FROM kpi_annotations WHERE id=?", (annotation_id,))
+    conn.execute("DELETE FROM kpi_annotations WHERE id=? AND workspace_id=?", (annotation_id, workspace_id))
     conn.commit()
     conn.close()
     return {"status": "ok"}

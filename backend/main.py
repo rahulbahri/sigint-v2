@@ -55,6 +55,21 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# ── Request logging middleware ─────────────────────────────────────────────────
+
+import time as _time
+import logging as _logging
+_req_logger = _logging.getLogger("axiom.requests")
+
+@app.middleware("http")
+async def request_logging_middleware(request: Request, call_next):
+    start = _time.time()
+    response = await call_next(request)
+    elapsed = round((_time.time() - start) * 1000, 1)
+    if not request.url.path.startswith("/assets"):
+        _req_logger.info("%s %s %s %sms", request.method, request.url.path, response.status_code, elapsed)
+    return response
+
 # ── Rate limiting middleware ───────────────────────────────────────────────────
 
 app.middleware("http")(rate_limit_middleware)

@@ -349,7 +349,9 @@ function AppInner() {
       .filter(kpi => !modeKpis || modeKpis.has(kpi.key))
       .map(kpi => {
         const months = (kpi.monthly ?? []).filter(m => {
-          const [yr, mo] = m.period.split('-').map(Number)
+          const parts = (m.period || '').split('-')
+          const yr = Number(parts[0]) || 0
+          const mo = Number(parts[1]) || 1
           return inFilter(yr, mo)
         })
         const vals = months.map(m => m.value).filter(v => v != null)

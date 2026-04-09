@@ -129,35 +129,36 @@ async def update_decision(decision_id: int, request: Request):
         raise HTTPException(status_code=400, detail="No fields to update")
 
     conn = get_db()
-
-    # If KPI links changed, re-snapshot current values
-    if "kpi_context" in body:
-        new_kpis = body["kpi_context"] or []
-        updates["kpi_snapshot"] = json.dumps(
-            _latest_kpi_values(conn, workspace_id, new_kpis)
-        )
-
-    # If resolving/reversing, capture resolved snapshot for before/after comparison
-    if body.get("status") in ("resolved", "reversed"):
-        existing = conn.execute(
-            "SELECT kpi_context FROM decisions WHERE id=? AND workspace_id=?",
-            [decision_id, workspace_id],
-        ).fetchone()
-        if existing:
-            kpi_keys = json.loads(existing["kpi_context"] or "[]")
-            updates["resolved_kpi_snapshot"] = json.dumps(
-                _latest_kpi_values(conn, workspace_id, kpi_keys)
+    try:
+        # If KPI links changed, re-snapshot current values
+        if "kpi_context" in body:
+            new_kpis = body["kpi_context"] or []
+            updates["kpi_snapshot"] = json.dumps(
+                _latest_kpi_values(conn, workspace_id, new_kpis)
             )
 
-    set_clause = ", ".join(f"{k}=?" for k in updates)
-    values = list(updates.values()) + [decision_id, workspace_id]
+        # If resolving/reversing, capture resolved snapshot for before/after comparison
+        if body.get("status") in ("resolved", "reversed"):
+            existing = conn.execute(
+                "SELECT kpi_context FROM decisions WHERE id=? AND workspace_id=?",
+                [decision_id, workspace_id],
+            ).fetchone()
+            if existing:
+                kpi_keys = json.loads(existing["kpi_context"] or "[]")
+                updates["resolved_kpi_snapshot"] = json.dumps(
+                    _latest_kpi_values(conn, workspace_id, kpi_keys)
+                )
 
-    conn.execute(
-        f"UPDATE decisions SET {set_clause} WHERE id=? AND workspace_id=?",
-        values,
-    )
-    conn.commit()
-    conn.close()
+        set_clause = ", ".join(f"{k}=?" for k in updates)
+        values = list(updates.values()) + [decision_id, workspace_id]
+
+        conn.execute(
+            f"UPDATE decisions SET {set_clause} WHERE id=? AND workspace_id=?",
+            values,
+        )
+        conn.commit()
+    finally:
+        conn.close()
 
     _audit("decision_updated", "decision", str(decision_id),
            f"Decision #{decision_id} updated: {', '.join(updates.keys())}",

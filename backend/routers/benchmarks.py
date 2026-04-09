@@ -5,16 +5,20 @@ routers/benchmarks.py — Benchmarks, KPI definitions, and health endpoints.
 from fastapi import APIRouter, HTTPException, Request
 
 from core.database import get_db
+from core.deps import _get_workspace
 from core.kpi_defs import KPI_DEFS, BENCHMARKS
 
 router = APIRouter()
 
 
 @router.get("/api/kpi-definitions", tags=["KPIs"])
-def kpi_definitions():
+def kpi_definitions(request: Request):
     """Return all Priority-1 KPI definitions with formulas, units, and targets."""
+    workspace_id = _get_workspace(request)
     conn = get_db()
-    targets = {r["kpi_key"]: r["target_value"] for r in conn.execute("SELECT * FROM kpi_targets").fetchall()}
+    targets = {r["kpi_key"]: r["target_value"] for r in conn.execute(
+        "SELECT kpi_key, target_value FROM kpi_targets WHERE workspace_id=?", [workspace_id]
+    ).fetchall()}
     conn.close()
     return [{"target": targets.get(k["key"]), **k} for k in KPI_DEFS]
 

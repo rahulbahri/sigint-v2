@@ -2429,6 +2429,13 @@ async def upload_canonical_xlsx(request: Request, file: UploadFile = File(...)):
     conn.commit()
     conn.close()
 
+    # Trigger autonomous learning agents (background, non-blocking)
+    try:
+        from core.agents.orchestrator import run_learning_pipeline
+        run_learning_pipeline(workspace_id, trigger="upload")
+    except Exception:
+        pass
+
     kpis_list = sorted(agg_summary.get("kpis_computed", set())) if isinstance(agg_summary, dict) else []
 
     return {

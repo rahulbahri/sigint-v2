@@ -553,6 +553,50 @@ def init_db():
     """)
     conn.execute("CREATE INDEX IF NOT EXISTS idx_integrity_ws ON integrity_checks(workspace_id, started_at)")
     conn.commit()
+    # ── Agent learning tables ─────────────────────────────────────────────
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS agent_insights (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            workspace_id    TEXT NOT NULL DEFAULT '',
+            agent_name      TEXT NOT NULL,
+            insight_type    TEXT NOT NULL,
+            title           TEXT NOT NULL,
+            description     TEXT DEFAULT '',
+            severity        TEXT DEFAULT 'info',
+            confidence      REAL,
+            data_json       TEXT DEFAULT '{}',
+            status          TEXT DEFAULT 'new',
+            created_at      TEXT DEFAULT (datetime('now')),
+            expires_at      TEXT
+        )
+    """)
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_insights_ws ON agent_insights(workspace_id, created_at)")
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS learned_patterns (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            workspace_id    TEXT,
+            category        TEXT NOT NULL,
+            pattern_key     TEXT NOT NULL,
+            pattern_data    TEXT NOT NULL DEFAULT '{}',
+            sample_size     INTEGER DEFAULT 0,
+            confidence      REAL,
+            last_updated    TEXT DEFAULT (datetime('now')),
+            version         INTEGER DEFAULT 1
+        )
+    """)
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_patterns_ws ON learned_patterns(workspace_id, category)")
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS industry_intelligence (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            kpi_key         TEXT NOT NULL,
+            stage           TEXT NOT NULL,
+            p10 REAL, p25 REAL, p50 REAL, p75 REAL, p90 REAL,
+            sample_size     INTEGER DEFAULT 0,
+            archetype       TEXT,
+            computed_at     TEXT DEFAULT (datetime('now'))
+        )
+    """)
+    conn.commit()
     # ALTER TABLE migrations for existing tables (add workspace_id if missing)
     for tbl in ["uploads","monthly_data","kpi_targets","projection_uploads",
                 "projection_monthly_data","kpi_accountability","annotations",

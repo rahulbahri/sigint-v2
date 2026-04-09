@@ -5,9 +5,12 @@ GET /api/home
 GET /api/kpi-detail/{kpi_key}
 """
 import json
+import logging
 from typing import Optional
 
 from fastapi import APIRouter, Query, Request
+
+logger = logging.getLogger(__name__)
 
 from core.database import get_db
 from core.deps import _require_workspace
@@ -79,14 +82,14 @@ def get_home(
     w_momentum: Optional[float] = Query(None),
     w_target: Optional[float] = Query(None),
     w_risk: Optional[float] = Query(None),
-    from_year: Optional[int] = Query(None),
-    from_month: Optional[int] = Query(None),
-    to_year: Optional[int] = Query(None),
-    to_month: Optional[int] = Query(None),
-    cw_gap: Optional[float] = Query(None, description="Criticality weight: Gap Severity (0-1)"),
-    cw_trend: Optional[float] = Query(None, description="Criticality weight: Trend Momentum (0-1)"),
-    cw_impact: Optional[float] = Query(None, description="Criticality weight: Business Impact (0-1)"),
-    cw_domain: Optional[float] = Query(None, description="Criticality weight: Domain Urgency (0-1)"),
+    from_year: Optional[int] = Query(None, ge=2000, le=2100),
+    from_month: Optional[int] = Query(None, ge=1, le=12),
+    to_year: Optional[int] = Query(None, ge=2000, le=2100),
+    to_month: Optional[int] = Query(None, ge=1, le=12),
+    cw_gap: Optional[float] = Query(None, ge=0, le=1, description="Criticality weight: Gap Severity (0-1)"),
+    cw_trend: Optional[float] = Query(None, ge=0, le=1, description="Criticality weight: Trend Momentum (0-1)"),
+    cw_impact: Optional[float] = Query(None, ge=0, le=1, description="Criticality weight: Business Impact (0-1)"),
+    cw_domain: Optional[float] = Query(None, ge=0, le=1, description="Criticality weight: Domain Urgency (0-1)"),
 ):
     """
     Aggregated home-screen payload: health score + recent brief + spotlight KPIs.
@@ -124,8 +127,8 @@ def get_home(
                 "strength": _er["strength"] if isinstance(_er, dict) else _er[4],
                 "direction": (_er["direction"] if isinstance(_er, dict) else _er[5]) if len(_er) > 5 else "positive",
             }
-    except Exception:
-        pass
+    except Exception as _e:
+        logger.debug("graceful_degradation: %s", _e)
     kwargs["ontology_edges"] = _ont_edges_tuples
 
     health = compute_health_score(conn, workspace_id, **kwargs)
@@ -246,8 +249,8 @@ def get_home(
             }
             ontology_edges_map[f"{src}->{tgt}"] = edge_data
             ontology_edges_tuples[(src, tgt)] = edge_data
-    except Exception:
-        pass  # Table may not exist or be empty
+    except Exception as _e:
+        logger.debug("graceful_degradation: %s", _e)
 
     conn.close()
 
@@ -355,8 +358,8 @@ def get_home(
                 ontology_edges=ontology_edges_tuples,
             )
             spot["causal_validation"] = causal_val
-        except Exception:
-            pass  # Graceful degradation — don't block rendering
+        except Exception as _e:
+            logger.debug("graceful_degradation: %s", _e)
 
         needs_enriched.append(spot)
 
@@ -563,10 +566,10 @@ def _build_causal_chain(
 def get_kpi_detail(
     kpi_key: str,
     request: Request,
-    from_year: Optional[int] = Query(None),
-    from_month: Optional[int] = Query(None),
-    to_year: Optional[int] = Query(None),
-    to_month: Optional[int] = Query(None),
+    from_year: Optional[int] = Query(None, ge=2000, le=2100),
+    from_month: Optional[int] = Query(None, ge=1, le=12),
+    to_year: Optional[int] = Query(None, ge=2000, le=2100),
+    to_month: Optional[int] = Query(None, ge=1, le=12),
 ):
     """
     Return rich detail for a single KPI: definition, causation rules,
@@ -697,10 +700,8 @@ def get_kpi_detail(
     try:
         for trow in conn.execute("SELECT kpi_key, direction FROM kpi_targets WHERE workspace_id=?", [workspace_id]).fetchall():
             _dirs_for_rca[trow["kpi_key"] if isinstance(trow, dict) else trow[0]] = (trow["direction"] if isinstance(trow, dict) else trow[1]) or "higher"
-    except Exception:
-        pass
-
-    # Load ontology edges
+    except Exception as _e:
+        logger.debug("graceful_degradation: %s", _e)
     _edges_for_rca = {}
     try:
         for er in conn.execute("SELECT source, target, granger_pval, confidence_tier FROM ontology_edges").fetchall():
@@ -709,10 +710,8 @@ def get_kpi_detail(
                 "granger_pval": er["granger_pval"] if isinstance(er, dict) else er[2],
                 "confidence_tier": er["confidence_tier"] if isinstance(er, dict) else er[3],
             }
-    except Exception:
-        pass
-
-    # ── Decisions linked to this KPI ──────────────────────────────────────
+    except Exception as _e:
+        logger.debug("graceful_degradation: %s", _e)
     linked_decisions = []
     try:
         dec_rows = conn.execute(
@@ -736,8 +735,8 @@ def get_kpi_detail(
                     "baseline_value": snap.get(kpi_key),
                     "resolved_value": resolved_snap.get(kpi_key),
                 })
-    except Exception:
-        pass
+    except Exception as _e:
+        logger.debug("graceful_degradation: %s", _e)
 
     conn.close()
 
@@ -776,8 +775,8 @@ def get_kpi_detail(
             elif _k == "company_name" and _v:
                 _company_name = _v
         _stage_conn.close()
-    except Exception:
-        pass
+    except Exception as _e:
+        logger.debug("graceful_degradation: %s", _e)
 
     ai_actions = _gen_ai_actions(
         kpi_key=kpi_key,
@@ -943,3 +942,58 @@ def integrity_check_history(request: Request):
     ).fetchall()
     conn.close()
     return {"checks": [dict(r) for r in rows]}
+
+
+# ── Agent insights endpoints ─────────────────────────────────────────────────
+
+@router.get("/api/agent-insights", tags=["Intelligence"])
+def get_agent_insights(
+    request: Request,
+    limit: int = Query(20, ge=1, le=100),
+    status: str = Query("all"),
+    agent: str = Query("all"),
+):
+    """Return recent agent insights for the workspace."""
+    workspace_id = _require_workspace(request)
+    conn = get_db()
+    query = "SELECT * FROM agent_insights WHERE workspace_id=?"
+    params = [workspace_id]
+    if status != "all":
+        query += " AND status=?"
+        params.append(status)
+    if agent != "all":
+        query += " AND agent_name=?"
+        params.append(agent)
+    query += " ORDER BY created_at DESC LIMIT ?"
+    params.append(limit)
+    rows = conn.execute(query, params).fetchall()
+    conn.close()
+    return {"insights": [dict(r) for r in rows]}
+
+
+@router.put("/api/agent-insights/{insight_id}/status", tags=["Intelligence"])
+async def update_insight_status(insight_id: int, request: Request):
+    """Update an insight's status (acknowledged, acted_on, dismissed)."""
+    workspace_id = _require_workspace(request)
+    body = await request.json()
+    new_status = body.get("status", "acknowledged")
+    if new_status not in ("new", "acknowledged", "acted_on", "dismissed"):
+        from fastapi import HTTPException
+        raise HTTPException(400, "Invalid status")
+    conn = get_db()
+    conn.execute(
+        "UPDATE agent_insights SET status=? WHERE id=? AND workspace_id=?",
+        [new_status, insight_id, workspace_id],
+    )
+    conn.commit()
+    conn.close()
+    return {"status": "updated"}
+
+
+@router.post("/api/agent-insights/run", tags=["Intelligence"])
+def run_agents_manually(request: Request):
+    """Manually trigger all learning agents."""
+    workspace_id = _require_workspace(request)
+    from core.agents.orchestrator import run_learning_pipeline
+    run_learning_pipeline(workspace_id, trigger="manual")
+    return {"status": "triggered", "message": "Learning pipeline started in background"}

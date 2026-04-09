@@ -248,15 +248,17 @@ class GapDetector:
             ]
             if column not in cols:
                 return 0, 0
-            total = self._conn.execute(
-                f"SELECT COUNT(*) FROM {table} WHERE workspace_id=?",
+            t_row = self._conn.execute(
+                f"SELECT COUNT(*) as cnt FROM {table} WHERE workspace_id=?",
                 [self._workspace_id],
-            ).fetchone()[0]
-            missing = self._conn.execute(
-                f"SELECT COUNT(*) FROM {table} "
+            ).fetchone()
+            total = t_row["cnt"] if t_row else 0
+            m_row = self._conn.execute(
+                f"SELECT COUNT(*) as cnt FROM {table} "
                 f"WHERE workspace_id=? AND ({column} IS NULL OR {column}='')",
                 [self._workspace_id],
-            ).fetchone()[0]
+            ).fetchone()
+            missing = m_row["cnt"] if m_row else 0
             return total, missing
         except Exception:
             return 0, 0

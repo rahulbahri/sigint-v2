@@ -779,18 +779,20 @@ async def get_canonical_data(entity_type: str, request: Request,
                 f"SELECT * FROM {table} WHERE workspace_id=? AND source=? LIMIT ?",
                 [workspace_id, source, limit],
             ).fetchall()
-            total = conn.execute(
-                f"SELECT COUNT(*) FROM {table} WHERE workspace_id=? AND source=?",
+            cnt_row = conn.execute(
+                f"SELECT COUNT(*) as cnt FROM {table} WHERE workspace_id=? AND source=?",
                 [workspace_id, source],
-            ).fetchone()[0]
+            ).fetchone()
+            total = cnt_row["cnt"] if cnt_row else 0
         else:
             rows = conn.execute(
                 f"SELECT * FROM {table} WHERE workspace_id=? LIMIT ?",
                 [workspace_id, limit],
             ).fetchall()
-            total = conn.execute(
-                f"SELECT COUNT(*) FROM {table} WHERE workspace_id=?", [workspace_id]
-            ).fetchone()[0]
+            cnt_row = conn.execute(
+                f"SELECT COUNT(*) as cnt FROM {table} WHERE workspace_id=?", [workspace_id]
+            ).fetchone()
+            total = cnt_row["cnt"] if cnt_row else 0
         if not rows:
             return {"records": [], "total": 0, "source_filter": source or "all"}
         cols    = [d[0] for d in conn.execute(f"PRAGMA table_info({table})").fetchall()]

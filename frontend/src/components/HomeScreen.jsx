@@ -10,6 +10,7 @@ import {
   Flame, Zap, FileText, MessageSquare
 } from 'lucide-react'
 import { fmtKpiValue, fmtKpiRange } from './kpiFormat'
+import IntelligenceFeed from './IntelligenceFeed.jsx'
 
 // ── KPI contextual info dictionary ───────────────────────────────────────────
 const KPI_INFO = {
@@ -2177,6 +2178,9 @@ export default function HomeScreen({ onNavigate, onAskAnika, externalPeriodDates
           ))}
         </div>
       )}
+
+      {/* ── Intelligence Feed (autonomous agent insights) ────────────── */}
+      <IntelligenceFeed compact />
 
       {/* ── Domain Intelligence (full-width) ──────────────────────────── */}
       {data?.domain_narratives?.length > 0 && (

@@ -963,7 +963,7 @@ function ExpandedDetail({ kpi, benchmarkCtx, recentTrend, smartActions, fingerpr
                 </div>
                 {benchmarkCtx.diff != null && (
                   <div className={`text-[10px] font-semibold mt-1.5 ${benchmarkCtx.diff >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>
-                    {benchmarkCtx.diff >= 0 ? '+' : ''}{benchmarkCtx.diff.toFixed(1)}% vs. peers
+                    {(benchmarkCtx.diff ?? 0) >= 0 ? '+' : ''}{(benchmarkCtx.diff ?? 0).toFixed(1)}% vs. peers
                   </div>
                 )}
               </div>
