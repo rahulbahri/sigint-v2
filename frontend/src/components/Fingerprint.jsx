@@ -5,6 +5,7 @@ import {
   ResponsiveContainer, Tooltip, Legend
 } from 'recharts'
 import { ChevronRight, FileDown, GitCompare, Download, X } from 'lucide-react'
+import { getGaapLabel, getGaapColor } from './kpiFormat'
 
 const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']
 const MONTH_NUMS = [1,2,3,4,5,6,7,8,9,10,11,12]
@@ -854,6 +855,9 @@ export default function Fingerprint({ fingerprint, onKpiClick }) {
                   <td className="py-2 pr-2 pl-2 text-slate-700 font-medium whitespace-nowrap">
                     <span className="flex items-center gap-1.5">
                       {kpi.name}
+                      <span className={`text-[8px] font-semibold px-1 py-0.5 rounded ${getGaapColor(kpi.key)}`}>
+                        {getGaapLabel(kpi.key)}
+                      </span>
                       {streak >= 2 && (
                         <span className="flex items-center gap-0.5 text-[9px] font-bold text-red-500 bg-red-50 border border-red-200 px-1.5 py-0.5 rounded-full flex-shrink-0">
                           {streak >= 3 && <span className="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse flex-shrink-0"/>}

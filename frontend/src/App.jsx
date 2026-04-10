@@ -13,6 +13,7 @@ import {
 import SummaryBar from './components/SummaryBar.jsx'
 import MonthRangeFilter from './components/MonthRangeFilter.jsx'
 import OnboardingModal from './components/OnboardingModal.jsx'
+import DataFreshnessBar from './components/DataFreshnessBar.jsx'
 import OnboardingChecklist from './components/OnboardingChecklist.jsx'
 import LoginPage from './components/LoginPage'
 import HomeScreen from './components/HomeScreen.jsx'
@@ -48,6 +49,16 @@ const PlatformHealth      = lazy(() => import('./components/PlatformHealth.jsx')
 const ProjectionUpload    = lazy(() => import('./components/ProjectionUpload.jsx'))
 const ThreeWayComparison  = lazy(() => import('./components/ThreeWayComparison.jsx'))
 const ScenarioPlanner   = lazy(() => import('./components/ScenarioPlanner.jsx'))
+// SEC-grade analytics views
+const ArrBridge              = lazy(() => import('./components/ArrBridge.jsx'))
+const CohortMatrix           = lazy(() => import('./components/CohortMatrix.jsx'))
+const ConcentrationTable     = lazy(() => import('./components/ConcentrationTable.jsx'))
+const MarginDecomposition    = lazy(() => import('./components/MarginDecomposition.jsx'))
+const CashWaterfall          = lazy(() => import('./components/CashWaterfall.jsx'))
+const UnitEconomics          = lazy(() => import('./components/UnitEconomics.jsx'))
+const RuleOf40               = lazy(() => import('./components/RuleOf40.jsx'))
+const ScenarioComparison     = lazy(() => import('./components/ScenarioComparison.jsx'))
+const AccountabilityDashboard = lazy(() => import('./components/AccountabilityDashboard.jsx'))
 const DocsPage          = lazy(() => import('./components/DocsPage.jsx'))
 const DataHealthPage    = lazy(() => import('./components/DataHealthPage.jsx'))
 const BoardPackGenerator= lazy(() => import('./components/BoardPackGenerator.jsx'))
@@ -104,19 +115,28 @@ const NAV_GROUPS = [
     tabs: [
       { id: 'okrs',        label: 'OKRs',               Icon: Target     },
       { id: 'departments', label: 'Departments',        Icon: Users      },
-      { id: 'scenario',    label: 'Scenario Planner',   Icon: Sliders    },
-      { id: 'projection',  label: 'Plan vs Actual',     Icon: GitBranch  },
+      { id: 'scenario',         label: 'Scenario Planner',   Icon: Sliders    },
+      { id: 'scenario_compare', label: 'Scenario Compare',   Icon: GitBranch  },
+      { id: 'projection',       label: 'Plan vs Actual',     Icon: GitBranch  },
     ],
   },
   {
     label: 'Analysis',
     tabs: [
-      { id: 'fingerprint', label: 'Performance Fingerprint', Icon: Fingerprint },
-      { id: 'trends',      label: 'Trend Explorer',          Icon: TrendingUp  },
-      { id: 'forecast',    label: 'Forward Signals',         Icon: BarChart2   },
-      { id: 'ontology',    label: 'Causal Intelligence',     Icon: Network     },
-      { id: 'segments',    label: 'Customer Segments',       Icon: PieChart    },
-      { id: 'deferred',    label: 'Revenue Recognition',     Icon: Clock       },
+      { id: 'fingerprint',     label: 'Performance Fingerprint', Icon: Fingerprint },
+      { id: 'trends',          label: 'Trend Explorer',          Icon: TrendingUp  },
+      { id: 'forecast',        label: 'Forward Signals',         Icon: BarChart2   },
+      { id: 'ontology',        label: 'Causal Intelligence',     Icon: Network     },
+      { id: 'segments',        label: 'Customer Segments',       Icon: PieChart    },
+      { id: 'deferred',        label: 'Revenue Recognition',     Icon: Clock       },
+      { id: 'arr_bridge',      label: 'ARR Bridge',              Icon: Layers      },
+      { id: 'cohort_matrix',   label: 'Cohort Retention',        Icon: PieChart    },
+      { id: 'concentration',   label: 'Customer Concentration',  Icon: AlertCircleIcon },
+      { id: 'margin_decomp',   label: 'Margin Decomposition',    Icon: BarChart2   },
+      { id: 'cash_waterfall',  label: 'Cash Waterfall',          Icon: Activity    },
+      { id: 'unit_economics',  label: 'Unit Economics',          Icon: Target      },
+      { id: 'rule_of_40',      label: 'Rule of 40',              Icon: Gauge       },
+      { id: 'accountability',  label: 'KPI Accountability',      Icon: Users       },
     ],
   },
   {
@@ -192,6 +212,16 @@ const PAGE_TITLES = {
   audit:       'Audit Trail',
   admin:       'Admin Panel',
   tutorial:    'Platform Manual',
+  // SEC-grade analytics
+  arr_bridge:       'ARR Bridge',
+  cohort_matrix:    'Cohort Retention Matrix',
+  concentration:    'Customer Concentration',
+  margin_decomp:    'Margin Decomposition',
+  cash_waterfall:   'Cash Flow Waterfall',
+  unit_economics:   'Unit Economics',
+  rule_of_40:       'Rule of 40',
+  scenario_compare: 'Scenario Comparison',
+  accountability:   'KPI Accountability',
 }
 
 const FILTER_TABS = new Set(['variance', 'dashboard', 'fingerprint', 'trends', 'projection', 'board', 'home', 'decisions', 'scenario'])
@@ -928,6 +958,11 @@ function AppInner() {
         {/* Scrollable content */}
         <main className="flex-1 overflow-y-auto px-6 py-5">
 
+          {/* Global data freshness indicator */}
+          <div className="flex justify-end mb-2">
+            <DataFreshnessBar />
+          </div>
+
           {loading && (
             <div className="flex items-center justify-center h-64">
               <div className="animate-spin w-8 h-8 rounded-full border-4 border-[#0055A4] border-t-transparent"/>
@@ -970,6 +1005,17 @@ function AppInner() {
               {tab === 'scenario'    && <ScenarioPlanner fingerprint={filteredFingerprint} authToken={authToken} onNavigateToDecisions={(data) => { setPrefillDecision(data); setTab('decisions') }} />}
               {tab === 'ontology'    && <OntologyPage />}
               {tab === 'board_pack'  && <BoardPackGenerator companySettings={companySettings} />}
+
+              {/* ── SEC-grade analytics views ───────────────────────────────── */}
+              {tab === 'arr_bridge'       && <ArrBridge />}
+              {tab === 'cohort_matrix'    && <CohortMatrix />}
+              {tab === 'concentration'    && <ConcentrationTable />}
+              {tab === 'margin_decomp'    && <MarginDecomposition />}
+              {tab === 'cash_waterfall'   && <CashWaterfall />}
+              {tab === 'unit_economics'   && <UnitEconomics />}
+              {tab === 'rule_of_40'       && <RuleOf40 />}
+              {tab === 'scenario_compare' && <ScenarioComparison />}
+              {tab === 'accountability'   && <AccountabilityDashboard />}
               {tab === 'projection'  && (
                 <ProjectionBridge
                   bridgeData={filteredBridgeData}

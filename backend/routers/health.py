@@ -944,6 +944,82 @@ def integrity_check_history(request: Request):
     return {"checks": [dict(r) for r in rows]}
 
 
+@router.get("/api/integrity-check/attestation", tags=["Intelligence"])
+def integrity_attestation(request: Request):
+    """SOX-style Control Attestation Report from latest integrity check."""
+    workspace_id = _require_workspace(request)
+    conn = get_db()
+    row = conn.execute(
+        "SELECT overall_status, stage0_report, stage1_report, stage2_report, "
+        "stage3_report, stage4_report, correction_attempted, correction_succeeded "
+        "FROM integrity_checks WHERE workspace_id=? ORDER BY started_at DESC LIMIT 1",
+        [workspace_id],
+    ).fetchone()
+    conn.close()
+
+    if not row:
+        return {"controls_tested": 0, "passed": 0, "warned": 0, "failed": 0,
+                "overall_assessment": "No integrity checks run yet",
+                "material_exceptions": [], "observations": []}
+
+    import json
+    stages = []
+    for idx, col_idx in enumerate([1, 2, 3, 4, 5]):
+        try:
+            report = json.loads(row[col_idx]) if row[col_idx] else {}
+        except Exception:
+            report = {}
+        stages.append(report)
+
+    controls_tested = 0
+    passed = 0
+    warned = 0
+    failed = 0
+    material_exceptions = []
+    observations = []
+
+    for i, stage in enumerate(stages):
+        checks = stage.get("checks", [])
+        controls_tested += len(checks)
+        for chk in checks:
+            if chk.get("passed"):
+                passed += 1
+            elif i < 4:  # Stages 0-3 failures are material
+                failed += 1
+                material_exceptions.append({
+                    "stage": i,
+                    "check": chk.get("check", "unknown"),
+                    "detail": chk.get("note", chk.get("summary", "")),
+                })
+            else:  # Stage 4 = observations
+                warned += 1
+                observations.append({
+                    "stage": i,
+                    "check": chk.get("check", "unknown"),
+                    "detail": chk.get("note", ""),
+                })
+
+    if failed > 0:
+        assessment = "Material weakness identified"
+    elif warned > 0:
+        assessment = "Effective with noted exceptions"
+    else:
+        assessment = "Effective"
+
+    if row[6] and row[7]:  # correction attempted and succeeded
+        assessment += " (auto-corrected)"
+
+    return {
+        "controls_tested": controls_tested,
+        "passed": passed,
+        "warned": warned,
+        "failed": failed,
+        "overall_assessment": assessment,
+        "material_exceptions": material_exceptions,
+        "observations": observations,
+    }
+
+
 # ── Agent insights endpoints ─────────────────────────────────────────────────
 
 @router.get("/api/agent-insights", tags=["Intelligence"])

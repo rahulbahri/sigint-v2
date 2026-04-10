@@ -111,6 +111,48 @@ async def delete_scenario(scenario_id: int, request: Request):
     return {"status": "deleted"}
 
 
+# ─── Scenario Comparison ────────────────────────────────────────────────────
+
+@router.get("/api/scenarios/compare", tags=["Scenarios"])
+def compare_scenarios(request: Request, ids: str = ""):
+    """Side-by-side comparison of saved scenarios."""
+    workspace_id = _get_workspace(request)
+    if not workspace_id:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    if not ids:
+        raise HTTPException(status_code=400, detail="ids query param required (comma-separated)")
+
+    id_list = [i.strip() for i in ids.split(",") if i.strip()]
+    conn = get_db()
+    scenarios = []
+    for sid in id_list[:5]:  # Cap at 5
+        row = conn.execute(
+            "SELECT id, name, levers_json, notes FROM saved_scenarios "
+            "WHERE id=? AND workspace_id=?",
+            [sid, workspace_id],
+        ).fetchone()
+        if row:
+            import json
+            levers = json.loads(row[2]) if row[2] else {}
+            scenarios.append({"id": row[0], "name": row[1], "levers": levers, "notes": row[3]})
+    conn.close()
+
+    # Build comparison table from levers
+    all_lever_keys = set()
+    for s in scenarios:
+        all_lever_keys.update(s["levers"].keys())
+
+    comparison = []
+    for key in sorted(all_lever_keys):
+        row_data = {"lever": key}
+        for i, s in enumerate(scenarios):
+            row_data[f"scenario_{i+1}"] = s["levers"].get(key, 0)
+            row_data[f"scenario_{i+1}_name"] = s["name"]
+        comparison.append(row_data)
+
+    return {"scenarios": scenarios, "comparison": comparison}
+
+
 # ─── Trained Coefficients ────────────────────────────────────────────────────
 
 @router.get("/api/scenarios/trained-coefficients", tags=["Scenarios"])

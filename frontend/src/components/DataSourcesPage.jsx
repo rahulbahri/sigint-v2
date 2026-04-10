@@ -285,6 +285,11 @@ export default function DataSourcesPage() {
                     <div className="flex items-center gap-3">
                       <span className="text-white font-medium">{c.label}</span>
                       <StatusBadge status={c.status}/>
+                      {c.has_unmapped_critical && (
+                        <span className="text-[9px] font-bold bg-yellow-400/20 text-yellow-400 px-2 py-0.5 rounded-full">
+                          Unmapped fields
+                        </span>
+                      )}
                     </div>
                     <p className="text-gray-500 text-xs mt-0.5">{meta.desc}</p>
                     {c.last_sync_at && (

@@ -297,6 +297,38 @@ class DataIntegrityValidator:
             except Exception:
                 pass
 
+            # Mapping quality check — detect unmapped or low-confidence fields
+            # that may be producing null canonical data
+            try:
+                unmapped_rows = _safe_query(
+                    self._conn,
+                    "SELECT source_name, canonical_table, source_field, confidence "
+                    "FROM field_mappings "
+                    "WHERE workspace_id=? AND (canonical_field='unmapped' OR confidence < 0.5)",
+                    [self._ws],
+                )
+                unmapped_count = len(unmapped_rows)
+                if unmapped_count > 0:
+                    unmapped_detail = [
+                        {"source": r["source_name"], "table": r["canonical_table"],
+                         "field": r["source_field"], "confidence": r["confidence"]}
+                        for r in unmapped_rows[:10]  # Cap at 10 for readability
+                    ]
+                    checks.append({
+                        "check": "mapping_quality",
+                        "unmapped_or_low_confidence": unmapped_count,
+                        "detail": unmapped_detail,
+                        "passed": unmapped_count == 0,
+                        "suggested_action": "review_field_mappings",
+                        "note": f"{unmapped_count} field(s) are unmapped or have low confidence. "
+                                "Review and confirm mappings to improve data quality.",
+                    })
+                else:
+                    checks.append({"check": "mapping_quality", "unmapped_or_low_confidence": 0,
+                                    "passed": True, "note": "All field mappings are confirmed"})
+            except Exception:
+                pass  # field_mappings table may not exist yet
+
         except Exception as e:
             return {"status": "fail", "error": str(e), "checks": checks, "summary": "Stage 1 error"}
 
@@ -567,12 +599,48 @@ class DataIntegrityValidator:
         started = datetime.utcnow().isoformat()
         try:
             aggregate_canonical_to_monthly(self._conn, self._ws)
+            # Self-healing: if there are still unmapped new fields, create a notification
+            self._check_unmapped_after_correction()
             return {"stage": 2, "action": "re_aggregation",
                     "started_at": started, "completed_at": datetime.utcnow().isoformat(), "succeeded": True}
         except Exception as e:
             return {"stage": 2, "action": "re_aggregation",
                     "started_at": started, "completed_at": datetime.utcnow().isoformat(),
                     "succeeded": False, "error": str(e)}
+
+    def _check_unmapped_after_correction(self) -> None:
+        """Self-healing: if unmapped new fields still exist after correction,
+        create a notification prompting the user to review mappings."""
+        try:
+            rows = _safe_query(
+                self._conn,
+                "SELECT COUNT(*) as cnt FROM field_mappings "
+                "WHERE workspace_id=? AND canonical_field='unmapped' AND is_new=1",
+                [self._ws],
+            )
+            cnt = rows[0]["cnt"] if rows else 0
+            if cnt > 0:
+                # Check if a notification already exists and is not dismissed
+                existing = _safe_query(
+                    self._conn,
+                    "SELECT id FROM workspace_notifications "
+                    "WHERE workspace_id=? AND notification_type='mapping_required' AND is_dismissed=0",
+                    [self._ws],
+                )
+                if not existing:
+                    self._conn.execute(
+                        "INSERT INTO workspace_notifications "
+                        "(workspace_id, notification_type, title, message, severity, data_json) "
+                        "VALUES (?,?,?,?,?,?)",
+                        [self._ws, "mapping_required",
+                         "Field mappings need review",
+                         f"{cnt} unmapped field(s) detected during integrity check. "
+                         "Review and confirm field mappings to improve KPI accuracy.",
+                         "warning", json.dumps({"unmapped_count": cnt})],
+                    )
+                    self._conn.commit()
+        except Exception:
+            pass  # Non-blocking — notification is best-effort
 
     # ── Persistence ──────────────────────────────────────────────────────
 

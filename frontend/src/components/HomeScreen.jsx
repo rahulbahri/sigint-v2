@@ -12,6 +12,7 @@ import {
 import { fmtKpiValue, fmtKpiRange } from './kpiFormat'
 import IntelligenceFeed from './IntelligenceFeed.jsx'
 import WeeklyDigest from './WeeklyDigest.jsx'
+import NotificationBanner from './NotificationBanner.jsx'
 
 // ── KPI contextual info dictionary ───────────────────────────────────────────
 const KPI_INFO = {
@@ -1925,6 +1926,9 @@ export default function HomeScreen({ onNavigate, onAskAnika, externalPeriodDates
   return (
     <div className="space-y-5 max-w-7xl">
 
+      {/* ── Notification banner (unmapped fields, mapping required) ──── */}
+      <NotificationBanner onNavigate={onNavigate} />
+
       {/* ── Top meta bar ───────────────────────────────────────────────── */}
       <div className="flex items-center justify-between flex-wrap gap-2">
         <div className="flex items-center gap-2 text-[11px] text-slate-400">
@@ -2537,6 +2541,27 @@ export default function HomeScreen({ onNavigate, onAskAnika, externalPeriodDates
           onOpenKpi={(kpi, status) => { setShowDistModal(false); setSlideOut({ kpi, status }) }}
         />
       )}
+
+      {/* ── Deep Analytics quick links ─────────────────────────────────── */}
+      <div className="mt-4 pt-4 border-t border-slate-100">
+        <h3 className="text-slate-500 text-[10px] font-bold uppercase tracking-wider mb-2">Deep Analytics</h3>
+        <div className="flex flex-wrap gap-1.5">
+          {[
+            { id: 'arr_bridge',    label: 'ARR Bridge' },
+            { id: 'cohort_matrix', label: 'Cohort Retention' },
+            { id: 'concentration', label: 'Customer Concentration' },
+            { id: 'margin_decomp', label: 'Margin Breakdown' },
+            { id: 'cash_waterfall',label: 'Cash Waterfall' },
+            { id: 'unit_economics',label: 'Unit Economics' },
+            { id: 'rule_of_40',   label: 'Rule of 40' },
+          ].map(v => (
+            <button key={v.id} onClick={() => onNavigate?.(v.id)}
+              className="text-[10px] font-medium text-[#0055A4] bg-blue-50 hover:bg-blue-100 px-2.5 py-1 rounded-lg transition-colors">
+              {v.label} →
+            </button>
+          ))}
+        </div>
+      </div>
 
       {/* ── CSS animations ─────────────────────────────────────────────── */}
       <style>{`

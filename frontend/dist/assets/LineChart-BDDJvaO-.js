@@ -1,0 +1,1 @@
+import{d as e,t}from"./generateCategoricalChart-CgPTohOC.js";import{n,t as r}from"./YAxis-DFM2rcUL.js";import{t as i}from"./Line-_PjOc156.js";var a=t({chartName:`LineChart`,GraphicalChild:i,axisComponents:[{axisType:`xAxis`,AxisComp:n},{axisType:`yAxis`,AxisComp:r}],formatAxisMap:e});export{a as t};

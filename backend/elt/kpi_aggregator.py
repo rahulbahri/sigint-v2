@@ -315,6 +315,49 @@ def _detect_duplicates(conn, workspace_id: str, summary: dict) -> None:
             pass  # Table may not exist
 
 
+# ── Mapping readiness (soft gate) ────────────────────────────────────────────
+
+def check_mapping_readiness(conn, workspace_id: str) -> dict:
+    """Soft gate: check if critical field mappings are resolved.
+
+    Returns ``{"ready": bool, "warnings": [...], "blocked_kpis": [...]}``.
+    This does NOT block aggregation — it attaches warnings so the caller
+    can decide what to do.
+    """
+    result = {"ready": True, "warnings": [], "blocked_kpis": []}
+    try:
+        rows = conn.execute(
+            "SELECT source_name, canonical_table, source_field "
+            "FROM field_mappings "
+            "WHERE workspace_id=? AND canonical_field='unmapped' AND is_new=1",
+            [workspace_id],
+        ).fetchall()
+        if not rows:
+            return result
+
+        try:
+            from elt.gap_detector import get_kpi_impact_for_field
+        except Exception:
+            return result
+
+        blocked: set[str] = set()
+        for r in rows:
+            src, entity, field = r[0], r[1], r[2]
+            kpis = get_kpi_impact_for_field(entity, field)
+            blocked.update(kpis)
+            result["warnings"].append(
+                f"{src}.{entity}.{field} is unmapped — may affect: {', '.join(kpis) or 'none'}"
+            )
+
+        result["blocked_kpis"] = sorted(blocked)
+        _CORE = {"revenue_growth", "arr_growth", "gross_margin", "churn_rate", "nrr", "burn_multiple"}
+        if blocked & _CORE:
+            result["ready"] = False
+    except Exception as e:
+        logger.warning("[Mapping Readiness] check failed (non-fatal): %s", e)
+    return result
+
+
 # ── Public API ────────────────────────────────────────────────────────────────
 
 def aggregate_canonical_to_monthly(conn, workspace_id: str) -> dict:

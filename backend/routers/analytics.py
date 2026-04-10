@@ -22,22 +22,7 @@ from core.kpi_defs import (
 )
 from core.criticality import DOMAIN_URGENCY, DEFAULT_WEIGHTS as CRIT_DEFAULT_WEIGHTS
 
-# ── PPTX helpers (used by board-deck export) ─────────────────────────────────
-from pptx import Presentation
-from pptx.util import Inches, Pt
-from pptx.dml.color import RGBColor
-from pptx.enum.text import PP_ALIGN
-
-def _hex_to_rgb(hex_str: str) -> RGBColor:
-    h = hex_str.lstrip("#")
-    return RGBColor(int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16))
-
-_DECK_DARK_BLUE  = _hex_to_rgb("071e45")
-_DECK_HEADER_BLUE = _hex_to_rgb("0055A4")
-_DECK_WHITE      = RGBColor(0xFF, 0xFF, 0xFF)
-_DECK_RED_FG     = _hex_to_rgb("dc2626")
-_DECK_GREEN_FG   = _hex_to_rgb("059669")
-_DECK_YELLOW_FG  = _hex_to_rgb("d97706")
+# ── Board deck export moved to routers/board_pack.py ─────────────────────────
 
 router = APIRouter()
 
@@ -125,6 +110,7 @@ def fingerprint(request: Request, year: Optional[int] = None):
             "causation":     CAUSATION_RULES.get(key, {
                                  "root_causes": [], "downstream_impact": [], "corrective_actions": []
                              }),
+            "gaap_status":   kdef.get("gaap_status", "operating"),
         })
 
     return fingerprint_out
@@ -442,510 +428,36 @@ def _compute_fingerprint_data(targets_override=None, workspace_id: str = ""):
 
 @router.get("/api/export/board-deck.pptx", tags=["Board Deck"])
 def export_board_deck(request: Request, stage: str = "series_b"):
-    """Generate a narrative-driven PPTX board deck with charts, executive summary, and data-backed actions."""
-    workspace_id = _get_workspace(request)
-    import matplotlib
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
-    import matplotlib.ticker as mticker
-
-    fp_data = _compute_fingerprint_data(workspace_id=workspace_id)
-
-    valid_stages = {"seed", "series_a", "series_b", "series_c"}
-    if stage not in valid_stages:
-        stage = "series_b"
-    bench = {}
-    for kpi_key, stages_data in BENCHMARKS.items():
-        if stage in stages_data:
-            bench[kpi_key] = stages_data[stage]
-
-    stage_label = {"seed": "Seed", "series_a": "Series A", "series_b": "Series B", "series_c": "Series C+"}.get(stage, stage)
-
-    green_kpis = [k for k in fp_data if k["fy_status"] == "green"]
-    yellow_kpis = [k for k in fp_data if k["fy_status"] == "yellow"]
-    red_kpis = [k for k in fp_data if k["fy_status"] == "red"]
-    total = len(green_kpis) + len(yellow_kpis) + len(red_kpis)
-
-    # Sort red by worst gap
-    def _gap_pct(k):
-        if k["avg"] is not None and k["target"] is not None and k["target"] != 0:
-            return abs((k["avg"] - k["target"]) / abs(k["target"]) * 100)
-        return 0
-    red_kpis.sort(key=_gap_pct, reverse=True)
-    yellow_kpis.sort(key=_gap_pct, reverse=True)
-
-    # ── Helper: generate a matplotlib chart as PNG bytes ─────────────────
-    def _make_trend_chart(kpis_list, title_text, max_kpis=5):
-        """Sparkline-style multi-KPI trend chart → PNG bytes."""
-        fig, ax = plt.subplots(figsize=(11, 5.5))
-        fig.patch.set_facecolor("white")
-        ax.set_facecolor("white")
-        colors_cycle = ["#dc2626", "#d97706", "#2563eb", "#059669", "#7c3aed", "#db2777"]
-        plotted = 0
-        for i, kpi in enumerate(kpis_list[:max_kpis]):
-            months = kpi.get("monthly", [])
-            if len(months) < 2:
-                continue
-            periods = [m["period"] for m in months]
-            values = [m["value"] for m in months]
-            color = colors_cycle[i % len(colors_cycle)]
-            ax.plot(periods, values, marker="o", markersize=4, linewidth=2, color=color, label=kpi["name"])
-            if kpi.get("target"):
-                ax.axhline(y=kpi["target"], color=color, linestyle="--", alpha=0.4, linewidth=1)
-            plotted += 1
-        if plotted == 0:
-            plt.close(fig)
-            return None
-        ax.set_title(title_text, fontsize=16, fontweight="bold", pad=16)
-        ax.legend(fontsize=10, loc="upper left", framealpha=0.9, fancybox=True, shadow=True)
-        ax.grid(True, alpha=0.3)
-        # Show only every Nth x-tick to avoid crowding
-        labels = [m["period"] for m in kpis_list[0].get("monthly", [])] if kpis_list else []
-        if len(labels) > 12:
-            step = max(len(labels) // 8, 1)
-            ax.set_xticks(range(0, len(labels), step))
-            ax.set_xticklabels([labels[j] for j in range(0, len(labels), step)], fontsize=8, rotation=30)
-        else:
-            ax.tick_params(axis="x", labelsize=8, rotation=30)
-        ax.tick_params(axis="y", labelsize=9)
-        plt.tight_layout()
-        buf_png = io.BytesIO()
-        fig.savefig(buf_png, format="png", dpi=200, bbox_inches="tight")
-        plt.close(fig)
-        buf_png.seek(0)
-        return buf_png
-
-    def _make_status_donut():
-        """Donut chart of red/yellow/green distribution → PNG bytes."""
-        fig, ax = plt.subplots(figsize=(5, 5))
-        fig.patch.set_facecolor("white")
-        sizes = [len(red_kpis), len(yellow_kpis), len(green_kpis)]
-        colors_d = ["#dc2626", "#d97706", "#059669"]
-        labels = [f"Critical ({len(red_kpis)})", f"Watch ({len(yellow_kpis)})", f"On Target ({len(green_kpis)})"]
-        # Filter out zeros
-        filtered = [(s, c, l) for s, c, l in zip(sizes, colors_d, labels) if s > 0]
-        if not filtered:
-            plt.close(fig)
-            return None
-        f_sizes, f_colors, f_labels = zip(*filtered)
-        wedges, texts, autotexts = ax.pie(f_sizes, colors=f_colors, labels=f_labels,
-                                           autopct="%1.0f%%", startangle=90, pctdistance=0.78,
-                                           textprops={"fontsize": 11})
-        for at in autotexts:
-            at.set_fontsize(12)
-            at.set_fontweight("bold")
-            at.set_color("white")
-        centre_circle = plt.Circle((0, 0), 0.55, fc="white")
-        ax.add_artist(centre_circle)
-        ax.text(0, 0.08, str(total), ha="center", va="center", fontsize=28, fontweight="bold", color="#1e293b")
-        ax.text(0, -0.15, "KPIs", ha="center", va="center", fontsize=11, color="#64748b")
-        plt.tight_layout()
-        buf_png = io.BytesIO()
-        fig.savefig(buf_png, format="png", dpi=200, bbox_inches="tight")
-        plt.close(fig)
-        buf_png.seek(0)
-        return buf_png
-
-    def _make_benchmark_bar(kpis_to_show, bench_data):
-        """Horizontal bar chart: company value vs peer median → PNG bytes."""
-        names = []
-        company_vals = []
-        peer_vals = []
-        bar_colors = []
-        for k in kpis_to_show:
-            if k["key"] in bench_data and k["avg"] is not None:
-                b = bench_data[k["key"]]
-                names.append(k["name"][:25])
-                company_vals.append(k["avg"])
-                peer_vals.append(b["p50"])
-                bar_colors.append("#dc2626" if k["fy_status"] == "red" else "#d97706" if k["fy_status"] == "yellow" else "#059669")
-        if not names:
-            return None
-        fig, ax = plt.subplots(figsize=(11, max(len(names) * 0.65, 4)))
-        fig.patch.set_facecolor("white")
-        ax.set_facecolor("white")
-        y_pos = range(len(names))
-        ax.barh(y_pos, company_vals, height=0.35, color=bar_colors, label="Company", alpha=0.9)
-        ax.barh([y + 0.35 for y in y_pos], peer_vals, height=0.35, color="#94a3b8", label=f"Peer Median ({stage_label})", alpha=0.6)
-        ax.set_yticks([y + 0.175 for y in y_pos])
-        ax.set_yticklabels(names, fontsize=10)
-        ax.invert_yaxis()
-        ax.legend(fontsize=10, loc="lower right")
-        ax.set_title(f"Company vs {stage_label} Peer Median", fontsize=13, fontweight="bold", pad=10)
-        ax.grid(True, axis="x", alpha=0.3)
-        ax.tick_params(axis="x", labelsize=9)
-        plt.tight_layout()
-        buf_png = io.BytesIO()
-        fig.savefig(buf_png, format="png", dpi=200, bbox_inches="tight")
-        plt.close(fig)
-        buf_png.seek(0)
-        return buf_png
-
-    # ── Helper: add a text box with multi-paragraph rich text ──────────────
-    def _add_narrative(slide, left, top, width, height, paragraphs_list):
-        """paragraphs_list: [(text, font_size, bold, color_rgb), ...]"""
-        txBox = slide.shapes.add_textbox(Inches(left), Inches(top), Inches(width), Inches(height))
-        tf = txBox.text_frame
-        tf.word_wrap = True
-        for i, (text, fs, bold, color) in enumerate(paragraphs_list):
-            p = tf.paragraphs[0] if i == 0 else tf.add_paragraph()
-            p.text = text
-            p.font.size = Pt(fs)
-            p.font.name = "Calibri"
-            p.font.bold = bold
-            if color:
-                p.font.color.rgb = color
-            p.space_after = Pt(6)
-
-    # ── Build narrative sentences ─────────────────────────────────────────
-    def _kpi_sentence(k):
-        val = k["avg"]
-        tgt = k["target"]
-        if val is None or tgt is None or tgt == 0:
-            return f"{k['name']}: no data available."
-        gap = round((val - tgt) / abs(tgt) * 100, 1)
-        direction_word = "below" if gap < 0 else "above"
-        unit = k.get("unit", "")
-        val_fmt = f"{val:,.2f}" if isinstance(val, float) else str(val)
-        tgt_fmt = f"{tgt:,.2f}" if isinstance(tgt, float) else str(tgt)
-        sentence = f"{k['name']} is at {val_fmt} vs target {tgt_fmt} ({abs(gap):.0f}% {direction_word} target)."
-        # Add benchmark context
-        b = bench.get(k["key"])
-        if b:
-            if val < b["p25"]:
-                sentence += f" Below {stage_label} P25 ({b['p25']}) — bottom quartile."
-            elif val < b["p50"]:
-                sentence += f" Below {stage_label} median ({b['p50']})."
-            elif val >= b["p75"]:
-                sentence += f" Above {stage_label} P75 ({b['p75']}) — top quartile."
-        # Add causal context
-        rules = ALL_CAUSATION_RULES.get(k["key"], {})
-        if rules.get("root_causes"):
-            sentence += f" Likely driver: {rules['root_causes'][0].lower()}."
-        if rules.get("corrective_actions"):
-            sentence += f" Recommended action: {rules['corrective_actions'][0]}."
-        return sentence
-
-    # ── PPTX Generation ───────────────────────────────────────────────────
-    prs = Presentation()
-    prs.slide_width = Inches(13.333)
-    prs.slide_height = Inches(7.5)
-    blank_layout = prs.slide_layouts[6]
-
-    # ── Slide 1: Title ────────────────────────────────────────────────────
-    slide1 = prs.slides.add_slide(blank_layout)
-    bg1 = slide1.background
-    fill1 = bg1.fill
-    fill1.solid()
-    fill1.fore_color.rgb = _DECK_DARK_BLUE
-
-    txBox = slide1.shapes.add_textbox(Inches(1), Inches(1.5), Inches(11), Inches(1.5))
-    tf = txBox.text_frame
-    tf.word_wrap = True
-    p = tf.paragraphs[0]
-    p.text = "Board Intelligence Brief"
-    p.font.size = Pt(44)
-    p.font.name = "Calibri"
-    p.font.bold = True
-    p.font.color.rgb = _DECK_WHITE
-    p.alignment = PP_ALIGN.CENTER
-
-    # Date + status summary subtitle
-    _add_narrative(slide1, 1, 3.3, 11, 2, [
-        (f"{datetime.now().strftime('%B %d, %Y')}  ·  {stage_label} SaaS", 20, False, _DECK_WHITE),
-        ("", 8, False, None),
-        (f"{len(red_kpis)} critical  ·  {len(yellow_kpis)} watch  ·  {len(green_kpis)} on target  ·  {total} KPIs tracked", 22, True, _DECK_WHITE),
-    ])
-    # Center subtitle
-    for shape in slide1.shapes:
-        if hasattr(shape, "text_frame"):
-            for p in shape.text_frame.paragraphs:
-                p.alignment = PP_ALIGN.CENTER
-
-    # ── Slide 2: Executive Summary (narrative + donut) ────────────────────
-    slide2 = prs.slides.add_slide(blank_layout)
-    _add_narrative(slide2, 0.5, 0.3, 8, 0.7, [
-        ("Executive Summary", 28, True, _hex_to_rgb("1e293b")),
-    ])
-
-    # Build the summary narrative
-    summary_paras = []
-    if red_kpis:
-        worst = red_kpis[0]
-        worst_gap = round(abs((worst["avg"] - worst["target"]) / abs(worst["target"]) * 100), 0) if worst["avg"] and worst["target"] and worst["target"] != 0 else 0
-        summary_paras.append(
-            (f"The business has {len(red_kpis)} KPIs in critical status and {len(yellow_kpis)} requiring attention. "
-             f"The most severe miss is {worst['name']} at {worst.get('avg', '?')} vs target {worst.get('target', '?')} "
-             f"({worst_gap:.0f}% off target).", 13, False, _hex_to_rgb("334155"))
-        )
-    else:
-        summary_paras.append(
-            (f"All {total} KPIs are in green or watch status. No critical issues detected.", 13, False, _hex_to_rgb("334155"))
-        )
-
-    if red_kpis:
-        # Causal chain for worst
-        rules = ALL_CAUSATION_RULES.get(red_kpis[0]["key"], {})
-        downstream = rules.get("downstream_impact", [])
-        downstream_red = [k for k in fp_data if k["key"] in downstream and k["fy_status"] == "red"]
-        if downstream_red:
-            names_str = ", ".join(d["name"] for d in downstream_red[:3])
-            summary_paras.append(
-                (f"This is cascading: {red_kpis[0]['name']} directly impacts {names_str}, which are also in critical status. "
-                 f"Addressing the root cause would improve multiple metrics simultaneously.", 13, False, _hex_to_rgb("334155"))
-            )
-        if rules.get("corrective_actions"):
-            summary_paras.append(
-                (f"Priority action: {rules['corrective_actions'][0]}", 13, True, _DECK_RED_FG)
-            )
-
-    # Bright spots
-    if green_kpis:
-        top_green = green_kpis[:3]
-        bright_names = ", ".join(k["name"] for k in top_green)
-        summary_paras.append(
-            (f"Bright spots: {bright_names} are all on or above target.", 13, False, _DECK_GREEN_FG)
-        )
-
-    _add_narrative(slide2, 0.5, 1.2, 7.5, 5, summary_paras)
-
-    # Donut chart on the right
-    donut_png = _make_status_donut()
-    if donut_png:
-        slide2.shapes.add_picture(donut_png, Inches(8.5), Inches(1), Inches(4.5), Inches(4.5))
-
-    # ── Slide 3: Critical KPIs — Narrative Cards + Trend Chart ────────────
-    slide3 = prs.slides.add_slide(blank_layout)
-    _add_narrative(slide3, 0.5, 0.3, 8, 0.7, [
-        (f"Critical Items: {len(red_kpis)} KPIs Below Threshold", 28, True, _hex_to_rgb("1e293b")),
-    ])
-
-    if red_kpis:
-        # Left side: narrative cards for top 4 red KPIs
-        card_paras = []
-        for k in red_kpis[:4]:
-            card_paras.append((_kpi_sentence(k), 11, False, _hex_to_rgb("334155")))
-            card_paras.append(("", 6, False, None))  # spacer
-
-        _add_narrative(slide3, 0.5, 1.2, 6, 5.5, card_paras)
-
-        # Right side: trend chart of red KPIs
-        trend_png = _make_trend_chart(red_kpis, "Critical KPI Trends", max_kpis=4)
-        if trend_png:
-            slide3.shapes.add_picture(trend_png, Inches(6.5), Inches(1.2), Inches(6.5), Inches(5.2))
-    else:
-        _add_narrative(slide3, 0.5, 2, 8, 1, [
-            ("No critical KPIs — all metrics are within acceptable ranges.", 16, False, _DECK_GREEN_FG)
-        ])
-
-    # ── Slide 4: Benchmark Position — Bar Chart + Narrative ───────────────
-    slide4 = prs.slides.add_slide(blank_layout)
-    _add_narrative(slide4, 0.5, 0.3, 10, 0.7, [
-        (f"Peer Benchmark Position — {stage_label} SaaS", 28, True, _hex_to_rgb("1e293b")),
-    ])
-
-    # Show red + yellow KPIs in benchmark comparison
-    kpis_for_bench = (red_kpis + yellow_kpis)[:10]
-    bench_png = _make_benchmark_bar(kpis_for_bench, bench)
-    if bench_png:
-        slide4.shapes.add_picture(bench_png, Inches(0.3), Inches(1.3), Inches(8.5), Inches(5.8))
-
-    # Narrative on right: which KPIs are below P25
-    below_p25 = []
-    for k in fp_data:
-        if k["key"] in bench and k["avg"] is not None:
-            if k["avg"] < bench[k["key"]]["p25"]:
-                below_p25.append(k)
-    bench_narrative = []
-    if below_p25:
-        bench_narrative.append(
-            (f"{len(below_p25)} KPIs are below the {stage_label} bottom quartile (P25):", 13, True, _DECK_RED_FG)
-        )
-        for bp in below_p25[:5]:
-            b = bench[bp["key"]]
-            bench_narrative.append(
-                (f"• {bp['name']}: {bp['avg']:.2f} vs P25 {b['p25']} (peer median: {b['p50']})", 11, False, _hex_to_rgb("334155"))
-            )
-    above_p75 = [k for k in fp_data if k["key"] in bench and k["avg"] is not None and k["avg"] >= bench[k["key"]]["p75"]]
-    if above_p75:
-        bench_narrative.append(("", 6, False, None))
-        bench_narrative.append(
-            (f"{len(above_p75)} KPIs are top quartile (above P75):", 13, True, _DECK_GREEN_FG)
-        )
-        for ap in above_p75[:5]:
-            b = bench[ap["key"]]
-            bench_narrative.append(
-                (f"• {ap['name']}: {ap['avg']:.2f} vs P75 {b['p75']}", 11, False, _hex_to_rgb("334155"))
-            )
-    if bench_narrative:
-        _add_narrative(slide4, 8.8, 1.3, 4.2, 5.5, bench_narrative)
-
-    # ── Slide 5: Watch Zone — Narrative + Trend Chart ─────────────────────
-    if yellow_kpis:
-        slide5 = prs.slides.add_slide(blank_layout)
-        _add_narrative(slide5, 0.5, 0.3, 8, 0.7, [
-            (f"Watch Zone: {len(yellow_kpis)} KPIs Approaching Threshold", 28, True, _hex_to_rgb("1e293b")),
-        ])
-
-        watch_paras = []
-        for k in yellow_kpis[:4]:
-            watch_paras.append((_kpi_sentence(k), 11, False, _hex_to_rgb("334155")))
-            watch_paras.append(("", 6, False, None))
-
-        watch_paras.append(("These KPIs are at risk of moving to critical status without intervention.", 12, True, _DECK_YELLOW_FG))
-        _add_narrative(slide5, 0.5, 1.2, 6, 5.5, watch_paras)
-
-        trend_yellow_png = _make_trend_chart(yellow_kpis, "Watch Zone Trends", max_kpis=4)
-        if trend_yellow_png:
-            slide5.shapes.add_picture(trend_yellow_png, Inches(6.5), Inches(1.2), Inches(6.5), Inches(5.2))
-
-    # ── Slide 6: Recommended Actions (top 5 priorities) ───────────────────
-    slide6 = prs.slides.add_slide(blank_layout)
-    _add_narrative(slide6, 0.5, 0.3, 10, 0.7, [
-        ("Recommended Actions — Priority Order", 28, True, _hex_to_rgb("1e293b")),
-    ])
-
-    action_paras = []
-    for i, k in enumerate(red_kpis[:5], 1):
-        rules = ALL_CAUSATION_RULES.get(k["key"], {})
-        actions = rules.get("corrective_actions", [])
-        causes = rules.get("root_causes", [])
-        val = k["avg"]
-        tgt = k["target"]
-        gap_str = ""
-        if val is not None and tgt is not None and tgt != 0:
-            gap = round(abs((val - tgt) / abs(tgt) * 100), 0)
-            gap_str = f" ({gap:.0f}% off target)"
-
-        action_paras.append((f"{i}. {k['name']}{gap_str}", 14, True, _DECK_RED_FG))
-        if causes:
-            action_paras.append((f"   Root cause: {causes[0]}", 11, False, _hex_to_rgb("475569")))
-        if actions:
-            for a in actions[:2]:
-                action_paras.append((f"   → {a}", 11, False, _hex_to_rgb("334155")))
-
-        # Add downstream impact context
-        downstream = rules.get("downstream_impact", [])
-        downstream_at_risk = [dk for dk in fp_data if dk["key"] in downstream and dk["fy_status"] in ("red", "yellow")]
-        if downstream_at_risk:
-            names_str = ", ".join(d["name"] for d in downstream_at_risk[:3])
-            action_paras.append((f"   Impact: fixing this also improves {names_str}", 11, True, _hex_to_rgb("2563eb")))
-        action_paras.append(("", 6, False, None))
-
-    if not action_paras:
-        action_paras.append(("No critical actions required — all KPIs are within tolerance.", 14, False, _DECK_GREEN_FG))
-
-    _add_narrative(slide6, 0.5, 1.2, 12, 5.5, action_paras)
-
-    # ── Slide 7: Key Decisions & Outcomes ────────────────────────────────
-    try:
-        dec_conn = get_db()
-        dec_rows = dec_conn.execute(
-            "SELECT title, status, outcome, decided_by, decided_at, "
-            "kpi_context, kpi_snapshot, resolved_kpi_snapshot "
-            "FROM decisions WHERE workspace_id=? ORDER BY decided_at DESC LIMIT 10",
-            [workspace_id],
-        ).fetchall()
-        dec_conn.close()
-    except Exception:
-        dec_rows = []
-
-    if dec_rows:
-        slide_dec = prs.slides.add_slide(blank_layout)
-        _add_narrative(slide_dec, 0.5, 0.3, 10, 0.7, [
-            ("Key Decisions & Outcomes", 28, True, _hex_to_rgb("1e293b")),
-        ])
-
-        dec_paras = []
-        active_decs  = [dict(r) for r in dec_rows if (r["status"] or "active") == "active"]
-        resolved_decs = [dict(r) for r in dec_rows if (r["status"] or "") in ("resolved", "reversed")]
-
-        if active_decs:
-            dec_paras.append(("Active Decisions", 14, True, _hex_to_rgb("2563eb")))
-            for d in active_decs[:4]:
-                snap = json.loads(d.get("kpi_snapshot") or "{}")
-                kpi_str = ""
-                if snap:
-                    kpi_parts = [f"{k}: {v:.1f}" for k, v in list(snap.items())[:3] if isinstance(v, (int, float))]
-                    if kpi_parts:
-                        kpi_str = f" (baseline: {', '.join(kpi_parts)})"
-                decided_at = (d.get("decided_at") or "")[:10]
-                dec_paras.append(
-                    (f"  {d['title']}{kpi_str}", 11, False, _hex_to_rgb("334155"))
-                )
-                dec_paras.append(
-                    (f"     {d.get('decided_by', '')} | {decided_at}", 10, False, _hex_to_rgb("94a3b8"))
-                )
-            dec_paras.append(("", 6, False, None))
-
-        if resolved_decs:
-            dec_paras.append(("Recently Resolved", 14, True, _DECK_GREEN_FG))
-            for d in resolved_decs[:4]:
-                baseline = json.loads(d.get("kpi_snapshot") or "{}")
-                current  = json.loads(d.get("resolved_kpi_snapshot") or "{}")
-                delta_parts = []
-                for k in baseline:
-                    if k in current and isinstance(baseline[k], (int, float)) and isinstance(current[k], (int, float)):
-                        diff = current[k] - baseline[k]
-                        delta_parts.append(f"{k}: {'+' if diff >= 0 else ''}{diff:.1f}")
-                delta_str = f" ({', '.join(delta_parts[:3])})" if delta_parts else ""
-                outcome_str = ""
-                if d.get("outcome"):
-                    outcome_str = f" — {d['outcome'][:80]}"
-                dec_paras.append(
-                    (f"  {d['title']}{delta_str}{outcome_str}", 11, False, _hex_to_rgb("334155"))
-                )
-
-        if dec_paras:
-            _add_narrative(slide_dec, 0.5, 1.2, 12, 5.5, dec_paras)
-
-    # ── Slide 8: Closing — Bright Spots + Next Review ─────────────────────
-    slide7 = prs.slides.add_slide(blank_layout)
-    bg7 = slide7.background
-    fill7 = bg7.fill
-    fill7.solid()
-    fill7.fore_color.rgb = _DECK_DARK_BLUE
-
-    closing_paras = [
-        ("Key Takeaways", 32, True, _DECK_WHITE),
-        ("", 8, False, None),
-    ]
-    if red_kpis:
-        closing_paras.append(
-            (f"• {len(red_kpis)} metrics need immediate attention — {red_kpis[0]['name']} is the top priority", 16, False, _DECK_WHITE)
-        )
-    if yellow_kpis:
-        closing_paras.append(
-            (f"• {len(yellow_kpis)} metrics in watch zone — monitor weekly to prevent escalation", 16, False, _DECK_WHITE)
-        )
-    if green_kpis:
-        closing_paras.append(
-            (f"• {len(green_kpis)} metrics on target — maintain current trajectory", 16, False, _DECK_WHITE)
-        )
-    if below_p25:
-        closing_paras.append(
-            (f"• {len(below_p25)} metrics below {stage_label} industry bottom quartile", 16, False, _DECK_WHITE)
-        )
-    closing_paras.append(("", 12, False, None))
-    closing_paras.append(
-        (f"Generated {datetime.now().strftime('%B %d, %Y')}  ·  Axiom Intelligence  ·  {stage_label} Benchmarks", 14, False, _hex_to_rgb("94a3b8"))
+    """DEPRECATED: Use POST /api/board-pack/generate instead.
+    Redirects to the new board pack endpoint with default settings.
+    """
+    from fastapi.responses import JSONResponse
+    return JSONResponse(
+        status_code=410,
+        content={
+            "detail": "This endpoint has been replaced. Use POST /api/board-pack/generate with date range and mode selection.",
+            "new_endpoint": "/api/board-pack/generate",
+            "method": "POST",
+        },
     )
-    _add_narrative(slide7, 1, 1.5, 11, 5, closing_paras)
-    for shape in slide7.shapes:
-        if hasattr(shape, "text_frame"):
-            for p in shape.text_frame.paragraphs:
-                p.alignment = PP_ALIGN.CENTER
 
-    # Serialize
-    buf = io.BytesIO()
-    prs.save(buf)
-    buf.seek(0)
 
-    return StreamingResponse(
-        buf,
-        media_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",
-        headers={"Content-Disposition": "attachment; filename=board-deck.pptx"},
-    )
+def _export_board_deck_REMOVED():
+    """Old board-deck export removed. See routers/board_pack.py."""
+    raise NotImplementedError("Moved to routers/board_pack.py")
+
+
+# NOTE: ~500 lines of old board-deck PPTX generation code was removed here.
+# The functionality has been rewritten with intelligent chart selection,
+# knowledge-graph-based causal narratives, and flexible date ranges in:
+#   - core/chart_engine.py (chart rendering)
+#   - core/board_narrative.py (narrative generation)
+#   - routers/board_pack.py (slide assembly)
+
+
+_valid_stages_UNUSED = {"seed", "series_a", "series_b", "series_c"}
+# Old board-deck code (bench = {} through StreamingResponse) removed.
+# See git history for the original ~500-line PPTX generator.
 
 
 # ─── KPI Targets ─────────────────────────────────────────────────────────────
@@ -1001,6 +513,8 @@ def weekly_briefing(request: Request, stage: Optional[str] = "series_b"):
     Opens directly in the browser — no download needed.
     """
     workspace_id = _get_workspace(request)
+    if not workspace_id:
+        raise HTTPException(status_code=401, detail="Unauthorised")
     conn = get_db()
     try:
         rows = conn.execute(
@@ -1169,6 +683,26 @@ def weekly_briefing(request: Request, stage: Optional[str] = "series_b"):
     </tbody></table>
   </div>
   ''' if decision_rows else [])}
+
+  {f'''<div class="section">
+    <h2 style="color:#003087;margin:0 0 10px 0;font-size:16px">SEC-Grade Analytics</h2>
+    <table style="width:100%;border-collapse:collapse;font-size:13px">
+      <tr style="border-bottom:2px solid #e2e8f0">
+        <th style="text-align:left;padding:8px 0;color:#64748b;font-weight:600">Metric</th>
+        <th style="text-align:right;padding:8px 0;color:#64748b;font-weight:600">Value</th>
+        <th style="text-align:right;padding:8px 0;color:#64748b;font-weight:600">Classification</th>
+      </tr>
+      {"".join(f'<tr style="border-bottom:1px solid #f1f5f9"><td style="padding:8px 0;color:#1e293b">{label}</td><td style="padding:8px 0;text-align:right;font-weight:600;color:#0f172a">{val}</td><td style="padding:8px 0;text-align:right;font-size:11px;color:#64748b">{cls}</td></tr>' for label, val, cls in [
+        ("Rule of 40", f"{(float(latest.get('revenue_growth', 0) or 0) + float(latest.get('ebitda_margin', 0) or 0)):.1f}", "Non-GAAP"),
+        ("Gross Margin", f"{float(latest.get('gross_margin', 0) or 0):.1f}%", "GAAP"),
+        ("NRR", f"{float(latest.get('nrr', 0) or 0):.1f}%", "Non-GAAP"),
+        ("Burn Multiple", f"{float(latest.get('burn_multiple', 0) or 0):.2f}x", "Non-GAAP"),
+        ("Customer Concentration", f"{float(latest.get('customer_concentration', 0) or 0):.1f}%", "Operating"),
+        ("Churn Rate", f"{float(latest.get('churn_rate', 0) or 0):.1f}%", "Operating"),
+      ])}
+    </table>
+    <p style="font-size:10px;color:#94a3b8;margin-top:8px">GAAP/Non-GAAP classification per SEC Regulation G. Non-GAAP metrics are operational measures not derived from GAAP financial statements.</p>
+  </div>''' if latest else ''}
 
   <div class="footer">
     This briefing is generated automatically by Axiom Intelligence from your live KPI data.
@@ -2685,6 +2219,616 @@ async def apply_financial_model_changes(request: Request):
            workspace_id=workspace_id)
 
     return result
+
+
+# ─── SEC-Grade Analytics Endpoints ────────────────────────────────────────────
+
+
+@router.get("/api/analytics/arr-bridge", tags=["Analytics"])
+async def arr_bridge(request: Request, from_year: int = 0, from_month: int = 1,
+                     to_year: int = 0, to_month: int = 12):
+    """ARR Bridge / Net New ARR Waterfall — the most important SaaS board chart.
+
+    Decomposes ARR movement into: New, Expansion, Contraction, Churned.
+    """
+    workspace_id = _get_workspace(request)
+    conn = get_db()
+    try:
+        # Get all revenue records with customer_id and period
+        rows = conn.execute(
+            "SELECT customer_id, period, amount, subscription_type "
+            "FROM canonical_revenue WHERE workspace_id=? AND amount IS NOT NULL "
+            "ORDER BY period",
+            [workspace_id],
+        ).fetchall()
+    except Exception:
+        rows = []
+    conn.close()
+
+    if not rows:
+        return {"periods": [], "summary": {}}
+
+    # Build per-customer per-period revenue
+    customer_period: dict = {}  # {period: {customer_id: total_amount}}
+    for r in rows:
+        cid = r[0] or "unknown"
+        period = str(r[1] or "")[:7]  # YYYY-MM
+        amt = float(r[2] or 0)
+        if period not in customer_period:
+            customer_period[period] = {}
+        customer_period[period][cid] = customer_period[period].get(cid, 0) + amt
+
+    sorted_periods = sorted(customer_period.keys())
+    bridge_periods = []
+
+    for i, period in enumerate(sorted_periods):
+        current = customer_period[period]
+        prev = customer_period[sorted_periods[i - 1]] if i > 0 else {}
+        prev_total = sum(prev.values())
+        curr_total = sum(current.values())
+
+        new_arr = sum(v for k, v in current.items() if k not in prev) * 12
+        churned_arr = sum(v for k, v in prev.items() if k not in current) * 12
+        expansion_arr = sum(
+            max(0, current.get(k, 0) - prev.get(k, 0))
+            for k in current if k in prev and current[k] > prev[k]
+        ) * 12
+        contraction_arr = sum(
+            max(0, prev.get(k, 0) - current.get(k, 0))
+            for k in current if k in prev and current[k] < prev[k]
+        ) * 12
+
+        beginning_arr = prev_total * 12
+        ending_arr = curr_total * 12
+
+        bridge_periods.append({
+            "period": period,
+            "beginning_arr": round(beginning_arr, 2),
+            "new_arr": round(new_arr, 2),
+            "expansion_arr": round(expansion_arr, 2),
+            "contraction_arr": round(contraction_arr, 2),
+            "churned_arr": round(churned_arr, 2),
+            "ending_arr": round(ending_arr, 2),
+            "net_new_arr": round(new_arr + expansion_arr - contraction_arr - churned_arr, 2),
+        })
+
+    total_new = sum(p["new_arr"] for p in bridge_periods)
+    total_exp = sum(p["expansion_arr"] for p in bridge_periods)
+    total_con = sum(p["contraction_arr"] for p in bridge_periods)
+    total_churn = sum(p["churned_arr"] for p in bridge_periods)
+
+    return {
+        "periods": bridge_periods,
+        "summary": {
+            "total_new_arr": round(total_new, 2),
+            "total_expansion_arr": round(total_exp, 2),
+            "total_contraction_arr": round(total_con, 2),
+            "total_churned_arr": round(total_churn, 2),
+            "net_change": round(total_new + total_exp - total_con - total_churn, 2),
+        },
+    }
+
+
+@router.get("/api/analytics/cohort-retention", tags=["Analytics"])
+async def cohort_retention(request: Request, metric: str = "revenue"):
+    """Cohort Revenue/Count Retention Matrix — vintage analysis."""
+    workspace_id = _get_workspace(request)
+    conn = get_db()
+    try:
+        rev_rows = conn.execute(
+            "SELECT customer_id, period, amount FROM canonical_revenue "
+            "WHERE workspace_id=? AND customer_id IS NOT NULL AND amount IS NOT NULL",
+            [workspace_id],
+        ).fetchall()
+    except Exception:
+        rev_rows = []
+    conn.close()
+
+    if not rev_rows:
+        return {"cohorts": []}
+
+    # Determine each customer's first period (acquisition month)
+    first_period: dict = {}  # customer_id -> first period
+    customer_period_data: dict = {}  # (customer_id, period) -> amount
+    for r in rev_rows:
+        cid, period, amt = r[0], str(r[1] or "")[:7], float(r[2] or 0)
+        if cid not in first_period or period < first_period[cid]:
+            first_period[cid] = period
+        key = (cid, period)
+        customer_period_data[key] = customer_period_data.get(key, 0) + amt
+
+    # Group customers by acquisition cohort
+    cohort_customers: dict = {}  # acquisition_period -> set of customer_ids
+    for cid, fp in first_period.items():
+        cohort_customers.setdefault(fp, set()).add(cid)
+
+    all_periods = sorted(set(p for _, p in customer_period_data.keys()))
+
+    cohorts = []
+    for acq_period in sorted(cohort_customers.keys()):
+        customers = cohort_customers[acq_period]
+        # Month 0 data
+        m0_revenue = sum(customer_period_data.get((c, acq_period), 0) for c in customers)
+        m0_count = sum(1 for c in customers if customer_period_data.get((c, acq_period), 0) > 0)
+
+        months = []
+        acq_idx = all_periods.index(acq_period) if acq_period in all_periods else -1
+        if acq_idx < 0:
+            continue
+
+        for offset in range(len(all_periods) - acq_idx):
+            p = all_periods[acq_idx + offset]
+            if metric == "count":
+                active = sum(1 for c in customers if customer_period_data.get((c, p), 0) > 0)
+                retention = (active / m0_count * 100) if m0_count else 0
+                months.append({"month_offset": offset, "period": p, "value": active, "retention_pct": round(retention, 1)})
+            else:
+                revenue = sum(customer_period_data.get((c, p), 0) for c in customers)
+                retention = (revenue / m0_revenue * 100) if m0_revenue else 0
+                months.append({"month_offset": offset, "period": p, "value": round(revenue, 2), "retention_pct": round(retention, 1)})
+
+        cohorts.append({
+            "acquisition_period": acq_period,
+            "size": len(customers),
+            "month_0_value": round(m0_revenue if metric == "revenue" else m0_count, 2),
+            "months": months[:24],  # Cap at 24 months for display
+        })
+
+    return {"cohorts": cohorts, "metric": metric}
+
+
+@router.get("/api/analytics/customer-concentration", tags=["Analytics"])
+async def customer_concentration(request: Request, top_n: int = 10, period: str = "latest"):
+    """Top-N Customer Concentration — SEC disclosure trigger at 10%."""
+    workspace_id = _get_workspace(request)
+    conn = get_db()
+    try:
+        # Get the latest period
+        if period == "latest":
+            p_row = conn.execute(
+                "SELECT MAX(period) as p FROM canonical_revenue WHERE workspace_id=?",
+                [workspace_id],
+            ).fetchone()
+            period = p_row[0] if p_row else None
+        if not period:
+            conn.close()
+            return {"period": None, "customers": [], "total_revenue": 0}
+
+        rows = conn.execute(
+            "SELECT customer_id, SUM(amount) as total "
+            "FROM canonical_revenue WHERE workspace_id=? AND period=? "
+            "AND customer_id IS NOT NULL GROUP BY customer_id ORDER BY total DESC",
+            [workspace_id, period],
+        ).fetchall()
+
+        # Get customer names
+        name_rows = conn.execute(
+            "SELECT source_id, name FROM canonical_customers WHERE workspace_id=?",
+            [workspace_id],
+        ).fetchall()
+    except Exception:
+        rows, name_rows = [], []
+    conn.close()
+
+    names = {r[0]: r[1] for r in name_rows}
+    total_revenue = sum(float(r[1] or 0) for r in rows)
+    customers = []
+    running_pct = 0
+
+    for i, r in enumerate(rows[:top_n]):
+        cid = r[0]
+        rev = float(r[1] or 0)
+        pct = (rev / total_revenue * 100) if total_revenue else 0
+        running_pct += pct
+        customers.append({
+            "rank": i + 1,
+            "customer_id": cid,
+            "customer_name": names.get(cid, cid),
+            "revenue": round(rev, 2),
+            "pct_of_total": round(pct, 1),
+        })
+
+    # HHI Index (sum of squared market shares)
+    all_shares = [(float(r[1] or 0) / total_revenue * 100) if total_revenue else 0 for r in rows]
+    hhi = sum(s ** 2 for s in all_shares)
+
+    top_counts = [1, 5, 10, 20]
+    top_pcts = {}
+    for n in top_counts:
+        top_pcts[f"top_{n}_pct"] = round(sum(
+            (float(r[1] or 0) / total_revenue * 100) if total_revenue else 0
+            for r in rows[:n]
+        ), 1)
+
+    return {
+        "period": period,
+        "total_revenue": round(total_revenue, 2),
+        "customers": customers,
+        "hhi_index": round(hhi, 1),
+        **top_pcts,
+        "sec_threshold_breached": any(c["pct_of_total"] > 10 for c in customers),
+    }
+
+
+@router.get("/api/analytics/margin-decomposition", tags=["Analytics"])
+async def margin_decomposition(request: Request):
+    """Gross Margin Decomposition — breaks down COGS components over time."""
+    workspace_id = _get_workspace(request)
+    conn = get_db()
+
+    _COGS_KEYWORDS = {"cogs", "cost of goods", "cost of revenue", "hosting",
+                      "infrastructure", "direct", "support", "implementation"}
+
+    try:
+        exp_rows = conn.execute(
+            "SELECT period, category, SUM(amount) as total "
+            "FROM canonical_expenses WHERE workspace_id=? AND amount IS NOT NULL "
+            "GROUP BY period, category ORDER BY period",
+            [workspace_id],
+        ).fetchall()
+        rev_rows = conn.execute(
+            "SELECT period, SUM(amount) as total "
+            "FROM canonical_revenue WHERE workspace_id=? AND amount IS NOT NULL "
+            "GROUP BY period ORDER BY period",
+            [workspace_id],
+        ).fetchall()
+    except Exception:
+        exp_rows, rev_rows = [], []
+    conn.close()
+
+    revenue_by_period = {str(r[0])[:7]: float(r[1] or 0) for r in rev_rows}
+
+    # Group expenses by period and category
+    period_costs: dict = {}
+    for r in exp_rows:
+        period = str(r[0])[:7]
+        cat = str(r[1] or "other").lower()
+        amt = float(r[2] or 0)
+        is_cogs = any(kw in cat for kw in _COGS_KEYWORDS)
+        if not is_cogs:
+            continue
+        if period not in period_costs:
+            period_costs[period] = {}
+        # Normalize category names
+        display_cat = cat
+        if any(kw in cat for kw in ("hosting", "infrastructure")):
+            display_cat = "Hosting & Infrastructure"
+        elif "support" in cat:
+            display_cat = "Support & CS"
+        elif any(kw in cat for kw in ("cogs", "cost of goods", "cost of revenue", "direct")):
+            display_cat = "Direct COGS"
+        else:
+            display_cat = cat.title()
+        period_costs[period][display_cat] = period_costs[period].get(display_cat, 0) + amt
+
+    periods = []
+    for period in sorted(set(list(revenue_by_period.keys()) + list(period_costs.keys()))):
+        rev = revenue_by_period.get(period, 0)
+        costs = period_costs.get(period, {})
+        total_cogs = sum(costs.values())
+        gm_pct = ((rev - total_cogs) / rev * 100) if rev else 0
+        periods.append({
+            "period": period,
+            "revenue": round(rev, 2),
+            "total_cogs": round(total_cogs, 2),
+            "cogs_components": [{"category": k, "amount": round(v, 2), "pct_of_revenue": round(v / rev * 100, 1) if rev else 0} for k, v in sorted(costs.items())],
+            "gross_margin_pct": round(gm_pct, 1),
+        })
+
+    return {"periods": periods}
+
+
+@router.get("/api/analytics/cash-waterfall", tags=["Analytics"])
+async def cash_waterfall(request: Request):
+    """Cash Burn Waterfall — Opening Cash → Inflows → Outflows → Closing Cash."""
+    workspace_id = _get_workspace(request)
+    conn = get_db()
+
+    _SM_KEYWORDS = {"sales", "marketing", "s&m", "advertising", "demand", "paid", "seo"}
+    _RD_KEYWORDS = {"r&d", "research", "engineering", "development", "product"}
+    _GA_KEYWORDS = {"g&a", "general", "admin", "office", "legal", "hr", "finance"}
+
+    try:
+        bs_rows = conn.execute(
+            "SELECT period, cash_balance FROM canonical_balance_sheet "
+            "WHERE workspace_id=? ORDER BY period",
+            [workspace_id],
+        ).fetchall()
+        rev_rows = conn.execute(
+            "SELECT period, SUM(amount) as total FROM canonical_revenue "
+            "WHERE workspace_id=? AND amount IS NOT NULL GROUP BY period",
+            [workspace_id],
+        ).fetchall()
+        exp_rows = conn.execute(
+            "SELECT period, category, SUM(amount) as total FROM canonical_expenses "
+            "WHERE workspace_id=? AND amount IS NOT NULL GROUP BY period, category",
+            [workspace_id],
+        ).fetchall()
+    except Exception:
+        bs_rows, rev_rows, exp_rows = [], [], []
+    conn.close()
+
+    cash_by_period = {str(r[0])[:7]: float(r[1] or 0) for r in bs_rows}
+    rev_by_period = {str(r[0])[:7]: float(r[1] or 0) for r in rev_rows}
+
+    # Categorize expenses
+    exp_by_period: dict = {}
+    for r in exp_rows:
+        period = str(r[0])[:7]
+        cat = str(r[1] or "other").lower()
+        amt = float(r[2] or 0)
+        if period not in exp_by_period:
+            exp_by_period[period] = {}
+        if any(kw in cat for kw in _SM_KEYWORDS):
+            bucket = "S&M"
+        elif any(kw in cat for kw in _RD_KEYWORDS):
+            bucket = "R&D"
+        elif any(kw in cat for kw in _GA_KEYWORDS):
+            bucket = "G&A"
+        elif any(kw in cat for kw in ("cogs", "hosting", "infrastructure", "direct")):
+            bucket = "COGS"
+        else:
+            bucket = "Other"
+        exp_by_period[period][bucket] = exp_by_period[period].get(bucket, 0) + amt
+
+    all_periods = sorted(set(list(cash_by_period.keys()) + list(rev_by_period.keys())))
+    periods = []
+    for i, period in enumerate(all_periods):
+        opening = cash_by_period.get(all_periods[i - 1], 0) if i > 0 else cash_by_period.get(period, 0)
+        revenue = rev_by_period.get(period, 0)
+        expenses = exp_by_period.get(period, {})
+        total_exp = sum(expenses.values())
+        closing = cash_by_period.get(period, opening + revenue - total_exp)
+        net_burn = revenue - total_exp
+        runway = abs(closing / net_burn) if net_burn < 0 else 999
+
+        periods.append({
+            "period": period,
+            "opening_cash": round(opening, 2),
+            "revenue_inflow": round(revenue, 2),
+            "expense_categories": [{"category": k, "amount": round(v, 2)} for k, v in sorted(expenses.items())],
+            "total_expenses": round(total_exp, 2),
+            "net_burn": round(net_burn, 2),
+            "closing_cash": round(closing, 2),
+            "runway_months": round(min(runway, 999), 1),
+        })
+
+    return {"periods": periods}
+
+
+@router.get("/api/analytics/unit-economics", tags=["Analytics"])
+async def unit_economics(request: Request):
+    """Unit Economics Waterfall — per-customer profitability decomposition."""
+    workspace_id = _get_workspace(request)
+    conn = get_db()
+    try:
+        # Get latest month's data
+        row = conn.execute(
+            "SELECT data_json FROM monthly_data WHERE workspace_id=? "
+            "ORDER BY year DESC, month DESC LIMIT 1",
+            [workspace_id],
+        ).fetchone()
+        data = json.loads(row[0]) if row else {}
+
+        # Count active customers
+        cust_row = conn.execute(
+            "SELECT COUNT(DISTINCT source_id) as cnt FROM canonical_customers "
+            "WHERE workspace_id=?",
+            [workspace_id],
+        ).fetchone()
+        customer_count = cust_row[0] if cust_row else 0
+
+        # Total revenue and expenses
+        rev_row = conn.execute(
+            "SELECT SUM(amount) FROM canonical_revenue WHERE workspace_id=?",
+            [workspace_id],
+        ).fetchone()
+        exp_row = conn.execute(
+            "SELECT SUM(amount) FROM canonical_expenses WHERE workspace_id=?",
+            [workspace_id],
+        ).fetchone()
+        period_count_row = conn.execute(
+            "SELECT COUNT(DISTINCT period) FROM canonical_revenue WHERE workspace_id=?",
+            [workspace_id],
+        ).fetchone()
+    except Exception:
+        data, customer_count, rev_row, exp_row, period_count_row = {}, 0, None, None, None
+    conn.close()
+
+    total_rev = float(rev_row[0] or 0) if rev_row else 0
+    total_exp = float(exp_row[0] or 0) if exp_row else 0
+    months = int(period_count_row[0] or 1) if period_count_row else 1
+
+    arpu = (total_rev / months / max(customer_count, 1))
+    gross_margin_pct = float(data.get("gross_margin", 70)) / 100
+    churn_rate_pct = max(float(data.get("churn_rate", 5)), 0.1) / 100
+    cogs_per_customer = arpu * (1 - gross_margin_pct)
+    gross_profit_per_customer = arpu * gross_margin_pct
+    cac = float(data.get("cac", 0)) or (total_exp / months / max(customer_count, 1) * 0.4)  # Estimate S&M portion
+    contribution = gross_profit_per_customer - (cac / max(12 / churn_rate_pct, 1))
+    ltv = (arpu * gross_margin_pct) / churn_rate_pct if churn_rate_pct > 0 else 0
+    ltv_cac = ltv / cac if cac > 0 else 0
+
+    return {
+        "customer_count": customer_count,
+        "months_of_data": months,
+        "metrics": [
+            {"label": "ARPU (Monthly)", "value": round(arpu, 2), "unit": "usd"},
+            {"label": "COGS per Customer", "value": round(-cogs_per_customer, 2), "unit": "usd"},
+            {"label": "Gross Profit per Customer", "value": round(gross_profit_per_customer, 2), "unit": "usd"},
+            {"label": "CAC (Allocated)", "value": round(-cac, 2), "unit": "usd"},
+            {"label": "Net Contribution", "value": round(contribution, 2), "unit": "usd"},
+        ],
+        "ltv": round(ltv, 2),
+        "cac": round(cac, 2),
+        "ltv_cac_ratio": round(ltv_cac, 2),
+    }
+
+
+@router.get("/api/analytics/accountability-rollup", tags=["Analytics"])
+async def accountability_rollup(request: Request):
+    """KPI Owner Accountability Dashboard — grouped by owner with status rollup."""
+    workspace_id = _get_workspace(request)
+    conn = get_db()
+    try:
+        acct_rows = conn.execute(
+            "SELECT kpi_key, owner, due_date, status, last_updated "
+            "FROM kpi_accountability WHERE workspace_id=?",
+            [workspace_id],
+        ).fetchall()
+        # Get latest KPI values and targets
+        kpi_row = conn.execute(
+            "SELECT data_json FROM monthly_data WHERE workspace_id=? "
+            "ORDER BY year DESC, month DESC LIMIT 1",
+            [workspace_id],
+        ).fetchone()
+        kpi_data = json.loads(kpi_row[0]) if kpi_row else {}
+
+        target_rows = conn.execute(
+            "SELECT kpi_key, target_value, direction FROM kpi_targets WHERE workspace_id=?",
+            [workspace_id],
+        ).fetchall()
+    except Exception:
+        acct_rows, kpi_data, target_rows = [], {}, []
+    conn.close()
+
+    targets = {r[0]: {"target": float(r[1] or 0), "direction": r[2]} for r in target_rows}
+    kpi_names = {d["key"]: d["name"] for d in KPI_DEFS + EXTENDED_ONTOLOGY_METRICS}
+
+    owners: dict = {}
+    for r in acct_rows:
+        kpi_key, owner, due_date, status, updated = r[0], r[1] or "Unassigned", r[2], r[3], r[4]
+        if owner not in owners:
+            owners[owner] = {"name": owner, "kpis": [], "green": 0, "yellow": 0, "red": 0, "grey": 0}
+        val = kpi_data.get(kpi_key)
+        t = targets.get(kpi_key)
+        if val is not None and t:
+            ratio = val / t["target"] if t["target"] else 0
+            if t["direction"] == "higher":
+                kpi_status = "green" if ratio >= 0.98 else "yellow" if ratio >= 0.90 else "red"
+            else:
+                kpi_status = "green" if ratio <= 1.02 else "yellow" if ratio <= 1.10 else "red"
+        else:
+            kpi_status = "grey"
+        owners[owner][kpi_status] += 1
+        owners[owner]["kpis"].append({
+            "key": kpi_key, "name": kpi_names.get(kpi_key, kpi_key),
+            "status": kpi_status, "value": val, "target": t["target"] if t else None,
+            "due_date": due_date, "resolution_status": status,
+        })
+
+    result = sorted(owners.values(), key=lambda o: o["red"], reverse=True)
+    for o in result:
+        total = len(o["kpis"])
+        resolved = sum(1 for k in o["kpis"] if k["resolution_status"] == "resolved")
+        o["total_kpis"] = total
+        o["resolution_rate_pct"] = round(resolved / total * 100, 1) if total else 0
+
+    return {"owners": result}
+
+
+@router.get("/api/analytics/restatement-history", tags=["Analytics"])
+async def restatement_history(request: Request):
+    """Restatement / Correction History — tracks significant data changes."""
+    workspace_id = _get_workspace(request)
+    conn = get_db()
+    try:
+        rows = conn.execute(
+            "SELECT table_name, source, source_id, field_name, old_value, new_value, changed_at "
+            "FROM canonical_change_log WHERE workspace_id=? "
+            "AND field_name IN ('amount', 'period', 'status') "
+            "ORDER BY changed_at DESC LIMIT 200",
+            [workspace_id],
+        ).fetchall()
+    except Exception:
+        rows = []
+    conn.close()
+
+    restatements = []
+    for r in rows:
+        old_val = r[4]
+        new_val = r[5]
+        try:
+            old_f = float(old_val or 0)
+            new_f = float(new_val or 0)
+            pct_change = ((new_f - old_f) / abs(old_f) * 100) if old_f != 0 else 0
+        except (ValueError, TypeError):
+            pct_change = 0
+
+        # Only include significant changes (>1% for amounts)
+        if r[3] == "amount" and abs(pct_change) < 1.0:
+            continue
+
+        restatements.append({
+            "table": r[0],
+            "source": r[1],
+            "source_id": r[2],
+            "field": r[3],
+            "old_value": old_val,
+            "new_value": new_val,
+            "pct_change": round(pct_change, 1),
+            "changed_at": r[6],
+        })
+
+    return {"restatements": restatements[:50]}
+
+
+@router.get("/api/analytics/seasonality", tags=["Analytics"])
+async def seasonality_analysis(request: Request, kpi_key: str = "revenue_growth"):
+    """Seasonality Analysis — compute seasonal indices for a KPI."""
+    workspace_id = _get_workspace(request)
+    conn = get_db()
+    try:
+        rows = conn.execute(
+            "SELECT year, month, data_json FROM monthly_data WHERE workspace_id=? "
+            "ORDER BY year, month",
+            [workspace_id],
+        ).fetchall()
+    except Exception:
+        rows = []
+    conn.close()
+
+    month_values: dict = {m: [] for m in range(1, 13)}
+    all_values = []
+    raw_points = []
+
+    for r in rows:
+        data = json.loads(r[2]) if isinstance(r[2], str) else (r[2] or {})
+        val = data.get(kpi_key)
+        if val is not None:
+            try:
+                v = float(val)
+                month_values[r[1]].append(v)
+                all_values.append(v)
+                raw_points.append({"year": r[0], "month": r[1], "period": f"{r[0]}-{r[1]:02d}", "raw": round(v, 2)})
+            except (ValueError, TypeError):
+                pass
+
+    if not all_values or len(all_values) < 6:
+        return {"kpi_key": kpi_key, "seasonal_indices": {}, "adjusted_values": [], "message": "Insufficient data (need 6+ months)"}
+
+    annual_avg = sum(all_values) / len(all_values)
+    if annual_avg == 0:
+        return {"kpi_key": kpi_key, "seasonal_indices": {}, "adjusted_values": []}
+
+    # Compute seasonal indices
+    indices = {}
+    for m in range(1, 13):
+        vals = month_values[m]
+        if vals:
+            month_avg = sum(vals) / len(vals)
+            indices[m] = round(month_avg / annual_avg, 3)
+        else:
+            indices[m] = 1.0
+
+    # Compute adjusted values
+    adjusted = []
+    for pt in raw_points:
+        idx = indices.get(pt["month"], 1.0)
+        adj_val = pt["raw"] / idx if idx != 0 else pt["raw"]
+        adjusted.append({**pt, "adjusted": round(adj_val, 2), "seasonal_index": idx})
+
+    return {"kpi_key": kpi_key, "seasonal_indices": indices, "adjusted_values": adjusted}
 
 
 # ─── KPI Annotations CRUD ───────────────────────────────────────────────────

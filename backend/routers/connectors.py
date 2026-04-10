@@ -146,10 +146,109 @@ def _elt_ensure_tables(conn) -> None:
             canonical_field TEXT NOT NULL,
             confidence      REAL DEFAULT 0,
             confirmed_by_user INTEGER DEFAULT 0,
+            is_new          INTEGER DEFAULT 0,
             created_at      TEXT DEFAULT CURRENT_TIMESTAMP,
             UNIQUE(workspace_id, source_name, source_field, canonical_table)
         )
     """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS sync_field_snapshots (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            workspace_id    TEXT NOT NULL,
+            source_name     TEXT NOT NULL,
+            entity_type     TEXT NOT NULL,
+            source_field    TEXT NOT NULL,
+            first_seen_at   TEXT DEFAULT CURRENT_TIMESTAMP,
+            last_seen_at    TEXT DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(workspace_id, source_name, entity_type, source_field)
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS workspace_notifications (
+            id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+            workspace_id       TEXT NOT NULL,
+            notification_type  TEXT NOT NULL,
+            title              TEXT NOT NULL,
+            message            TEXT NOT NULL,
+            severity           TEXT DEFAULT 'info',
+            data_json          TEXT DEFAULT '{}',
+            is_read            INTEGER DEFAULT 0,
+            is_dismissed       INTEGER DEFAULT 0,
+            created_at         TEXT DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    # Schema migrations for new columns on existing tables
+    try:
+        conn.execute("ALTER TABLE field_mappings ADD COLUMN is_new INTEGER DEFAULT 0")
+    except Exception:
+        pass  # Column already exists
+    try:
+        conn.execute("ALTER TABLE connector_configs ADD COLUMN has_unmapped_critical INTEGER DEFAULT 0")
+    except Exception:
+        pass  # Column already exists
+    conn.commit()
+
+
+# ─── Unmapped-field notification helper ───────────────────────────────────────
+
+_CORE_KPIS = {"revenue_growth", "arr_growth", "gross_margin", "churn_rate", "nrr", "burn_multiple"}
+
+
+def _create_unmapped_notification(
+    conn,
+    workspace_id: str,
+    source_name: str,
+    entity_groups: list[dict],
+) -> None:
+    """Create a workspace_notification when new unmapped fields are detected.
+
+    *entity_groups* is a list of ``{"entity_type": str, "fields": [str, ...]}``.
+    Uses ``get_kpi_impact_for_field`` to determine severity.
+    """
+    try:
+        from elt.gap_detector import get_kpi_impact_for_field
+    except Exception:
+        return  # ELT modules unavailable — skip silently
+
+    # Defensive: validate entity_groups format
+    if not isinstance(entity_groups, list):
+        return
+    for grp in entity_groups:
+        if not isinstance(grp, dict) or "entity_type" not in grp or "fields" not in grp:
+            return
+
+    blocked_kpis: set[str] = set()
+    total_fields = 0
+    for grp in entity_groups:
+        for field in grp["fields"]:
+            total_fields += 1
+            kpis = get_kpi_impact_for_field(grp["entity_type"], field)
+            blocked_kpis.update(kpis)
+
+    severity = "critical" if blocked_kpis & _CORE_KPIS else "warning"
+    source_label = _SOURCE_LABELS.get(source_name, source_name)
+    data = {
+        "source": source_name,
+        "entity_groups": entity_groups,
+        "blocked_kpis": sorted(blocked_kpis),
+    }
+    conn.execute(
+        "INSERT INTO workspace_notifications "
+        "(workspace_id, notification_type, title, message, severity, data_json) "
+        "VALUES (?,?,?,?,?,?)",
+        [workspace_id, "unmapped_fields",
+         f"New unmapped fields from {source_label}",
+         f"{total_fields} new field(s) need mapping. "
+         f"{len(blocked_kpis)} KPI(s) may be affected.",
+         severity, json.dumps(data)],
+    )
+    # Update connector badge flag
+    if severity == "critical":
+        conn.execute(
+            "UPDATE connector_configs SET has_unmapped_critical=1 "
+            "WHERE workspace_id=? AND source_name=?",
+            [workspace_id, source_name],
+        )
     conn.commit()
 
 
@@ -172,6 +271,7 @@ def _run_elt_sync(workspace_id: str, source_name: str, credentials: dict) -> dic
         bundles = connector.extract(workspace_id, credentials)
         transformer = Transformer(conn, workspace_id, source_name)
         total_upserted = 0
+        all_new_unmapped: list[dict] = []
         for bundle in bundles:
             entity_type = bundle["entity_type"]
             records     = bundle["records"]
@@ -185,9 +285,26 @@ def _run_elt_sync(workspace_id: str, source_name: str, credentials: dict) -> dic
             canonical = transformer.transform(entity_type, records)
             n = transformer.upsert_canonical(entity_type, canonical)
             total_upserted += n
-            # Save/update field mappings
+            # Detect new fields + save/update field mappings
             if records:
-                transformer.save_mappings(entity_type, records[0])
+                new_fields = transformer.detect_new_fields(entity_type, records[0])
+                mappings = transformer.save_mappings(entity_type, records[0], new_fields=new_fields)
+                # Check if any new fields are unmapped
+                if new_fields:
+                    unmapped_new = [
+                        f for f in new_fields
+                        if any(m["source_field"] == f and m["canonical_field"] == "unmapped"
+                               for m in mappings)
+                    ]
+                    if unmapped_new:
+                        all_new_unmapped.append({
+                            "entity_type": entity_type,
+                            "fields": unmapped_new,
+                        })
+
+        # Create notifications for unmapped fields (if any)
+        if all_new_unmapped:
+            _create_unmapped_notification(conn, workspace_id, source_name, all_new_unmapped)
 
         # Update connector status
         conn.execute(
@@ -198,7 +315,19 @@ def _run_elt_sync(workspace_id: str, source_name: str, credentials: dict) -> dic
         conn.commit()
         _audit("data_synced", source_name, workspace_id, f"ELT sync: {total_upserted} records")
 
+        # ── Mapping readiness check (soft gate) ─────────────────────────
+        mapping_readiness = {"ready": True}
+        try:
+            from elt.kpi_aggregator import check_mapping_readiness
+            mapping_readiness = check_mapping_readiness(conn, workspace_id)
+            if not mapping_readiness["ready"]:
+                print(f"[ELT] Mapping readiness: NOT READY — {len(mapping_readiness['blocked_kpis'])} "
+                      f"KPIs may be affected for workspace={workspace_id!r}")
+        except Exception:
+            pass  # Non-fatal
+
         # ── KPI Aggregation: bridge canonical → monthly_data ──────────────
+        # Always aggregate (soft gate) — attach warnings to result
         agg_result = {"skipped": "aggregator not available"}
         try:
             agg_conn = get_db()
@@ -210,7 +339,15 @@ def _run_elt_sync(workspace_id: str, source_name: str, credentials: dict) -> dic
             print(f"[ELT] KPI aggregation failed (non-fatal): {agg_exc}")
             agg_result = {"error": str(agg_exc)}
 
-        return {"synced": True, "records_upserted": total_upserted, "kpi_aggregation": agg_result}
+        result = {
+            "synced": True,
+            "records_upserted": total_upserted,
+            "kpi_aggregation": agg_result,
+            "mapping_readiness": mapping_readiness,
+        }
+        if all_new_unmapped:
+            result["new_unmapped_fields"] = all_new_unmapped
+        return result
     except ConnectorError as ce:
         conn.execute(
             "UPDATE connector_configs SET sync_status='error', last_error=? "
@@ -394,19 +531,22 @@ async def list_connectors(request: Request):
     conn = get_db()
     _elt_ensure_tables(conn)
     rows = conn.execute(
-        "SELECT source_name, sync_status, last_sync_at, last_error "
+        "SELECT source_name, sync_status, last_sync_at, last_error, has_unmapped_critical "
         "FROM connector_configs WHERE workspace_id=?",
         [workspace_id],
     ).fetchall()
     conn.close()
-    connected = {r[0]: {
-        "source_name":  r[0],
-        "label":        _SOURCE_LABELS.get(r[0], r[0].title()),
-        "status":       r[1],
-        "last_sync_at": r[2],
-        "last_error":   r[3],
-        "connected":    True,
-    } for r in rows}
+    connected = {}
+    for r in rows:
+        connected[r[0]] = {
+            "source_name":           r[0],
+            "label":                 _SOURCE_LABELS.get(r[0], r[0].title()),
+            "status":                r[1],
+            "last_sync_at":          r[2],
+            "last_error":            r[3],
+            "has_unmapped_critical": bool(r[4]) if len(r) > 4 else False,
+            "connected":             True,
+        }
 
     all_sources = []
     for key, label in _SOURCE_LABELS.items():
@@ -717,8 +857,32 @@ async def list_field_mappings(request: Request, source: str = "", needs_review: 
     rows = conn.execute(sql, args).fetchall()
     conn.close()
     cols = ["id","workspace_id","source_name","source_field","canonical_table",
-            "canonical_field","confidence","confirmed_by_user","created_at"]
-    return {"mappings": [dict(zip(cols, r)) for r in rows]}
+            "canonical_field","confidence","confirmed_by_user","is_new","created_at"]
+    result = []
+    for r in rows:
+        d = {}
+        for i, c in enumerate(cols):
+            d[c] = r[i] if i < len(r) else (0 if c == "is_new" else None)
+        result.append(d)
+    return {"mappings": result}
+
+
+@router.put("/api/connectors/mappings/mark-reviewed", tags=["ELT"])
+async def mark_fields_reviewed(request: Request, source: str = ""):
+    """Clear is_new flags after user has reviewed the staging view."""
+    workspace_id = _get_workspace(request)
+    if not workspace_id:
+        raise HTTPException(status_code=401, detail="Unauthorised")
+    conn = get_db()
+    sql  = "UPDATE field_mappings SET is_new=0 WHERE workspace_id=? AND is_new=1"
+    args: list = [workspace_id]
+    if source:
+        sql  += " AND source_name=?"
+        args.append(source)
+    conn.execute(sql, args)
+    conn.commit()
+    conn.close()
+    return {"cleared": True}
 
 
 @router.put("/api/connectors/mappings/{mapping_id}", tags=["ELT"])
@@ -732,13 +896,247 @@ async def confirm_field_mapping(mapping_id: int, request: Request):
         raise HTTPException(status_code=400, detail="canonical_field required")
     conn = get_db()
     conn.execute(
-        "UPDATE field_mappings SET canonical_field=?, confirmed_by_user=1, confidence=1.0 "
+        "UPDATE field_mappings SET canonical_field=?, confirmed_by_user=1, confidence=1.0, is_new=0 "
         "WHERE id=? AND workspace_id=?",
         [canonical_field, mapping_id, workspace_id],
     )
     conn.commit()
     conn.close()
     return {"updated": True}
+
+
+# ─── Staging view (grouped by source → entity → fields with KPI impact) ─────
+
+@router.get("/api/connectors/mappings/staging", tags=["ELT"])
+async def get_staging_view(request: Request, source: str = ""):
+    """Return field mappings grouped by source and entity_type with KPI impact."""
+    workspace_id = _get_workspace(request)
+    if not workspace_id:
+        raise HTTPException(status_code=401, detail="Unauthorised")
+
+    try:
+        from elt.gap_detector import get_kpi_impact_for_field
+    except Exception:
+        get_kpi_impact_for_field = lambda t, f: []  # noqa: E731
+
+    conn = get_db()
+    sql = "SELECT * FROM field_mappings WHERE workspace_id=?"
+    args: list = [workspace_id]
+    if source:
+        sql += " AND source_name=?"
+        args.append(source)
+    rows = conn.execute(sql, args).fetchall()
+    conn.close()
+
+    cols = ["id", "workspace_id", "source_name", "source_field", "canonical_table",
+            "canonical_field", "confidence", "confirmed_by_user", "is_new", "created_at"]
+
+    sources: dict = {}
+    total_unmapped = 0
+    total_new = 0
+    critical_unmapped = 0
+
+    for r in rows:
+        d = {}
+        for i, c in enumerate(cols):
+            d[c] = r[i] if i < len(r) else (0 if c == "is_new" else None)
+        src = d["source_name"]
+        entity = d["canonical_table"]
+        if src not in sources:
+            sources[src] = {}
+        if entity not in sources[src]:
+            sources[src][entity] = {"fields": [], "new_field_count": 0, "unmapped_count": 0}
+
+        kpi_impact = get_kpi_impact_for_field(entity, d["canonical_field"]) if d["canonical_field"] != "unmapped" else []
+        is_new = bool(d.get("is_new", 0))
+        is_unmapped = d["canonical_field"] == "unmapped"
+
+        sources[src][entity]["fields"].append({
+            "id":               d["id"],
+            "source_field":     d["source_field"],
+            "canonical_field":  d["canonical_field"],
+            "canonical_table":  entity,
+            "confidence":       d["confidence"],
+            "confirmed_by_user": bool(d["confirmed_by_user"]),
+            "is_new":           is_new,
+            "kpi_impact":       kpi_impact,
+        })
+        if is_new:
+            total_new += 1
+            sources[src][entity]["new_field_count"] += 1
+        if is_unmapped:
+            total_unmapped += 1
+            sources[src][entity]["unmapped_count"] += 1
+            # Check if unmapped field blocks a core KPI
+            possible_impact = get_kpi_impact_for_field(entity, d["source_field"])
+            if any(k in _CORE_KPIS for k in possible_impact):
+                critical_unmapped += 1
+
+    # Mapping quality score
+    all_mappings = [f for s in sources.values() for e in s.values() for f in e["fields"]]
+    total = len(all_mappings)
+    low_conf = sum(1 for f in all_mappings if not f["confirmed_by_user"] and f["confidence"] < 0.80)
+    unmapped = sum(1 for f in all_mappings if f["canonical_field"] == "unmapped")
+    quality_score = max(0, round(100 - (low_conf * 5) - (unmapped * 10))) if total else 100
+    quality_label = "high" if quality_score >= 80 else "moderate" if quality_score >= 50 else "low"
+    issues = []
+    if low_conf:
+        issues.append(f"{low_conf} field(s) below 80% confidence")
+    if unmapped:
+        issues.append(f"{unmapped} field(s) unmapped")
+
+    return {
+        "sources": sources,
+        "total_unmapped": total_unmapped,
+        "total_new": total_new,
+        "critical_unmapped": critical_unmapped,
+        "mapping_quality": {"score": quality_score, "label": quality_label, "issues": issues},
+    }
+
+
+# ─── Bulk confirm + mark reviewed ───────────────────────────────────────────
+
+@router.post("/api/connectors/mappings/bulk-confirm", tags=["ELT"])
+async def bulk_confirm_mappings(request: Request):
+    """Confirm multiple mappings at once, then recompute KPIs + run integrity."""
+    workspace_id = _get_workspace(request)
+    if not workspace_id:
+        raise HTTPException(status_code=401, detail="Unauthorised")
+    body = await request.json()
+    items = body.get("mappings", [])
+    if not items:
+        raise HTTPException(status_code=400, detail="mappings list required")
+
+    conn = get_db()
+    updated = 0
+    for item in items:
+        mid = item.get("id")
+        cf  = item.get("canonical_field", "")
+        if not mid or not cf:
+            continue
+        conn.execute(
+            "UPDATE field_mappings SET canonical_field=?, confirmed_by_user=1, "
+            "confidence=1.0, is_new=0 WHERE id=? AND workspace_id=?",
+            [cf, mid, workspace_id],
+        )
+        updated += 1
+    conn.commit()
+
+    # Clear the connector badge if no more critical unmapped
+    _refresh_unmapped_badge(conn, workspace_id)
+
+    # Dismiss related unmapped-field notifications
+    conn.execute(
+        "UPDATE workspace_notifications SET is_dismissed=1 "
+        "WHERE workspace_id=? AND notification_type='unmapped_fields' AND is_dismissed=0",
+        [workspace_id],
+    )
+    conn.commit()
+
+    # Recompute KPIs
+    agg_result = {}
+    try:
+        agg_result = aggregate_canonical_to_monthly(conn, workspace_id)
+    except Exception as e:
+        agg_result = {"error": str(e)}
+
+    # Run integrity check with auto-correction
+    integrity_result = {}
+    try:
+        from core.integrity import DataIntegrityValidator
+        validator = DataIntegrityValidator(conn, workspace_id)
+        integrity_result = validator.run_all(trigger="mapping_change", auto_correct=True)
+    except Exception as e:
+        integrity_result = {"error": str(e)}
+
+    conn.close()
+    return {
+        "updated": updated,
+        "kpi_aggregation": agg_result,
+        "integrity": integrity_result,
+    }
+
+
+def _refresh_unmapped_badge(conn, workspace_id: str) -> None:
+    """Recheck whether any connector still has critical unmapped fields."""
+    try:
+        from elt.gap_detector import get_kpi_impact_for_field
+    except Exception:
+        return
+    # Reset all badges for this workspace
+    conn.execute(
+        "UPDATE connector_configs SET has_unmapped_critical=0 WHERE workspace_id=?",
+        [workspace_id],
+    )
+    # Find connectors that still have unmapped fields blocking core KPIs
+    rows = conn.execute(
+        "SELECT source_name, canonical_table, source_field FROM field_mappings "
+        "WHERE workspace_id=? AND canonical_field='unmapped'",
+        [workspace_id],
+    ).fetchall()
+    flagged_sources: set[str] = set()
+    for r in rows:
+        src, entity, src_field = r[0], r[1], r[2]
+        kpis = get_kpi_impact_for_field(entity, src_field)
+        if any(k in _CORE_KPIS for k in kpis):
+            flagged_sources.add(src)
+    for src in flagged_sources:
+        conn.execute(
+            "UPDATE connector_configs SET has_unmapped_critical=1 "
+            "WHERE workspace_id=? AND source_name=?",
+            [workspace_id, src],
+        )
+    conn.commit()
+
+
+# ─── Notifications ───────────────────────────────────────────────────────────
+
+@router.get("/api/notifications", tags=["Notifications"])
+async def list_notifications(request: Request, unread_only: bool = True):
+    """List workspace notifications, optionally only unread/undismissed ones."""
+    workspace_id = _get_workspace(request)
+    if not workspace_id:
+        raise HTTPException(status_code=401, detail="Unauthorised")
+    conn = get_db()
+    _elt_ensure_tables(conn)
+    sql  = "SELECT * FROM workspace_notifications WHERE workspace_id=?"
+    args: list = [workspace_id]
+    if unread_only:
+        sql += " AND is_dismissed=0"
+    sql += " ORDER BY created_at DESC LIMIT 50"
+    rows = conn.execute(sql, args).fetchall()
+    conn.close()
+    cols = ["id", "workspace_id", "notification_type", "title", "message",
+            "severity", "data_json", "is_read", "is_dismissed", "created_at"]
+    result = []
+    for r in rows:
+        d = {}
+        for i, c in enumerate(cols):
+            d[c] = r[i] if i < len(r) else None
+        # Parse data_json
+        try:
+            d["data"] = json.loads(d.get("data_json") or "{}")
+        except Exception:
+            d["data"] = {}
+        result.append(d)
+    return {"notifications": result}
+
+
+@router.put("/api/notifications/{notification_id}/dismiss", tags=["Notifications"])
+async def dismiss_notification(notification_id: int, request: Request):
+    """Dismiss (soft-delete) a notification."""
+    workspace_id = _get_workspace(request)
+    if not workspace_id:
+        raise HTTPException(status_code=401, detail="Unauthorised")
+    conn = get_db()
+    conn.execute(
+        "UPDATE workspace_notifications SET is_dismissed=1 "
+        "WHERE id=? AND workspace_id=?",
+        [notification_id, workspace_id],
+    )
+    conn.commit()
+    conn.close()
+    return {"dismissed": True}
 
 
 # ─── Data gaps ────────────────────────────────────────────────────────────────

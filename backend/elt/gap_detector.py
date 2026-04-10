@@ -4,94 +4,47 @@ and which KPIs they block.
 
 Reads canonical_* tables for a workspace and returns a structured
 list of gaps with remediation suggestions.
+
+Uses ``KPI_FIELD_DEPS`` from ``core.integration_spec`` as the
+**single source of truth** for KPI→field dependencies (60+ KPIs).
 """
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from core.integration_spec import KPI_FIELD_DEPS
 
-# ── KPI dependency map ────────────────────────────────────────────────────────
-# Each KPI lists the (canonical_table, canonical_field) pairs it requires.
 
-KPI_DEPENDENCIES: dict[str, list[tuple[str, str]]] = {
-    "MRR": [
-        ("canonical_revenue", "amount"),
-        ("canonical_revenue", "period"),
-        ("canonical_revenue", "subscription_type"),
-        ("canonical_customers", "customer_id"),
-    ],
-    "ARR": [
-        ("canonical_revenue", "amount"),
-        ("canonical_revenue", "period"),
-        ("canonical_revenue", "subscription_type"),
-    ],
-    "Gross Revenue": [
-        ("canonical_revenue", "amount"),
-        ("canonical_revenue", "period"),
-    ],
-    "Net Revenue Retention": [
-        ("canonical_revenue", "amount"),
-        ("canonical_revenue", "period"),
-        ("canonical_revenue", "customer_id"),
-        ("canonical_revenue", "subscription_type"),
-    ],
-    "Customer Churn": [
-        ("canonical_customers", "source_id"),
-        ("canonical_customers", "created_at"),
-        ("canonical_revenue", "customer_id"),
-        ("canonical_revenue", "period"),
-    ],
-    "CAC": [
-        ("canonical_expenses", "amount"),
-        ("canonical_expenses", "category"),
-        ("canonical_customers", "created_at"),
-        ("canonical_pipeline", "amount"),
-    ],
-    "LTV": [
-        ("canonical_revenue", "amount"),
-        ("canonical_revenue", "customer_id"),
-        ("canonical_customers", "created_at"),
-    ],
-    "Gross Margin": [
-        ("canonical_revenue", "amount"),
-        ("canonical_expenses", "amount"),
-        ("canonical_expenses", "category"),
-    ],
-    "Burn Rate": [
-        ("canonical_expenses", "amount"),
-        ("canonical_expenses", "period"),
-    ],
-    "Headcount": [
-        ("canonical_employees", "source_id"),
-        ("canonical_employees", "status"),
-    ],
-    "Revenue per Employee": [
-        ("canonical_revenue", "amount"),
-        ("canonical_revenue", "period"),
-        ("canonical_employees", "source_id"),
-    ],
-    "Pipeline Coverage": [
-        ("canonical_pipeline", "amount"),
-        ("canonical_pipeline", "stage"),
-        ("canonical_revenue", "amount"),
-    ],
-    "Win Rate": [
-        ("canonical_pipeline", "stage"),
-        ("canonical_pipeline", "amount"),
-        ("canonical_pipeline", "close_date"),
-    ],
-    "Sales Cycle Length": [
-        ("canonical_pipeline", "created_at"),
-        ("canonical_pipeline", "close_date"),
-        ("canonical_pipeline", "stage"),
-    ],
-    "DSO": [
-        ("canonical_invoices", "issue_date"),
-        ("canonical_invoices", "due_date"),
-        ("canonical_invoices", "amount"),
-        ("canonical_invoices", "status"),
-    ],
-}
+# ── KPI dependency map (derived from integration_spec's KPI_FIELD_DEPS) ──────
+# Convert "canonical_revenue.amount" string format to (table, field) tuples.
+
+def _build_kpi_dependencies() -> dict[str, list[tuple[str, str]]]:
+    """Convert KPI_FIELD_DEPS from integration_spec.py into
+    {kpi: [(canonical_table, canonical_field), ...]} format."""
+    result: dict[str, list[tuple[str, str]]] = {}
+    for kpi, dep_strings in KPI_FIELD_DEPS.items():
+        deps = []
+        for dep in dep_strings:
+            parts = dep.split(".", 1)
+            if len(parts) == 2:
+                deps.append((parts[0], parts[1]))
+        result[kpi] = deps
+    return result
+
+
+KPI_DEPENDENCIES = _build_kpi_dependencies()
+
+
+def get_kpi_impact_for_field(canonical_table: str, canonical_field: str) -> list[str]:
+    """Return list of KPI names that depend on (canonical_table, canonical_field).
+
+    Accepts table name with or without the ``canonical_`` prefix.
+    """
+    full_table = canonical_table if canonical_table.startswith("canonical_") else f"canonical_{canonical_table}"
+    return [
+        kpi for kpi, deps in KPI_DEPENDENCIES.items()
+        if (full_table, canonical_field) in deps
+    ]
 
 # Suggested remediation per (table, field)
 _REMEDIATION: dict[tuple[str, str], str] = {
@@ -233,21 +186,39 @@ class GapDetector:
         return report
 
     def _count_missing(self, table: str, column: str) -> tuple[int, int]:
-        """Return (total_rows, rows_where_column_is_null_or_empty)."""
+        """Return (total_rows, rows_where_column_is_null_or_empty).
+
+        Dual-DB compatible: tries SQLite-style first, falls back to
+        PostgreSQL information_schema for table/column existence checks.
+        """
         try:
-            # Check table exists
-            exists = self._conn.execute(
-                "SELECT name FROM sqlite_master WHERE type='table' AND name=?", [table]
-            ).fetchone()
+            # Check table exists (dual-DB: try SQLite first, then PG)
+            try:
+                exists = self._conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table' AND name=?", [table]
+                ).fetchone()
+            except Exception:
+                # PostgreSQL fallback
+                exists = self._conn.execute(
+                    "SELECT table_name FROM information_schema.tables "
+                    "WHERE table_name=%s AND table_schema='public'", [table]
+                ).fetchone()
             if not exists:
                 return 0, 0
-            # Check column exists
-            cols = [
-                row[1] for row in
-                self._conn.execute(f"PRAGMA table_info({table})").fetchall()
-            ]
+
+            # Check column exists (dual-DB)
+            try:
+                cols = [row[1] for row in
+                        self._conn.execute(f"PRAGMA table_info({table})").fetchall()]
+            except Exception:
+                # PostgreSQL fallback
+                cols = [row[0] for row in self._conn.execute(
+                    "SELECT column_name FROM information_schema.columns "
+                    "WHERE table_name=%s", [table]
+                ).fetchall()]
             if column not in cols:
                 return 0, 0
+
             t_row = self._conn.execute(
                 f"SELECT COUNT(*) as cnt FROM {table} WHERE workspace_id=?",
                 [self._workspace_id],

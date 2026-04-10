@@ -317,16 +317,76 @@ class Transformer:
         self._conn.commit()
         return count
 
+    def detect_new_fields(self, entity_type: str, sample_record: dict) -> list[str]:
+        """Compare incoming fields against sync_field_snapshots.
+
+        Returns list of field names not previously seen for this
+        workspace+source+entity.  On the FIRST sync (no prior snapshot),
+        returns an empty list — we treat the initial pull as baseline only
+        so the user is not flooded with "new field" notifications.
+
+        Side-effect: upserts every incoming field into sync_field_snapshots.
+        """
+        if not sample_record:
+            return []
+        self._ensure_snapshot_table()
+        incoming_fields = list(sample_record.keys())
+
+        # Fetch known fields for this (workspace, source, entity)
+        rows = self._conn.execute(
+            "SELECT source_field FROM sync_field_snapshots "
+            "WHERE workspace_id=? AND source_name=? AND entity_type=?",
+            [self._workspace_id, self._source, entity_type],
+        ).fetchall()
+        known_fields = {r[0] for r in rows}
+        is_first_sync = len(known_fields) == 0
+
+        # Upsert all incoming fields into the snapshot table
+        for field in incoming_fields:
+            self._conn.execute(
+                "INSERT INTO sync_field_snapshots "
+                "(workspace_id, source_name, entity_type, source_field) "
+                "VALUES (?,?,?,?) "
+                "ON CONFLICT(workspace_id, source_name, entity_type, source_field) "
+                "DO UPDATE SET last_seen_at=CURRENT_TIMESTAMP",
+                [self._workspace_id, self._source, entity_type, field],
+            )
+        self._conn.commit()
+
+        # First sync = baseline only — no "new" fields
+        if is_first_sync:
+            return []
+
+        new_fields = [f for f in incoming_fields if f not in known_fields]
+
+        # Detect disappeared fields (material change flagging)
+        disappeared = [f for f in known_fields if f not in incoming_fields]
+        if disappeared:
+            _logger.warning(
+                "[Material Change] %s.%s fields disappeared: %s (source=%s, workspace=%s)",
+                entity_type, self._source, disappeared, self._source, self._workspace_id,
+            )
+
+        return new_fields
+
     def save_mappings(
-        self, entity_type: str, sample_record: dict, confirmed: dict | None = None
+        self,
+        entity_type: str,
+        sample_record: dict,
+        confirmed: dict | None = None,
+        new_fields: list[str] | None = None,
     ) -> list[dict]:
         """
         Persist auto-detected field mappings (if not already confirmed).
         Returns list of mapping dicts for the UI review step.
+
+        *new_fields*: field names first seen in the current sync — these get
+        ``is_new=1`` in the DB so the frontend can highlight them.
         """
         if not sample_record:
             return []
         self._ensure_mappings_table()
+        new_set = set(new_fields or [])
         mappings = []
         for src_field in sample_record.keys():
             can_field, confidence = _guess_canonical_field(src_field, entity_type)
@@ -343,22 +403,25 @@ class Transformer:
                     "canonical_field":  existing[1],
                     "confidence":       1.0,
                     "confirmed_by_user": True,
+                    "is_new":           False,
                 })
                 continue
             # Check user-passed confirmed dict
             override = (confirmed or {}).get(src_field)
             if override:
                 can_field, confidence = override, 1.0
+            is_new_flag = 1 if src_field in new_set else 0
             self._conn.execute(
                 "INSERT INTO field_mappings "
                 "(workspace_id,source_name,source_field,canonical_table,canonical_field,"
-                "confidence,confirmed_by_user) VALUES (?,?,?,?,?,?,?) "
+                "confidence,confirmed_by_user,is_new) VALUES (?,?,?,?,?,?,?,?) "
                 "ON CONFLICT(workspace_id,source_name,source_field,canonical_table) "
                 "DO UPDATE SET canonical_field=excluded.canonical_field, "
                 "confidence=excluded.confidence, "
-                "confirmed_by_user=excluded.confirmed_by_user",
+                "confirmed_by_user=excluded.confirmed_by_user, "
+                "is_new=excluded.is_new",
                 [self._workspace_id, self._source, src_field, entity_type,
-                 can_field, confidence, 1 if override else 0],
+                 can_field, confidence, 1 if override else 0, is_new_flag],
             )
             mappings.append({
                 "source_field":     src_field,
@@ -366,6 +429,7 @@ class Transformer:
                 "canonical_field":  can_field,
                 "confidence":       confidence,
                 "confirmed_by_user": bool(override),
+                "is_new":           bool(is_new_flag),
             })
         self._conn.commit()
         return mappings
@@ -589,8 +653,44 @@ class Transformer:
                 canonical_field TEXT NOT NULL,
                 confidence      REAL DEFAULT 0,
                 confirmed_by_user INTEGER DEFAULT 0,
+                is_new          INTEGER DEFAULT 0,
                 created_at      TEXT DEFAULT CURRENT_TIMESTAMP,
                 UNIQUE(workspace_id, source_name, source_field, canonical_table)
             )
         """)
+        # Schema migration: add is_new column to existing tables
+        try:
+            self._conn.execute("ALTER TABLE field_mappings ADD COLUMN is_new INTEGER DEFAULT 0")
+        except Exception:
+            pass  # Column already exists
+        self._conn.commit()
+
+    def _ensure_snapshot_table(self) -> None:
+        from core.config import _USE_PG
+        if _USE_PG:
+            self._conn.execute("""
+                CREATE TABLE IF NOT EXISTS sync_field_snapshots (
+                    id              SERIAL PRIMARY KEY,
+                    workspace_id    TEXT NOT NULL,
+                    source_name     TEXT NOT NULL,
+                    entity_type     TEXT NOT NULL,
+                    source_field    TEXT NOT NULL,
+                    first_seen_at   TEXT DEFAULT NOW(),
+                    last_seen_at    TEXT DEFAULT NOW(),
+                    UNIQUE(workspace_id, source_name, entity_type, source_field)
+                )
+            """)
+        else:
+            self._conn.execute("""
+                CREATE TABLE IF NOT EXISTS sync_field_snapshots (
+                    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                    workspace_id    TEXT NOT NULL,
+                    source_name     TEXT NOT NULL,
+                    entity_type     TEXT NOT NULL,
+                    source_field    TEXT NOT NULL,
+                    first_seen_at   TEXT DEFAULT CURRENT_TIMESTAMP,
+                    last_seen_at    TEXT DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(workspace_id, source_name, entity_type, source_field)
+                )
+            """)
         self._conn.commit()
