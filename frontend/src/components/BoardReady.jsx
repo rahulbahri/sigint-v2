@@ -982,6 +982,14 @@ function stageLabel(s) {
 // ── MAIN COMPONENT ────────────────────────────────────────────────────────────
 export default function BoardReady({ fingerprint, bridgeData, onNavigate, periodLabel: globalPeriodLabel, benchmarks, companyStage }) {
   const [sideCard, setSideCard] = useState(null)
+  const [exportOpen, setExportOpen] = useState(false)
+  const [exportLoading, setExportLoading] = useState(false)
+  const now = new Date()
+  const [exportConfig, setExportConfig] = useState({
+    fromYear: now.getFullYear(), fromMonth: 1,
+    toYear: now.getFullYear(), toMonth: now.getMonth() + 1,
+    modes: ['variance_narrative', 'talk_track'],
+  })
   const dateStr = new Date().toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' })
 
   if (!fingerprint?.length) {
@@ -1188,17 +1196,144 @@ export default function BoardReady({ fingerprint, bridgeData, onNavigate, period
         </div>
 
         <div className="flex justify-end mt-3">
-          <button onClick={() => {
-              const a = document.createElement('a')
-              a.href = `/api/export/board-deck.pptx?stage=${companyStage || 'series_b'}`
-              a.download = 'board-deck.pptx'
-              a.click()
-            }}
-            className="flex items-center gap-1.5 px-3 py-2 bg-[#0055A4] hover:bg-[#003d80] border border-[#0055A4] rounded-xl text-[11px] text-white font-semibold transition-all">
-            <ExternalLink size={12}/> Board Deck
+          <button onClick={() => setExportOpen(true)}
+            className="flex items-center gap-1.5 px-3 py-2 bg-[#0055A4] hover:bg-[#003d80] border border-[#0055A4] rounded-xl text-[11px] text-white font-semibold transition-all shadow-sm active:scale-[0.97]">
+            <ExternalLink size={12}/> Generate Board Pack
           </button>
-          {/* Print button removed — screen capture was low quality and served no purpose */}
         </div>
+
+        {/* ── Board Pack Export Modal ───────────────────────────────────── */}
+        {exportOpen && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm" onClick={() => setExportOpen(false)}>
+            <div className="bg-white rounded-2xl shadow-2xl w-[480px] max-h-[85vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
+              <div className="p-5 border-b border-slate-100">
+                <div className="flex items-center justify-between">
+                  <h3 className="text-[15px] font-black text-slate-800">Generate Board Pack</h3>
+                  <button onClick={() => setExportOpen(false)} className="w-7 h-7 flex items-center justify-center rounded-full bg-slate-100 hover:bg-slate-200 text-slate-400"><X size={13}/></button>
+                </div>
+                <p className="text-[10px] text-slate-400 mt-1">Configure the period and content for your board presentation</p>
+              </div>
+              <div className="p-5 space-y-5">
+                {/* Date Range */}
+                <div>
+                  <div className="text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-2">Period</div>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="text-[9px] font-semibold text-slate-400 mb-1 block">From</label>
+                      <div className="flex gap-1.5">
+                        <select value={exportConfig.fromMonth} onChange={e => setExportConfig(c => ({ ...c, fromMonth: +e.target.value }))}
+                          className="flex-1 text-[11px] px-2 py-1.5 rounded-lg border border-slate-200 bg-white text-slate-700 focus:outline-none focus:ring-1 focus:ring-blue-300">
+                          {MONTHS.map((m, i) => <option key={m} value={i + 1}>{m}</option>)}
+                        </select>
+                        <input type="number" value={exportConfig.fromYear} onChange={e => setExportConfig(c => ({ ...c, fromYear: +e.target.value }))}
+                          className="w-[70px] text-[11px] px-2 py-1.5 rounded-lg border border-slate-200 bg-white text-slate-700 focus:outline-none focus:ring-1 focus:ring-blue-300" min={2020} max={2030}/>
+                      </div>
+                    </div>
+                    <div>
+                      <label className="text-[9px] font-semibold text-slate-400 mb-1 block">To</label>
+                      <div className="flex gap-1.5">
+                        <select value={exportConfig.toMonth} onChange={e => setExportConfig(c => ({ ...c, toMonth: +e.target.value }))}
+                          className="flex-1 text-[11px] px-2 py-1.5 rounded-lg border border-slate-200 bg-white text-slate-700 focus:outline-none focus:ring-1 focus:ring-blue-300">
+                          {MONTHS.map((m, i) => <option key={m} value={i + 1}>{m}</option>)}
+                        </select>
+                        <input type="number" value={exportConfig.toYear} onChange={e => setExportConfig(c => ({ ...c, toYear: +e.target.value }))}
+                          className="w-[70px] text-[11px] px-2 py-1.5 rounded-lg border border-slate-200 bg-white text-slate-700 focus:outline-none focus:ring-1 focus:ring-blue-300" min={2020} max={2030}/>
+                      </div>
+                    </div>
+                  </div>
+                  {/* Period presets */}
+                  <div className="flex gap-1.5 mt-2 flex-wrap">
+                    {[
+                      { label: 'Last Month', fn: () => { const d = new Date(); d.setMonth(d.getMonth() - 1); return { fromYear: d.getFullYear(), fromMonth: d.getMonth() + 1, toYear: d.getFullYear(), toMonth: d.getMonth() + 1 } } },
+                      { label: 'Last Quarter', fn: () => { const d = new Date(); const q = Math.floor(d.getMonth() / 3); const fy = q === 0 ? d.getFullYear() - 1 : d.getFullYear(); const fm = q === 0 ? 10 : (q - 1) * 3 + 1; return { fromYear: fy, fromMonth: fm, toYear: fy, toMonth: fm + 2 } } },
+                      { label: 'Last 6 Months', fn: () => { const d = new Date(); d.setMonth(d.getMonth() - 6); return { fromYear: d.getFullYear(), fromMonth: d.getMonth() + 1, toYear: now.getFullYear(), toMonth: now.getMonth() + 1 } } },
+                      { label: 'YTD', fn: () => ({ fromYear: now.getFullYear(), fromMonth: 1, toYear: now.getFullYear(), toMonth: now.getMonth() + 1 }) },
+                      { label: 'Full Year', fn: () => ({ fromYear: now.getFullYear(), fromMonth: 1, toYear: now.getFullYear(), toMonth: 12 }) },
+                    ].map(p => (
+                      <button key={p.label} onClick={() => setExportConfig(c => ({ ...c, ...p.fn() }))}
+                        className="text-[9px] font-semibold px-2 py-1 rounded-full border border-slate-200 text-slate-500 hover:bg-slate-50 hover:border-slate-300 transition-all">
+                        {p.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Pack Modes */}
+                <div>
+                  <div className="text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-2">Content</div>
+                  <div className="space-y-2">
+                    {[
+                      { id: 'just_kpis', label: 'KPI Status Overview', desc: 'Heatmap, domain radar, top/bottom KPIs' },
+                      { id: 'variance_narrative', label: 'Variance & Narrative', desc: 'Causal analysis, signals, domain deep dives, corrective actions' },
+                      { id: 'financial_projections', label: 'Financial & Projections', desc: 'Peer benchmarks, forward outlook' },
+                      { id: 'talk_track', label: 'Talk Track', desc: 'Adds speaker notes to all slides' },
+                    ].map(m => (
+                      <label key={m.id} className={`flex items-start gap-2.5 p-2.5 rounded-xl border cursor-pointer transition-all ${
+                        exportConfig.modes.includes(m.id) ? 'border-blue-300 bg-blue-50/50' : 'border-slate-150 hover:border-slate-250'
+                      }`}>
+                        <input type="checkbox" checked={exportConfig.modes.includes(m.id)}
+                          onChange={e => {
+                            setExportConfig(c => ({
+                              ...c,
+                              modes: e.target.checked ? [...c.modes, m.id] : c.modes.filter(x => x !== m.id),
+                            }))
+                          }}
+                          className="mt-0.5 rounded border-slate-300 text-blue-600 focus:ring-blue-300"/>
+                        <div>
+                          <div className="text-[11px] font-bold text-slate-700">{m.label}</div>
+                          <div className="text-[9px] text-slate-400">{m.desc}</div>
+                        </div>
+                      </label>
+                    ))}
+                  </div>
+                </div>
+              </div>
+
+              {/* Footer */}
+              <div className="p-4 border-t border-slate-100 flex justify-end gap-2">
+                <button onClick={() => setExportOpen(false)}
+                  className="px-3 py-1.5 text-[11px] font-semibold text-slate-500 hover:text-slate-700 transition-colors">
+                  Cancel
+                </button>
+                <button
+                  disabled={exportLoading || exportConfig.modes.length === 0}
+                  onClick={async () => {
+                    setExportLoading(true)
+                    try {
+                      const res = await fetch('/api/board-pack/generate', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                          from_year: exportConfig.fromYear,
+                          from_month: exportConfig.fromMonth,
+                          to_year: exportConfig.toYear,
+                          to_month: exportConfig.toMonth,
+                          modes: exportConfig.modes,
+                          company_stage: companyStage || 'series_b',
+                        }),
+                      })
+                      if (!res.ok) throw new Error(`Export failed: ${res.status}`)
+                      const blob = await res.blob()
+                      const url = URL.createObjectURL(blob)
+                      const a = document.createElement('a')
+                      a.href = url
+                      a.download = `Board_Pack_${exportConfig.fromYear}${String(exportConfig.fromMonth).padStart(2,'0')}-${exportConfig.toYear}${String(exportConfig.toMonth).padStart(2,'0')}.pptx`
+                      a.click()
+                      URL.revokeObjectURL(url)
+                      setExportOpen(false)
+                    } catch (err) {
+                      alert(err.message || 'Board pack generation failed')
+                    } finally {
+                      setExportLoading(false)
+                    }
+                  }}
+                  className="flex items-center gap-1.5 px-4 py-2 bg-[#0055A4] hover:bg-[#003d80] disabled:opacity-50 disabled:cursor-not-allowed rounded-xl text-[11px] text-white font-semibold transition-all shadow-sm active:scale-[0.97]">
+                  {exportLoading ? 'Generating...' : 'Generate Board Pack'}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* ── NARRATIVE HERO ──────────────────────────────────────────────────── */}

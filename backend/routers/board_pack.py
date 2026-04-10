@@ -141,6 +141,16 @@ def _build_board_pack(workspace_id: str, body: BoardPackRequest, modes: set[str]
         [workspace_id],
     ).fetchall()
 
+    # Data provenance: latest upload timestamp
+    try:
+        upload_row = conn.execute(
+            "SELECT uploaded_at FROM uploads WHERE workspace_id=? ORDER BY id DESC LIMIT 1",
+            [workspace_id],
+        ).fetchone()
+        data_as_of = upload_row["uploaded_at"] if upload_row else None
+    except Exception:
+        data_as_of = None
+
     conn.close()
 
     targets_map = {r["kpi_key"]: {"target": r["target_value"], "direction": r["direction"] or "higher", "unit": r["unit"] or ""}
@@ -334,7 +344,14 @@ def _build_board_pack(workspace_id: str, body: BoardPackRequest, modes: set[str]
     _add_text(slide, f"{len(red_kpis)} critical  ·  {len(yellow_kpis)} watch  ·  "
               f"{len(green_kpis)} on target  ·  {total} KPIs tracked",
               0.6, 4.5, 11, 0.6, font_size=20, bold=True, color="FFFFFF")
-    _add_text(slide, f"Generated {datetime.utcnow().strftime('%B %d, %Y')}  ·  Axiom Intelligence",
+    provenance = f"Generated {datetime.utcnow().strftime('%B %d, %Y')}  ·  Axiom Intelligence"
+    if data_as_of:
+        try:
+            dao = str(data_as_of).split("T")[0] if "T" in str(data_as_of) else str(data_as_of)[:10]
+            provenance += f"  ·  Data as of {dao}"
+        except Exception:
+            pass
+    _add_text(slide, provenance,
               0.6, 6.5, 11, 0.4, font_size=10, color="94A3B8", italic=True)
 
     _notes(slide, generate_talk_track("title", {
@@ -825,15 +842,32 @@ def _add_sec_slides(prs, blank, workspace_id, body, _add_text, _add_paragraphs,
                     generate_talk_track, THEME):
     """Add SEC-grade analytics slides to the board pack.
 
-    Includes: ARR Bridge, Customer Concentration, Unit Economics, Rule of 40,
-    and Control Attestation summary. Each slide is defensive — a failure in
-    one does not block others.
+    Includes: ARR Bridge (waterfall chart), Cohort Retention (heatmap),
+    Customer Concentration (bar chart), Gross Margin Decomposition,
+    Cash Burn Waterfall, Unit Economics & Rule of 40, KPI Accountability,
+    and Data Governance attestation.
+
+    All slides:
+      - Period-filtered to the user's selected date range
+      - Use chart_engine for intelligent visualisation
+      - Defensive: a failure in one does not block others
     """
     from pptx.util import Inches, Pt
     from core.database import get_db
+    from core.chart_engine import (
+        render_waterfall, render_heatmap, render_bar_h, render_grouped_bar_h,
+        render_line, render_radar, PALETTE,
+    )
     import json
 
     conn = get_db()
+    from_p = f"{body.from_year}-{body.from_month:02d}"
+    to_p = f"{body.to_year}-{body.to_month:02d}"
+
+    def _period_filter(period_str):
+        """Check if a period falls within the user's selected range."""
+        p = str(period_str or "")[:7]
+        return from_p <= p <= to_p
 
     def _fmt_usd(v):
         if v is None:
@@ -849,11 +883,23 @@ def _add_sec_slides(prs, blank, workspace_id, body, _add_text, _add_paragraphs,
         return f"{sign}${av:.0f}"
 
     def _fmt_pct(v):
-        if v is None:
-            return "--"
-        return f"{float(v):.1f}%"
+        return f"{float(v):.1f}%" if v is not None else "--"
 
-    # ── SLIDE: ARR Bridge ────────────────────────────────────────────────
+    def _slide_header(title, subtitle=None):
+        slide = prs.slides.add_slide(blank)
+        _fill_bg(slide, THEME["bg"])
+        _add_text(slide, title.upper(), 0.5, 0.3, 12, 0.35,
+                  font_size=9, bold=True, color=THEME["subtext"])
+        _add_text(slide, title, 0.5, 0.65, 12, 0.5,
+                  font_size=20, bold=True, color=THEME["text"])
+        if subtitle:
+            _add_text(slide, subtitle, 0.5, 1.1, 6, 0.3,
+                      font_size=10, color=THEME["subtext"])
+        return slide
+
+    # ═══════════════════════════════════════════════════════════════════════
+    # SLIDE: ARR Bridge — Waterfall Chart
+    # ═══════════════════════════════════════════════════════════════════════
     try:
         rev_rows = conn.execute(
             "SELECT customer_id, period, amount FROM canonical_revenue "
@@ -861,56 +907,149 @@ def _add_sec_slides(prs, blank, workspace_id, body, _add_text, _add_paragraphs,
             [workspace_id],
         ).fetchall()
 
-        if rev_rows and len(rev_rows) > 5:
-            # Compute latest period bridge
-            customer_period: dict = {}
-            for r in rev_rows:
-                cid = r[0] or "unknown"
-                period = str(r[1] or "")[:7]
-                amt = float(r[2] or 0)
-                customer_period.setdefault(period, {})
-                customer_period[period][cid] = customer_period[period].get(cid, 0) + amt
+        # Build per-customer per-period revenue (period-filtered)
+        customer_period: dict = {}
+        for r in rev_rows:
+            period = str(r[1] or "")[:7]
+            if not _period_filter(period):
+                continue
+            cid = r[0] or "unknown"
+            amt = float(r[2] or 0)
+            customer_period.setdefault(period, {})
+            customer_period[period][cid] = customer_period[period].get(cid, 0) + amt
 
-            sorted_periods = sorted(customer_period.keys())
-            if len(sorted_periods) >= 2:
-                current = customer_period[sorted_periods[-1]]
-                prev = customer_period[sorted_periods[-2]]
-                new_arr = sum(v for k, v in current.items() if k not in prev) * 12
-                churned_arr = sum(v for k, v in prev.items() if k not in current) * 12
-                expansion = sum(max(0, current.get(k, 0) - prev.get(k, 0)) for k in current if k in prev and current[k] > prev[k]) * 12
-                contraction = sum(max(0, prev.get(k, 0) - current.get(k, 0)) for k in current if k in prev and current[k] < prev[k]) * 12
-                ending_arr = sum(current.values()) * 12
+        sorted_periods = sorted(customer_period.keys())
+        if len(sorted_periods) >= 2:
+            # Use last two periods for the bridge
+            current = customer_period[sorted_periods[-1]]
+            prev = customer_period[sorted_periods[-2]]
+            new_arr = sum(v for k, v in current.items() if k not in prev) * 12
+            churned_arr = sum(v for k, v in prev.items() if k not in current) * 12
+            expansion = sum(max(0, current.get(k, 0) - prev.get(k, 0))
+                           for k in current if k in prev and current[k] > prev[k]) * 12
+            contraction = sum(max(0, prev.get(k, 0) - current.get(k, 0))
+                             for k in current if k in prev and current[k] < prev[k]) * 12
+            net_new = new_arr + expansion - contraction - churned_arr
+            ending_arr = sum(current.values()) * 12
 
-                slide = prs.slides.add_slide(blank)
-                _fill_bg(slide, THEME["bg"])
-                _add_text(slide, "ARR Bridge — Net New ARR Movement", 0.5, 0.3, 12, 0.6,
-                         size=22, bold=True, color=THEME["accent"])
-                _add_text(slide, period_label, 0.5, 0.85, 4, 0.3, size=11, color=THEME["subtext"])
+            slide = _slide_header("ARR Bridge", f"{sorted_periods[-2]} to {sorted_periods[-1]}")
 
-                bridge_lines = [
-                    f"New ARR:          {_fmt_usd(new_arr)}",
-                    f"Expansion ARR:    {_fmt_usd(expansion)}",
-                    f"Contraction ARR:  ({_fmt_usd(contraction)})",
-                    f"Churned ARR:      ({_fmt_usd(churned_arr)})",
-                    f"",
-                    f"Net New ARR:      {_fmt_usd(new_arr + expansion - contraction - churned_arr)}",
-                    f"Ending ARR:       {_fmt_usd(ending_arr)}",
-                ]
-                paras = [("ARR Bridge — Latest Period", 16, True, THEME["text"])]
-                for line in bridge_lines:
-                    color = THEME["positive"] if "New" in line or "Expansion" in line else (
-                        THEME["critical"] if "Contraction" in line or "Churned" in line else THEME["text"])
-                    paras.append((line, 13, False, color))
+            # Waterfall chart
+            wf_labels = ["New ARR", "Expansion", "Contraction", "Churned", "Net New ARR"]
+            wf_deltas = [new_arr, expansion, -contraction, -churned_arr, net_new]
+            wf = render_waterfall(wf_labels, wf_deltas, "Net New ARR Movement")
+            slide.shapes.add_picture(wf.image, Inches(0.3), Inches(1.5),
+                                     Inches(8.0), Inches(5.0))
 
-                _add_paragraphs(slide, paras, 0.5, 1.5, 6, 5)
+            # Summary narrative on right
+            paras = [
+                ("Period Summary", 14, True, THEME["text"]),
+                ("", 4, False, None),
+                (f"New ARR:         {_fmt_usd(new_arr)}", 11, False, PALETTE["positive"]),
+                (f"Expansion:       {_fmt_usd(expansion)}", 11, False, PALETTE["positive"]),
+                (f"Contraction:    ({_fmt_usd(contraction)})", 11, False, PALETTE["critical"]),
+                (f"Churned:        ({_fmt_usd(churned_arr)})", 11, False, PALETTE["critical"]),
+                ("", 6, False, None),
+                (f"Net New ARR:     {_fmt_usd(net_new)}", 13, True,
+                 THEME["positive"] if net_new > 0 else THEME["critical"]),
+                (f"Ending ARR:      {_fmt_usd(ending_arr)}", 13, True, THEME["text"]),
+            ]
+            _add_paragraphs(slide, paras, 8.8, 1.5, 4.2, 5.0)
 
-                if include_notes:
-                    _notes(slide, "ARR Bridge shows how recurring revenue moves period-over-period. "
-                           "Focus on Net New ARR — this is the growth engine.")
+            if include_notes:
+                _notes(slide, "ARR Bridge decomposes recurring revenue movement. "
+                       "Focus on the balance between growth (New + Expansion) and "
+                       "erosion (Contraction + Churn). Net New ARR is the growth engine.")
     except Exception as e:
         print(f"[Board Pack] ARR Bridge slide failed: {e}")
 
-    # ── SLIDE: Customer Concentration ─────────────��──────────────────────
+    # ═══════════════════════════════════════════════════════════════════════
+    # SLIDE: Cohort Revenue Retention Matrix
+    # ═══════════════════════════════════════════════════════════════════════
+    try:
+        cohort_rows = conn.execute(
+            "SELECT customer_id, period, amount FROM canonical_revenue "
+            "WHERE workspace_id=? AND customer_id IS NOT NULL AND amount IS NOT NULL",
+            [workspace_id],
+        ).fetchall()
+
+        if cohort_rows and len(cohort_rows) > 10:
+            # Build cohort data
+            first_period: dict = {}
+            cust_period_data: dict = {}
+            for r in cohort_rows:
+                cid, period, amt = r[0], str(r[1] or "")[:7], float(r[2] or 0)
+                if cid not in first_period or period < first_period[cid]:
+                    first_period[cid] = period
+                key = (cid, period)
+                cust_period_data[key] = cust_period_data.get(key, 0) + amt
+
+            cohort_customers: dict = {}
+            for cid, fp in first_period.items():
+                cohort_customers.setdefault(fp, set()).add(cid)
+
+            all_periods = sorted(set(p for _, p in cust_period_data.keys()))
+
+            # Build retention heatmap data (revenue retention %)
+            cohort_labels = []
+            month_offsets = list(range(min(13, len(all_periods))))
+            offset_labels = [f"M{i}" for i in month_offsets]
+            retention_matrix = []
+            value_matrix = []
+
+            for acq_period in sorted(cohort_customers.keys())[-8:]:  # Last 8 cohorts
+                customers = cohort_customers[acq_period]
+                m0_revenue = sum(cust_period_data.get((c, acq_period), 0) for c in customers)
+                if m0_revenue <= 0:
+                    continue
+                acq_idx = all_periods.index(acq_period) if acq_period in all_periods else -1
+                if acq_idx < 0:
+                    continue
+
+                cohort_labels.append(f"{acq_period} ({len(customers)})")
+                row_status = []
+                row_values = []
+                for offset in month_offsets:
+                    if acq_idx + offset >= len(all_periods):
+                        row_status.append("grey")
+                        row_values.append(None)
+                        continue
+                    p = all_periods[acq_idx + offset]
+                    revenue = sum(cust_period_data.get((c, p), 0) for c in customers)
+                    retention = revenue / m0_revenue * 100
+                    row_values.append(round(retention, 0))
+                    if retention >= 100:
+                        row_status.append("green")
+                    elif retention >= 80:
+                        row_status.append("yellow")
+                    elif retention > 0:
+                        row_status.append("red")
+                    else:
+                        row_status.append("grey")
+                retention_matrix.append(row_status)
+                value_matrix.append(row_values)
+
+            if cohort_labels and len(cohort_labels) >= 2:
+                slide = _slide_header("Cohort Revenue Retention",
+                                      "Vintage analysis — revenue retention by acquisition cohort")
+
+                hm = render_heatmap(cohort_labels, offset_labels,
+                                    retention_matrix, value_matrix)
+                slide.shapes.add_picture(hm.image, Inches(0.3), Inches(1.5),
+                                         Inches(min(hm.width_inches, 12.5)),
+                                         Inches(min(hm.height_inches, 5.5)))
+
+                if include_notes:
+                    _notes(slide, "Cohort retention shows whether customers acquired in each period "
+                           "continue generating revenue. Green (100%+) = expansion. "
+                           "Red (<80%) = material erosion. Diagonal degradation across all "
+                           "cohorts signals a systemic product or market issue.")
+    except Exception as e:
+        print(f"[Board Pack] Cohort Retention slide failed: {e}")
+
+    # ═══════════════════════════════════════════════════════════════════════
+    # SLIDE: Customer Concentration — Bar Chart + SEC Flag
+    # ═══════════════════════════════════════════════════════════════════════
     try:
         conc_rows = conn.execute(
             "SELECT customer_id, SUM(amount) as total FROM canonical_revenue "
@@ -918,6 +1057,17 @@ def _add_sec_slides(prs, blank, workspace_id, body, _add_text, _add_paragraphs,
             "GROUP BY customer_id ORDER BY total DESC LIMIT 10",
             [workspace_id],
         ).fetchall()
+
+        # Customer names
+        try:
+            name_rows = conn.execute(
+                "SELECT source_id, name FROM canonical_customers WHERE workspace_id=?",
+                [workspace_id],
+            ).fetchall()
+            cust_names = {r[0]: r[1] for r in name_rows}
+        except Exception:
+            cust_names = {}
+
         total_rev_row = conn.execute(
             "SELECT SUM(amount) FROM canonical_revenue WHERE workspace_id=? AND amount IS NOT NULL",
             [workspace_id],
@@ -925,57 +1075,279 @@ def _add_sec_slides(prs, blank, workspace_id, body, _add_text, _add_paragraphs,
         total_rev = float(total_rev_row[0] or 0) if total_rev_row else 0
 
         if conc_rows and total_rev > 0:
-            slide = prs.slides.add_slide(blank)
-            _fill_bg(slide, THEME["bg"])
-            _add_text(slide, "Customer Concentration Risk", 0.5, 0.3, 12, 0.6,
-                     size=22, bold=True, color=THEME["accent"])
+            slide = _slide_header("Customer Concentration Risk",
+                                  "SEC 10% disclosure threshold analysis")
 
-            top1_pct = float(conc_rows[0][1] or 0) / total_rev * 100 if conc_rows else 0
-            top5_pct = sum(float(r[1] or 0) for r in conc_rows[:5]) / total_rev * 100
-            top10_pct = sum(float(r[1] or 0) for r in conc_rows[:10]) / total_rev * 100
+            names = [cust_names.get(r[0], r[0] or "Unknown")[:25] for r in conc_rows[:8]]
+            values = [float(r[1] or 0) / total_rev * 100 for r in conc_rows[:8]]
+            colors = [PALETTE["critical"] if v > 10 else (PALETTE["warning"] if v > 5 else PALETTE["positive"])
+                      for v in values]
+
+            bar = render_bar_h(names, values, colors,
+                               "Top Customers — % of Total Revenue", unit="pct")
+            slide.shapes.add_picture(bar.image, Inches(0.3), Inches(1.5),
+                                     Inches(7.5), Inches(min(bar.height_inches, 5.5)))
+
+            # Summary on right
+            top1_pct = values[0] if values else 0
+            top5_pct = sum(values[:5])
             sec_breached = top1_pct > 10
 
+            # HHI
+            all_shares = [(float(r[1] or 0) / total_rev * 100) for r in conc_rows]
+            hhi = sum(s ** 2 for s in all_shares)
+
             paras = [
-                ("Concentration Summary", 16, True, THEME["text"]),
-                ("", 6, False, None),
-                (f"Top 1 Customer:    {_fmt_pct(top1_pct)} of revenue" +
-                 ("  ⚠ SEC THRESHOLD" if sec_breached else ""), 13, False,
+                ("Concentration Summary", 14, True, THEME["text"]),
+                ("", 4, False, None),
+                (f"Top 1:    {_fmt_pct(top1_pct)} of revenue", 12, False,
                  THEME["critical"] if sec_breached else THEME["text"]),
-                (f"Top 5 Customers:   {_fmt_pct(top5_pct)} of revenue", 13, False, THEME["text"]),
-                (f"Top 10 Customers:  {_fmt_pct(top10_pct)} of revenue", 13, False, THEME["text"]),
-                ("", 8, False, None),
+                (f"Top 5:    {_fmt_pct(top5_pct)} of revenue", 12, False, THEME["text"]),
+                (f"HHI:      {hhi:.0f}", 12, False, THEME["text"]),
+                ("", 6, False, None),
             ]
 
             if sec_breached:
-                paras.append(("SEC Disclosure Required: One or more customers exceed 10% of revenue. "
-                             "This must be disclosed in 10-K filings.", 12, False, THEME["critical"]))
+                paras.append((
+                    "SEC Disclosure Required: One or more customers exceed 10% of revenue. "
+                    "This must be disclosed in 10-K/10-Q filings per ASC 280.",
+                    11, True, THEME["critical"],
+                ))
 
-            # Top 5 table
-            paras.append(("", 8, False, None))
-            paras.append(("Top 5 Customers by Revenue", 14, True, THEME["text"]))
-            for i, r in enumerate(conc_rows[:5]):
-                cid = r[0] or "Unknown"
-                pct = float(r[1] or 0) / total_rev * 100
-                flag = "  ⚠" if pct > 10 else ""
-                paras.append((f"  {i+1}. {cid[:30]}  —  {_fmt_usd(r[1])}  ({_fmt_pct(pct)}){flag}",
-                             11, False, THEME["critical"] if pct > 10 else THEME["text"]))
+            # HHI interpretation
+            if hhi > 2500:
+                paras.append(("HHI > 2,500: Highly concentrated revenue base.", 10, False, THEME["critical"]))
+            elif hhi > 1500:
+                paras.append(("HHI 1,500-2,500: Moderately concentrated.", 10, False, THEME["warning"]))
+            else:
+                paras.append(("HHI < 1,500: Well diversified revenue base.", 10, False, THEME["positive"]))
 
-            _add_paragraphs(slide, paras, 0.5, 1.2, 12, 5.5)
+            _add_paragraphs(slide, paras, 8.3, 1.5, 4.7, 5.0)
 
             if include_notes:
-                _notes(slide, "Customer concentration is a key risk factor. SEC requires disclosure "
-                       "of any customer >10% of revenue. High HHI signals dependency risk.")
+                _notes(slide, "Customer concentration is a material risk factor. SEC mandates disclosure "
+                       "of any customer >10% of revenue under ASC 280. HHI (Herfindahl-Hirschman Index) "
+                       "measures concentration: <1500 = diversified, 1500-2500 = moderate, >2500 = concentrated.")
     except Exception as e:
         print(f"[Board Pack] Concentration slide failed: {e}")
 
-    # ── SLIDE: Unit Economics & Rule of 40 ──────────��────────────────────
+    # ═══════════════════════════════════════════════════════════════════════
+    # SLIDE: Gross Margin Decomposition
+    # ═══════════════════════════════════════════════════════════════════════
     try:
-        kpi_row = conn.execute(
-            "SELECT data_json FROM monthly_data WHERE workspace_id=? "
-            "ORDER BY year DESC, month DESC LIMIT 1",
+        _COGS_KEYWORDS = {"cogs", "cost of goods", "cost of revenue", "hosting",
+                          "infrastructure", "direct", "support", "implementation"}
+
+        exp_rows = conn.execute(
+            "SELECT period, category, SUM(amount) as total "
+            "FROM canonical_expenses WHERE workspace_id=? AND amount IS NOT NULL "
+            "GROUP BY period, category ORDER BY period",
             [workspace_id],
+        ).fetchall()
+        margin_rev_rows = conn.execute(
+            "SELECT period, SUM(amount) as total FROM canonical_revenue "
+            "WHERE workspace_id=? AND amount IS NOT NULL GROUP BY period ORDER BY period",
+            [workspace_id],
+        ).fetchall()
+
+        revenue_by_period = {str(r[0])[:7]: float(r[1] or 0) for r in margin_rev_rows}
+
+        # Categorize COGS
+        period_costs: dict = {}
+        for r in exp_rows:
+            period = str(r[0])[:7]
+            if not _period_filter(period):
+                continue
+            cat = str(r[1] or "other").lower()
+            amt = float(r[2] or 0)
+            if not any(kw in cat for kw in _COGS_KEYWORDS):
+                continue
+            if "hosting" in cat or "infrastructure" in cat:
+                display_cat = "Hosting"
+            elif "support" in cat:
+                display_cat = "Support"
+            elif any(kw in cat for kw in ("cogs", "cost of goods", "cost of revenue", "direct")):
+                display_cat = "Direct COGS"
+            else:
+                display_cat = cat.title()[:15]
+            period_costs.setdefault(period, {})
+            period_costs[period][display_cat] = period_costs[period].get(display_cat, 0) + amt
+
+        filtered_periods = sorted(p for p in set(list(revenue_by_period.keys()) + list(period_costs.keys()))
+                                  if _period_filter(p))
+
+        if filtered_periods and period_costs:
+            # Build multi-line: one line per COGS category + gross margin %
+            all_cats = sorted(set(c for p in period_costs.values() for c in p))
+
+            slide = _slide_header("Gross Margin Decomposition",
+                                  "COGS component breakdown and margin trajectory")
+
+            # Use a multi-line chart for COGS categories as % of revenue
+            series = {}
+            for cat in all_cats[:5]:
+                series[cat] = []
+                for p in filtered_periods:
+                    rev = revenue_by_period.get(p, 0)
+                    cost = period_costs.get(p, {}).get(cat, 0)
+                    series[cat].append(round(cost / rev * 100, 1) if rev else 0)
+
+            # Add gross margin line
+            gm_values = []
+            for p in filtered_periods:
+                rev = revenue_by_period.get(p, 0)
+                cogs = sum(period_costs.get(p, {}).values())
+                gm_values.append(round((rev - cogs) / rev * 100, 1) if rev else 0)
+            series["Gross Margin %"] = gm_values
+
+            chart = render_line(filtered_periods, gm_values, None,
+                                "Gross Margin %", "pct", PALETTE["positive"])
+            slide.shapes.add_picture(chart.image, Inches(0.3), Inches(1.5),
+                                     Inches(7.5), Inches(5.0))
+
+            # Latest breakdown on right
+            if filtered_periods:
+                latest = filtered_periods[-1]
+                rev = revenue_by_period.get(latest, 0)
+                costs = period_costs.get(latest, {})
+                paras = [
+                    (f"COGS Breakdown — {latest}", 14, True, THEME["text"]),
+                    ("", 4, False, None),
+                ]
+                for cat, amt in sorted(costs.items(), key=lambda x: -x[1]):
+                    pct = amt / rev * 100 if rev else 0
+                    paras.append((f"{cat}: {_fmt_usd(amt)} ({_fmt_pct(pct)})", 11, False, THEME["text"]))
+                total_cogs = sum(costs.values())
+                gm = (rev - total_cogs) / rev * 100 if rev else 0
+                paras.append(("", 6, False, None))
+                paras.append((f"Total COGS: {_fmt_usd(total_cogs)} ({_fmt_pct(total_cogs / rev * 100 if rev else 0)})", 12, True, THEME["text"]))
+                paras.append((f"Gross Margin: {_fmt_pct(gm)}", 14, True,
+                             THEME["positive"] if gm >= 65 else (THEME["warning"] if gm >= 50 else THEME["critical"])))
+                _add_paragraphs(slide, paras, 8.3, 1.5, 4.7, 5.0)
+
+            if include_notes:
+                _notes(slide, "Gross margin decomposition reveals the cost structure and operating leverage "
+                       "opportunity. Track the ratio of infrastructure (scalable) vs personnel (linear) COGS. "
+                       "Healthy SaaS: >65% gross margin, improving QoQ.")
+    except Exception as e:
+        print(f"[Board Pack] Margin Decomposition slide failed: {e}")
+
+    # ═══════════════════════════════════════════════════════════════════════
+    # SLIDE: Cash Burn Waterfall
+    # ═══════════════════════════════════════════════════════════════════════
+    try:
+        _SM_KW = {"sales", "marketing", "s&m", "advertising", "demand"}
+        _RD_KW = {"r&d", "research", "engineering", "development", "product"}
+        _GA_KW = {"g&a", "general", "admin", "office", "legal", "hr", "finance"}
+
+        bs_rows = conn.execute(
+            "SELECT period, cash_balance FROM canonical_balance_sheet "
+            "WHERE workspace_id=? ORDER BY period",
+            [workspace_id],
+        ).fetchall()
+        cash_rev_rows = conn.execute(
+            "SELECT period, SUM(amount) as total FROM canonical_revenue "
+            "WHERE workspace_id=? AND amount IS NOT NULL GROUP BY period",
+            [workspace_id],
+        ).fetchall()
+        cash_exp_rows = conn.execute(
+            "SELECT period, category, SUM(amount) as total FROM canonical_expenses "
+            "WHERE workspace_id=? AND amount IS NOT NULL GROUP BY period, category",
+            [workspace_id],
+        ).fetchall()
+
+        cash_by_period = {str(r[0])[:7]: float(r[1] or 0) for r in bs_rows}
+        cash_rev_by_period = {str(r[0])[:7]: float(r[1] or 0) for r in cash_rev_rows}
+
+        # Categorize expenses into buckets
+        exp_buckets: dict = {}
+        for r in cash_exp_rows:
+            period = str(r[0])[:7]
+            if not _period_filter(period):
+                continue
+            cat = str(r[1] or "other").lower()
+            amt = float(r[2] or 0)
+            if any(kw in cat for kw in _SM_KW):
+                bucket = "S&M"
+            elif any(kw in cat for kw in _RD_KW):
+                bucket = "R&D"
+            elif any(kw in cat for kw in _GA_KW):
+                bucket = "G&A"
+            elif any(kw in cat for kw in ("cogs", "hosting", "infrastructure", "direct")):
+                bucket = "COGS"
+            else:
+                bucket = "Other"
+            exp_buckets.setdefault(period, {})
+            exp_buckets[period][bucket] = exp_buckets[period].get(bucket, 0) + amt
+
+        # Use latest period for waterfall
+        filtered_cash_periods = sorted(p for p in exp_buckets if _period_filter(p))
+        if filtered_cash_periods:
+            latest_p = filtered_cash_periods[-1]
+            opening = cash_by_period.get(
+                filtered_cash_periods[-2] if len(filtered_cash_periods) >= 2 else latest_p, 0)
+            revenue = cash_rev_by_period.get(latest_p, 0)
+            expenses = exp_buckets.get(latest_p, {})
+            total_exp = sum(expenses.values())
+            closing = cash_by_period.get(latest_p, opening + revenue - total_exp)
+            net_burn = revenue - total_exp
+            runway = abs(closing / net_burn) if net_burn < 0 else 999
+
+            slide = _slide_header("Cash Flow Waterfall", f"Period: {latest_p}")
+
+            # Build waterfall: Opening → Revenue → -S&M → -R&D → -G&A → -COGS → -Other → Closing
+            wf_labels = ["Opening Cash", "Revenue"]
+            wf_deltas = [opening, revenue]
+            for bucket in ["S&M", "R&D", "G&A", "COGS", "Other"]:
+                amt = expenses.get(bucket, 0)
+                if amt > 0:
+                    wf_labels.append(bucket)
+                    wf_deltas.append(-amt)
+
+            wf = render_waterfall(wf_labels, wf_deltas, "Cash Flow Bridge")
+            slide.shapes.add_picture(wf.image, Inches(0.3), Inches(1.5),
+                                     Inches(8.5), Inches(5.0))
+
+            # Summary on right
+            paras = [
+                ("Cash Summary", 14, True, THEME["text"]),
+                ("", 4, False, None),
+                (f"Opening Cash:  {_fmt_usd(opening)}", 12, False, THEME["text"]),
+                (f"Revenue:       {_fmt_usd(revenue)}", 12, False, THEME["positive"]),
+                (f"Total Expenses: ({_fmt_usd(total_exp)})", 12, False, THEME["critical"]),
+                ("", 4, False, None),
+                (f"Net Burn:      {_fmt_usd(net_burn)}", 13, True,
+                 THEME["positive"] if net_burn >= 0 else THEME["critical"]),
+                (f"Closing Cash:  {_fmt_usd(closing)}", 13, True, THEME["text"]),
+                ("", 6, False, None),
+                (f"Runway: {runway:.0f} months" if runway < 999 else "Runway: Cash positive", 14, True,
+                 THEME["positive"] if runway > 18 or runway >= 999 else
+                 (THEME["warning"] if runway > 9 else THEME["critical"])),
+            ]
+            _add_paragraphs(slide, paras, 9.3, 1.5, 3.7, 5.0)
+
+            if include_notes:
+                _notes(slide, "Cash waterfall shows where capital is deployed. "
+                       f"Current runway: {runway:.0f} months. "
+                       "Board should monitor burn rate trajectory and path to cash flow breakeven.")
+    except Exception as e:
+        print(f"[Board Pack] Cash Waterfall slide failed: {e}")
+
+    # ═══════════════════════════════════════════════════════════════════════
+    # SLIDE: Unit Economics & Rule of 40
+    # ═══════════════════════════════════════════════════════════════════════
+    try:
+        # Get KPI data within period
+        kpi_rows = conn.execute(
+            "SELECT data_json FROM monthly_data WHERE workspace_id=? "
+            "AND (year > ? OR (year = ? AND month >= ?)) "
+            "AND (year < ? OR (year = ? AND month <= ?)) "
+            "ORDER BY year DESC, month DESC LIMIT 1",
+            [workspace_id,
+             body.from_year, body.from_year, body.from_month,
+             body.to_year, body.to_year, body.to_month],
         ).fetchone()
-        kpi_data = json.loads(kpi_row[0]) if kpi_row else {}
+        kpi_data = json.loads(kpi_rows[0]) if kpi_rows else {}
 
         rev_growth = kpi_data.get("revenue_growth")
         ebitda_margin = kpi_data.get("ebitda_margin")
@@ -987,13 +1359,9 @@ def _add_sec_slides(prs, blank, workspace_id, body, _add_text, _add_paragraphs,
         customer_ltv = kpi_data.get("customer_ltv")
 
         if rev_growth is not None or ebitda_margin is not None:
-            slide = prs.slides.add_slide(blank)
-            _fill_bg(slide, THEME["bg"])
-            _add_text(slide, "Unit Economics & Strategic Metrics", 0.5, 0.3, 12, 0.6,
-                     size=22, bold=True, color=THEME["accent"])
-            _add_text(slide, period_label, 0.5, 0.85, 4, 0.3, size=11, color=THEME["subtext"])
+            slide = _slide_header("Unit Economics & Strategic Metrics", period_label)
 
-            rule_40 = (float(rev_growth or 0) + float(ebitda_margin or 0))
+            rule_40 = float(rev_growth or 0) + float(ebitda_margin or 0)
             r40_color = THEME["positive"] if rule_40 >= 40 else (THEME["warning"] if rule_40 >= 25 else THEME["critical"])
 
             paras = [
@@ -1001,7 +1369,7 @@ def _add_sec_slides(prs, blank, workspace_id, body, _add_text, _add_paragraphs,
                 ("", 4, False, None),
                 (f"Revenue Growth:   {_fmt_pct(rev_growth)}", 13, False, THEME["text"]),
                 (f"EBITDA Margin:    {_fmt_pct(ebitda_margin)}", 13, False, THEME["text"]),
-                (f"Rule of 40 Score: {rule_40:.1f}  {'✓ Above 40' if rule_40 >= 40 else '✗ Below 40'}", 14, True, r40_color),
+                (f"Rule of 40 Score: {rule_40:.1f}  {'Pass' if rule_40 >= 40 else 'Below threshold'}", 14, True, r40_color),
                 ("", 10, False, None),
                 ("Key Unit Economics", 18, True, THEME["text"]),
                 ("", 4, False, None),
@@ -1011,23 +1379,98 @@ def _add_sec_slides(prs, blank, workspace_id, body, _add_text, _add_paragraphs,
                 (f"Burn Multiple:    {burn_multiple:.2f}x" if burn_multiple else "Burn Multiple:    --", 13, False, THEME["text"]),
                 (f"LTV:CAC:          {ltv_cac:.1f}x" if ltv_cac else "LTV:CAC:          --", 13, False, THEME["text"]),
                 (f"Customer LTV:     {_fmt_usd(customer_ltv)}", 13, False, THEME["text"]),
+                ("", 8, False, None),
+                ("Note: Revenue Growth and Gross/EBITDA Margins are GAAP-aligned. "
+                 "ARR, NRR, Burn Multiple, LTV:CAC are Non-GAAP operating metrics.",
+                 9, False, THEME["subtext"]),
             ]
-
-            # GAAP/Non-GAAP footnote
-            paras.append(("", 8, False, None))
-            paras.append(("Note: Revenue Growth and Gross/EBITDA Margins are GAAP-aligned. "
-                         "ARR, NRR, Burn Multiple, LTV:CAC are Non-GAAP operating metrics.",
-                         9, False, THEME["subtext"]))
 
             _add_paragraphs(slide, paras, 0.5, 1.3, 12, 5.5)
 
             if include_notes:
-                _notes(slide, "Rule of 40 = Revenue Growth + Profit Margin. Above 40 = healthy SaaS business. "
-                       "GAAP vs Non-GAAP distinction is critical for SEC filings.")
+                _notes(slide, "Rule of 40 = Revenue Growth + Profit Margin. Above 40 = healthy SaaS. "
+                       "GAAP vs Non-GAAP distinction is mandatory for SEC filings and investor communications. "
+                       f"LTV:CAC of {ltv_cac:.1f}x {'exceeds' if ltv_cac and ltv_cac >= 3 else 'is below'} "
+                       f"the 3x benchmark." if ltv_cac else "")
     except Exception as e:
         print(f"[Board Pack] Unit Economics slide failed: {e}")
 
-    # ── SLIDE: Data Governance / Control Attestation ───────────���─────────
+    # ═══════════════════════════════════════════════════════════════════════
+    # SLIDE: KPI Accountability
+    # ═══════════════════════════════════════════════════════════════════════
+    try:
+        acct_rows = conn.execute(
+            "SELECT kpi_key, owner, status FROM kpi_accountability WHERE workspace_id=?",
+            [workspace_id],
+        ).fetchall()
+
+        if acct_rows:
+            # Group by owner
+            owners: dict = {}
+            target_rows = conn.execute(
+                "SELECT kpi_key, target_value, direction FROM kpi_targets WHERE workspace_id=?",
+                [workspace_id],
+            ).fetchall()
+            tgt_map = {r[0]: {"target": float(r[1] or 0), "direction": r[2]} for r in target_rows}
+            latest_kpi = conn.execute(
+                "SELECT data_json FROM monthly_data WHERE workspace_id=? "
+                "ORDER BY year DESC, month DESC LIMIT 1",
+                [workspace_id],
+            ).fetchone()
+            kpi_vals = json.loads(latest_kpi[0]) if latest_kpi else {}
+
+            for r in acct_rows:
+                owner = r[1] or "Unassigned"
+                kpi_key = r[0]
+                resolution = r[2] or "open"
+                val = kpi_vals.get(kpi_key)
+                t = tgt_map.get(kpi_key)
+
+                if val is not None and t:
+                    ratio = val / t["target"] if t["target"] else 0
+                    d = t.get("direction", "higher")
+                    st = "green" if (d == "higher" and ratio >= 0.98) or (d != "higher" and ratio <= 1.02) else \
+                         "yellow" if (d == "higher" and ratio >= 0.90) or (d != "higher" and ratio <= 1.10) else "red"
+                else:
+                    st = "grey"
+
+                owners.setdefault(owner, {"green": 0, "yellow": 0, "red": 0, "grey": 0, "resolved": 0, "total": 0})
+                owners[owner][st] += 1
+                owners[owner]["total"] += 1
+                if resolution == "resolved":
+                    owners[owner]["resolved"] += 1
+
+            slide = _slide_header("KPI Owner Accountability")
+
+            paras = [("Ownership & Resolution Summary", 14, True, THEME["text"]), ("", 4, False, None)]
+            sorted_owners = sorted(owners.items(), key=lambda x: -x[1]["red"])
+            for name, data in sorted_owners[:8]:
+                total = data["total"]
+                res_rate = round(data["resolved"] / total * 100) if total else 0
+                status_str = f"{data['green']}G  {data['yellow']}Y  {data['red']}R"
+                color = THEME["critical"] if data["red"] >= 2 else (THEME["warning"] if data["red"] >= 1 else THEME["text"])
+                paras.append((f"{name} — {total} KPIs ({status_str}) — {res_rate}% resolved", 11, False, color))
+
+            paras.append(("", 8, False, None))
+            total_kpis = sum(o["total"] for o in owners.values())
+            total_red = sum(o["red"] for o in owners.values())
+            total_resolved = sum(o["resolved"] for o in owners.values())
+            overall_rate = round(total_resolved / total_kpis * 100) if total_kpis else 0
+            paras.append((f"Total: {total_kpis} KPIs assigned to {len(owners)} owners. "
+                         f"{total_red} critical. {overall_rate}% resolution rate.", 12, True, THEME["text"]))
+
+            _add_paragraphs(slide, paras, 0.5, 1.3, 12, 5.5)
+
+            if include_notes:
+                _notes(slide, "KPI accountability ensures every metric has a named owner. "
+                       "Resolution rate tracks execution discipline. "
+                       "Board should review owners with multiple red KPIs for capacity or capability gaps.")
+    except Exception as e:
+        print(f"[Board Pack] Accountability slide failed: {e}")
+
+    # ═══════════════════════════════════════════════════════════════════════
+    # SLIDE: Data Governance & Control Attestation
+    # ═══════════════════════════════════════════════════════════════════════
     try:
         integrity_row = conn.execute(
             "SELECT overall_status, stage0_status, stage1_status, stage2_status, "
@@ -1037,45 +1480,46 @@ def _add_sec_slides(prs, blank, workspace_id, body, _add_text, _add_paragraphs,
         ).fetchone()
 
         if integrity_row:
-            slide = prs.slides.add_slide(blank)
-            _fill_bg(slide, THEME["bg"])
-            _add_text(slide, "Data Governance & Control Attestation", 0.5, 0.3, 12, 0.6,
-                     size=22, bold=True, color=THEME["accent"])
+            slide = _slide_header("Data Governance & Control Attestation")
 
             status = integrity_row[0] or "unknown"
-            stages = ["Temporal", "Source Reconciliation", "KPI Logic", "Display Consistency", "Statistical"]
+            stages = ["Temporal Validation", "Source Reconciliation", "KPI Logic",
+                      "Display Consistency", "Statistical Anomaly"]
             stage_statuses = [integrity_row[i+1] or "unknown" for i in range(5)]
 
             paras = [
-                ("Integrity Check Summary", 16, True, THEME["text"]),
+                ("Integrity Check Summary", 14, True, THEME["text"]),
                 ("", 4, False, None),
                 (f"Overall Status: {status.upper()}", 14, True,
-                 THEME["positive"] if status == "pass" else (THEME["warning"] if status == "warn" else THEME["critical"])),
+                 THEME["positive"] if status == "pass" else
+                 (THEME["warning"] if status == "warn" else THEME["critical"])),
                 ("", 6, False, None),
             ]
 
             for i, (stage_name, s_status) in enumerate(zip(stages, stage_statuses)):
-                icon = "✓" if s_status == "pass" else ("⚠" if s_status == "warn" else "✗")
-                color = THEME["positive"] if s_status == "pass" else (THEME["warning"] if s_status == "warn" else THEME["critical"])
-                paras.append((f"  Stage {i}: {stage_name}  —  {icon} {s_status.upper()}", 12, False, color))
+                icon = "Pass" if s_status == "pass" else ("Warning" if s_status == "warn" else "Fail")
+                color = THEME["positive"] if s_status == "pass" else \
+                    (THEME["warning"] if s_status == "warn" else THEME["critical"])
+                paras.append((f"  Stage {i}: {stage_name}  —  {icon}", 11, False, color))
 
             if integrity_row[6]:  # correction_attempted
                 paras.append(("", 6, False, None))
                 success = "succeeded" if integrity_row[7] else "failed"
-                paras.append((f"Auto-correction: {success}", 12, False,
+                paras.append((f"Auto-correction: {success}", 11, False,
                              THEME["positive"] if integrity_row[7] else THEME["critical"]))
 
             paras.append(("", 10, False, None))
-            paras.append(("This attestation summarizes automated data quality controls. "
-                         "5 stages covering temporal validation, source reconciliation, "
-                         "KPI computation verification, display consistency, and statistical anomaly detection.",
+            paras.append(("5-stage automated validation covering temporal integrity, source reconciliation, "
+                         "KPI computation verification, display consistency, and statistical anomaly detection. "
+                         "Mirrors SOX internal control framework.",
                          9, False, THEME["subtext"]))
 
             _add_paragraphs(slide, paras, 0.5, 1.3, 12, 5.5)
 
             if include_notes:
                 _notes(slide, "Control attestation provides audit-grade evidence of data integrity. "
-                       "5 stages mirror SOX internal control framework.")
+                       "5 stages mirror SOX internal control framework. "
+                       "Any 'Fail' status requires investigation before presenting to the board.")
     except Exception as e:
         print(f"[Board Pack] Attestation slide failed: {e}")
 
