@@ -224,7 +224,8 @@ const PAGE_TITLES = {
   accountability:   'KPI Accountability',
 }
 
-const FILTER_TABS = new Set(['variance', 'dashboard', 'fingerprint', 'trends', 'projection', 'board', 'home', 'decisions', 'scenario'])
+const FILTER_TABS = new Set(['variance', 'dashboard', 'fingerprint', 'trends', 'projection', 'board', 'home', 'decisions', 'scenario',
+  'arr_bridge', 'cohort_matrix', 'concentration', 'margin_decomp', 'cash_waterfall', 'unit_economics', 'rule_of_40'])
 
 // ── Cockpit modes: curated KPI sets per audience ──────────────────────────────
 export const COCKPIT_MODES = {
@@ -1006,14 +1007,14 @@ function AppInner() {
               {tab === 'ontology'    && <OntologyPage />}
               {tab === 'board_pack'  && <BoardPackGenerator companySettings={companySettings} />}
 
-              {/* ── SEC-grade analytics views ───────────────────────────────── */}
-              {tab === 'arr_bridge'       && <ArrBridge />}
-              {tab === 'cohort_matrix'    && <CohortMatrix />}
-              {tab === 'concentration'    && <ConcentrationTable />}
-              {tab === 'margin_decomp'    && <MarginDecomposition />}
-              {tab === 'cash_waterfall'   && <CashWaterfall />}
-              {tab === 'unit_economics'   && <UnitEconomics />}
-              {tab === 'rule_of_40'       && <RuleOf40 />}
+              {/* ── SEC-grade analytics views (period-aware) ──────────────── */}
+              {tab === 'arr_bridge'       && <ArrBridge periodDates={periodDates} />}
+              {tab === 'cohort_matrix'    && <CohortMatrix periodDates={periodDates} />}
+              {tab === 'concentration'    && <ConcentrationTable periodDates={periodDates} />}
+              {tab === 'margin_decomp'    && <MarginDecomposition periodDates={periodDates} />}
+              {tab === 'cash_waterfall'   && <CashWaterfall periodDates={periodDates} />}
+              {tab === 'unit_economics'   && <UnitEconomics periodDates={periodDates} />}
+              {tab === 'rule_of_40'       && <RuleOf40 periodDates={periodDates} />}
               {tab === 'scenario_compare' && <ScenarioComparison />}
               {tab === 'accountability'   && <AccountabilityDashboard />}
               {tab === 'projection'  && (

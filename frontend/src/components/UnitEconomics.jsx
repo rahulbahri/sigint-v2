@@ -46,8 +46,8 @@ function WaterfallTooltip({ active, payload }) {
   const d = payload[0]?.payload
   if (!d) return null
   return (
-    <div className="bg-[#232839] border border-white/10 rounded-lg px-3 py-2 shadow-xl text-xs">
-      <p className="text-white font-semibold mb-0.5">{d.name}</p>
+    <div className="bg-white border border-slate-200 rounded-lg px-3 py-2 shadow-xl text-xs">
+      <p className="text-slate-800 font-semibold mb-0.5">{d.name}</p>
       <p className={d.isPositive ? 'text-emerald-400' : 'text-red-400'}>
         {d.value >= 0 ? '+' : ''}{fmtKpiValueCompact(d.value, 'usd')}
       </p>
@@ -58,11 +58,11 @@ function WaterfallTooltip({ active, payload }) {
 // ── Summary card ───────────────────────────────────────────────────────────
 function SummaryCard({ label, value, unit, color }) {
   return (
-    <div className="bg-[#1a1f2e] border border-white/8 rounded-xl p-5 text-center">
+    <div className="bg-white border border-slate-200 rounded-xl p-5 text-center">
       <div className={`text-3xl font-bold ${color}`}>
         {fmtKpiValueCompact(value, unit)}
       </div>
-      <div className="text-gray-400 text-xs mt-1.5 uppercase tracking-wider font-medium">
+      <div className="text-slate-500 text-xs mt-1.5 uppercase tracking-wider font-medium">
         {label}
       </div>
     </div>
@@ -106,14 +106,14 @@ export default function UnitEconomics() {
   // ── Empty state ──────────────────────────────────────────────────────────
   if (!data?.metrics?.length) return (
     <div className="p-6 max-w-4xl mx-auto space-y-5">
-      <h2 className="text-white text-xl font-semibold flex items-center gap-2">
+      <h2 className="text-slate-800 text-xl font-semibold flex items-center gap-2">
         <DollarSign size={20} className="text-[#0055A4]" />
         Unit Economics
       </h2>
-      <div className="bg-[#1a1f2e] border border-white/8 rounded-2xl p-12 text-center">
-        <AlertTriangle size={32} className="text-gray-600 mx-auto mb-3" />
-        <p className="text-gray-400 text-sm font-semibold">No unit economics data available</p>
-        <p className="text-gray-500 text-xs mt-1">Upload customer-level revenue and cost data to enable unit economics analysis.</p>
+      <div className="bg-white border border-slate-200 rounded-2xl p-12 text-center">
+        <AlertTriangle size={32} className="text-slate-500 mx-auto mb-3" />
+        <p className="text-slate-500 text-sm font-semibold">No unit economics data available</p>
+        <p className="text-slate-500 text-xs mt-1">Upload customer-level revenue and cost data to enable unit economics analysis.</p>
       </div>
     </div>
   )
@@ -125,27 +125,27 @@ export default function UnitEconomics() {
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h2 className="text-white text-xl font-semibold flex items-center gap-2">
+          <h2 className="text-slate-800 text-xl font-semibold flex items-center gap-2">
             <DollarSign size={20} className="text-[#0055A4]" />
             Unit Economics
           </h2>
-          <p className="text-gray-400 text-sm mt-1">
+          <p className="text-slate-500 text-sm mt-1">
             {data.customer_count != null && `${data.customer_count.toLocaleString()} customers`}
             {data.months_of_data != null && ` \u00b7 ${data.months_of_data} months of data`}
           </p>
         </div>
         <button
           onClick={load}
-          className="flex items-center gap-1.5 px-3 py-1.5 text-xs text-gray-400 hover:text-white bg-white/5 hover:bg-white/10 rounded-lg transition-colors"
+          className="flex items-center gap-1.5 px-3 py-1.5 text-xs text-slate-500 hover:text-slate-800 bg-slate-50 hover:bg-slate-100 rounded-lg transition-colors"
         >
           <RefreshCw size={12} /> Refresh
         </button>
       </div>
 
       {/* Waterfall chart */}
-      <div className="bg-[#1a1f2e] border border-white/8 rounded-2xl p-5">
-        <h3 className="text-white text-sm font-semibold mb-1">Revenue Waterfall</h3>
-        <p className="text-gray-500 text-xs mb-4">ARPU through to net contribution per customer</p>
+      <div className="bg-white border border-slate-200 rounded-2xl p-5">
+        <h3 className="text-slate-800 text-sm font-semibold mb-1">Revenue Waterfall</h3>
+        <p className="text-slate-500 text-xs mb-4">ARPU through to net contribution per customer</p>
         <ResponsiveContainer width="100%" height={260}>
           <BarChart data={waterfallData} margin={{ top: 10, right: 20, bottom: 5, left: 20 }}>
             <XAxis
@@ -176,13 +176,13 @@ export default function UnitEconomics() {
 
       {/* Metrics detail row */}
       {data.metrics.length > 0 && (
-        <div className="bg-[#1a1f2e] border border-white/8 rounded-2xl p-5">
-          <h3 className="text-white text-sm font-semibold mb-3">All Metrics</h3>
+        <div className="bg-white border border-slate-200 rounded-2xl p-5">
+          <h3 className="text-slate-800 text-sm font-semibold mb-3">All Metrics</h3>
           <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
             {data.metrics.map((m, i) => (
-              <div key={i} className="bg-white/3 rounded-lg px-3 py-2.5">
-                <div className="text-gray-400 text-[10px] uppercase tracking-wider mb-0.5">{m.label}</div>
-                <div className="text-white text-base font-bold">
+              <div key={i} className="bg-slate-50 rounded-lg px-3 py-2.5">
+                <div className="text-slate-500 text-[10px] uppercase tracking-wider mb-0.5">{m.label}</div>
+                <div className="text-slate-800 text-base font-bold">
                   {fmtKpiValueCompact(m.value, m.unit)}
                 </div>
               </div>

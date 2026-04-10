@@ -20,9 +20,9 @@ function WaterfallTooltip({ active, payload }) {
   const d = payload[0]?.payload
   if (!d) return null
   return (
-    <div className="bg-[#1a1f2e] border border-white/10 rounded-lg px-3 py-2 text-xs shadow-lg">
-      <p className="text-gray-300 font-semibold mb-1">{d.label}</p>
-      <p className="text-gray-200">{fmtKpiValueCompact(Math.abs(d.displayValue), 'usd')}</p>
+    <div className="bg-white border border-slate-200 rounded-lg px-3 py-2 text-xs shadow-lg">
+      <p className="text-slate-700 font-semibold mb-1">{d.label}</p>
+      <p className="text-slate-700">{fmtKpiValueCompact(Math.abs(d.displayValue), 'usd')}</p>
     </div>
   )
 }
@@ -30,15 +30,15 @@ function WaterfallTooltip({ active, payload }) {
 function TrendTooltip({ active, payload, label }) {
   if (!active || !payload?.length) return null
   return (
-    <div className="bg-[#1a1f2e] border border-white/10 rounded-lg px-3 py-2 text-xs shadow-lg">
-      <p className="text-gray-300 font-semibold mb-1">{label}</p>
+    <div className="bg-white border border-slate-200 rounded-lg px-3 py-2 text-xs shadow-lg">
+      <p className="text-slate-700 font-semibold mb-1">{label}</p>
       {payload.map((p, i) => (
         <div key={i} className="flex items-center justify-between gap-4">
           <span className="flex items-center gap-1.5">
             <span className="w-2 h-2 rounded-full inline-block" style={{ backgroundColor: p.color }} />
-            <span className="text-gray-400">{p.name}</span>
+            <span className="text-slate-500">{p.name}</span>
           </span>
-          <span className="text-gray-200 font-medium">
+          <span className="text-slate-700 font-medium">
             {fmtKpiValueCompact(p.value, 'usd')}
           </span>
         </div>
@@ -124,7 +124,7 @@ export default function CashWaterfall() {
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center h-40 text-gray-400 text-sm">
+      <div className="flex items-center justify-center h-40 text-slate-500 text-sm">
         Loading cash flow data...
       </div>
     )
@@ -133,14 +133,14 @@ export default function CashWaterfall() {
   if (!data?.periods?.length) {
     return (
       <div className="space-y-5">
-        <h1 className="text-lg font-bold text-white flex items-center gap-2">
+        <h1 className="text-lg font-bold text-slate-800 flex items-center gap-2">
           <Wallet size={18} className="text-[#0055A4]" />
           Cash Waterfall
         </h1>
-        <div className="bg-[#1a1f2e] rounded-2xl border border-white/8 p-10 text-center">
-          <Wallet size={28} className="text-gray-600 mx-auto mb-2" />
-          <p className="text-gray-300 text-sm font-semibold">No cash flow data available</p>
-          <p className="text-gray-500 text-xs mt-1">
+        <div className="bg-white rounded-2xl border border-slate-200 p-10 text-center">
+          <Wallet size={28} className="text-slate-500 mx-auto mb-2" />
+          <p className="text-slate-700 text-sm font-semibold">No cash flow data available</p>
+          <p className="text-slate-500 text-xs mt-1">
             Upload financial data with cash flow details to enable waterfall analysis.
           </p>
         </div>
@@ -158,36 +158,36 @@ export default function CashWaterfall() {
     <div className="space-y-5">
       {/* Header */}
       <div>
-        <h1 className="text-lg font-bold text-white flex items-center gap-2">
+        <h1 className="text-lg font-bold text-slate-800 flex items-center gap-2">
           <Wallet size={18} className="text-[#0055A4]" />
           Cash Waterfall
         </h1>
-        <p className="text-[12px] text-gray-400 mt-0.5">
+        <p className="text-[12px] text-slate-500 mt-0.5">
           Cash flow waterfall for {latest.period} with historical trend.
         </p>
       </div>
 
       {/* Summary Cards */}
       <div className="grid grid-cols-3 gap-3">
-        <div className="bg-[#1a1f2e] rounded-xl border border-white/8 px-4 py-3 text-center">
-          <p className="text-[10px] text-gray-400 uppercase tracking-wider">Current Cash</p>
-          <p className="text-xl font-bold text-white">
+        <div className="bg-white rounded-xl border border-slate-200 px-4 py-3 text-center">
+          <p className="text-[10px] text-slate-500 uppercase tracking-wider">Current Cash</p>
+          <p className="text-xl font-bold text-slate-800">
             {fmtKpiValueCompact(latest.closing_cash, 'usd')}
           </p>
         </div>
-        <div className="bg-[#1a1f2e] rounded-xl border border-white/8 px-4 py-3 text-center">
+        <div className="bg-white rounded-xl border border-slate-200 px-4 py-3 text-center">
           <div className="flex items-center justify-center gap-1 mb-0.5">
             <TrendingDown size={12} className="text-[#DC2626]" />
-            <p className="text-[10px] text-gray-400 uppercase tracking-wider">Monthly Burn</p>
+            <p className="text-[10px] text-slate-500 uppercase tracking-wider">Monthly Burn</p>
           </div>
           <p className="text-xl font-bold text-[#DC2626]">
             {fmtKpiValueCompact(Math.abs(latest.net_burn), 'usd')}
           </p>
         </div>
-        <div className="bg-[#1a1f2e] rounded-xl border border-white/8 px-4 py-3 text-center">
+        <div className="bg-white rounded-xl border border-slate-200 px-4 py-3 text-center">
           <div className="flex items-center justify-center gap-1 mb-0.5">
             <Clock size={12} className={runwayColor} />
-            <p className="text-[10px] text-gray-400 uppercase tracking-wider">Runway</p>
+            <p className="text-[10px] text-slate-500 uppercase tracking-wider">Runway</p>
           </div>
           <p className={`text-xl font-bold ${runwayColor}`}>
             {latest.runway_months != null ? `${latest.runway_months.toFixed(1)} mo` : '\u2014'}
@@ -196,8 +196,8 @@ export default function CashWaterfall() {
       </div>
 
       {/* Waterfall Chart */}
-      <div className="bg-[#1a1f2e] rounded-2xl border border-white/8 p-5">
-        <h2 className="text-[11px] font-bold text-gray-400 uppercase tracking-wider mb-3">
+      <div className="bg-white rounded-2xl border border-slate-200 p-5">
+        <h2 className="text-[11px] font-bold text-slate-500 uppercase tracking-wider mb-3">
           Cash Flow Waterfall &mdash; {latest.period}
         </h2>
         <div className="h-72">
@@ -240,8 +240,8 @@ export default function CashWaterfall() {
 
       {/* Cash Trend Over Time */}
       {trendData.length > 1 && (
-        <div className="bg-[#1a1f2e] rounded-2xl border border-white/8 p-5">
-          <h2 className="text-[11px] font-bold text-gray-400 uppercase tracking-wider mb-3">
+        <div className="bg-white rounded-2xl border border-slate-200 p-5">
+          <h2 className="text-[11px] font-bold text-slate-500 uppercase tracking-wider mb-3">
             Closing Cash Trend
           </h2>
           <div className="h-56">

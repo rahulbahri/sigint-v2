@@ -11,7 +11,7 @@ const STATUS_CFG = {
   green:  { color: '#059669', label: 'On Target', Icon: CheckCircle2, textClass: 'text-emerald-400' },
   yellow: { color: '#D97706', label: 'Watch',     Icon: AlertCircle,  textClass: 'text-yellow-400'  },
   red:    { color: '#DC2626', label: 'Critical',  Icon: XCircle,      textClass: 'text-red-400'     },
-  grey:   { color: '#6b7280', label: 'No Data',   Icon: HelpCircle,   textClass: 'text-gray-500'    },
+  grey:   { color: '#6b7280', label: 'No Data',   Icon: HelpCircle,   textClass: 'text-slate-500'    },
 }
 
 function statusDot(status) {
@@ -69,7 +69,7 @@ function OwnerCard({ owner }) {
   const total = owner.total_kpis || 0
 
   return (
-    <div className="bg-[#1a1f2e] border border-white/8 rounded-xl p-5 flex flex-col">
+    <div className="bg-white border border-slate-200 rounded-xl p-5 flex flex-col">
       {/* Top row: donut + name + resolution */}
       <div className="flex items-start gap-4 mb-3">
         <StatusRing
@@ -80,8 +80,8 @@ function OwnerCard({ owner }) {
           size={64}
         />
         <div className="flex-1 min-w-0">
-          <h3 className="text-white text-sm font-bold truncate">{owner.name}</h3>
-          <p className="text-gray-500 text-xs mt-0.5">{total} KPI{total !== 1 ? 's' : ''} assigned</p>
+          <h3 className="text-slate-800 text-sm font-bold truncate">{owner.name}</h3>
+          <p className="text-slate-500 text-xs mt-0.5">{total} KPI{total !== 1 ? 's' : ''} assigned</p>
 
           {/* Status breakdown */}
           <div className="flex flex-wrap gap-x-3 gap-y-0.5 mt-2 text-[10px]">
@@ -95,7 +95,7 @@ function OwnerCard({ owner }) {
               <span className="text-red-400 font-semibold">{owner.red} red</span>
             )}
             {owner.grey > 0 && (
-              <span className="text-gray-500 font-semibold">{owner.grey} no data</span>
+              <span className="text-slate-500 font-semibold">{owner.grey} no data</span>
             )}
           </div>
         </div>
@@ -104,7 +104,7 @@ function OwnerCard({ owner }) {
       {/* Resolution rate */}
       <div className="mb-3">
         <div className="flex items-center justify-between text-xs mb-1">
-          <span className="text-gray-400">Resolution Rate</span>
+          <span className="text-slate-500">Resolution Rate</span>
           <span className={`font-bold ${
             owner.resolution_rate_pct >= 80 ? 'text-emerald-400'
               : owner.resolution_rate_pct >= 50 ? 'text-yellow-400'
@@ -113,7 +113,7 @@ function OwnerCard({ owner }) {
             {owner.resolution_rate_pct != null ? `${owner.resolution_rate_pct}%` : '\u2014'}
           </span>
         </div>
-        <div className="h-1.5 rounded-full bg-white/5 overflow-hidden">
+        <div className="h-1.5 rounded-full bg-slate-50 overflow-hidden">
           <div
             className={`h-full rounded-full transition-all ${
               owner.resolution_rate_pct >= 80 ? 'bg-emerald-500'
@@ -130,30 +130,30 @@ function OwnerCard({ owner }) {
         <>
           <button
             onClick={() => setExpanded(e => !e)}
-            className="flex items-center gap-1.5 text-xs text-gray-500 hover:text-gray-300 transition-colors mt-auto"
+            className="flex items-center gap-1.5 text-xs text-slate-500 hover:text-slate-700 transition-colors mt-auto"
           >
             {expanded ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
             {expanded ? 'Hide KPIs' : `Show ${owner.kpis.length} KPIs`}
           </button>
 
           {expanded && (
-            <div className="mt-3 space-y-1.5 border-t border-white/5 pt-3">
+            <div className="mt-3 space-y-1.5 border-t border-slate-100 pt-3">
               {owner.kpis.map((kpi, i) => (
                 <div key={i} className="flex items-center gap-2 text-xs">
                   {statusDot(kpi.status)}
-                  <span className="text-gray-300 flex-1 min-w-0 truncate">
+                  <span className="text-slate-700 flex-1 min-w-0 truncate">
                     {kpi.name || kpi.key?.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())}
                   </span>
-                  <span className="text-gray-500 shrink-0">
+                  <span className="text-slate-500 shrink-0">
                     {kpi.value != null ? fmtKpiValue(kpi.value, kpi.unit) : '\u2014'}
                   </span>
                   {kpi.target != null && (
-                    <span className="text-gray-600 shrink-0 text-[10px]">
+                    <span className="text-slate-500 shrink-0 text-[10px]">
                       / {fmtKpiValue(kpi.target, kpi.unit)}
                     </span>
                   )}
                   {kpi.due_date && (
-                    <span className="text-gray-600 shrink-0 text-[10px]">
+                    <span className="text-slate-500 shrink-0 text-[10px]">
                       {kpi.due_date}
                     </span>
                   )}
@@ -163,7 +163,7 @@ function OwnerCard({ owner }) {
                         ? 'bg-emerald-500/10 text-emerald-400'
                         : kpi.resolution_status === 'in_progress'
                         ? 'bg-yellow-500/10 text-yellow-400'
-                        : 'bg-white/5 text-gray-500'
+                        : 'bg-slate-50 text-slate-500'
                     }`}>
                       {kpi.resolution_status.replace(/_/g, ' ')}
                     </span>
@@ -234,14 +234,14 @@ export default function AccountabilityDashboard() {
   // ── Empty state ──────────────────────────────────────────────────────────
   if (sortedOwners.length === 0) return (
     <div className="p-6 max-w-5xl mx-auto space-y-5">
-      <h2 className="text-white text-xl font-semibold flex items-center gap-2">
+      <h2 className="text-slate-800 text-xl font-semibold flex items-center gap-2">
         <Users size={20} className="text-[#0055A4]" />
         Accountability Dashboard
       </h2>
-      <div className="bg-[#1a1f2e] border border-white/8 rounded-2xl p-12 text-center">
-        <AlertTriangle size={32} className="text-gray-600 mx-auto mb-3" />
-        <p className="text-gray-400 text-sm font-semibold">No accountability data available</p>
-        <p className="text-gray-500 text-xs mt-1">Assign KPI owners in the Targets Editor to enable accountability tracking.</p>
+      <div className="bg-white border border-slate-200 rounded-2xl p-12 text-center">
+        <AlertTriangle size={32} className="text-slate-500 mx-auto mb-3" />
+        <p className="text-slate-500 text-sm font-semibold">No accountability data available</p>
+        <p className="text-slate-500 text-xs mt-1">Assign KPI owners in the Targets Editor to enable accountability tracking.</p>
       </div>
     </div>
   )
@@ -251,17 +251,17 @@ export default function AccountabilityDashboard() {
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h2 className="text-white text-xl font-semibold flex items-center gap-2">
+          <h2 className="text-slate-800 text-xl font-semibold flex items-center gap-2">
             <Users size={20} className="text-[#0055A4]" />
             Accountability Dashboard
           </h2>
-          <p className="text-gray-400 text-sm mt-1">
+          <p className="text-slate-500 text-sm mt-1">
             KPI ownership and resolution tracking, sorted by criticality
           </p>
         </div>
         <button
           onClick={load}
-          className="flex items-center gap-1.5 px-3 py-1.5 text-xs text-gray-400 hover:text-white bg-white/5 hover:bg-white/10 rounded-lg transition-colors"
+          className="flex items-center gap-1.5 px-3 py-1.5 text-xs text-slate-500 hover:text-slate-800 bg-slate-50 hover:bg-slate-100 rounded-lg transition-colors"
         >
           <RefreshCw size={12} /> Refresh
         </button>
@@ -272,15 +272,15 @@ export default function AccountabilityDashboard() {
         <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-6 gap-3">
           {[
             { label: 'Owners',     value: totals.owners, color: 'text-blue-400'    },
-            { label: 'Total KPIs', value: totals.kpis,   color: 'text-white'       },
+            { label: 'Total KPIs', value: totals.kpis,   color: 'text-slate-800'       },
             { label: 'Green',      value: totals.green,  color: 'text-emerald-400' },
             { label: 'Yellow',     value: totals.yellow, color: 'text-yellow-400'  },
             { label: 'Red',        value: totals.red,    color: 'text-red-400'     },
-            { label: 'No Data',    value: totals.grey,   color: 'text-gray-500'    },
+            { label: 'No Data',    value: totals.grey,   color: 'text-slate-500'    },
           ].map(({ label, value, color }) => (
-            <div key={label} className="bg-[#1a1f2e] border border-white/8 rounded-xl p-3 text-center">
+            <div key={label} className="bg-white border border-slate-200 rounded-xl p-3 text-center">
               <div className={`text-xl font-bold ${color}`}>{value}</div>
-              <div className="text-gray-500 text-[10px] mt-0.5 uppercase tracking-wider">{label}</div>
+              <div className="text-slate-500 text-[10px] mt-0.5 uppercase tracking-wider">{label}</div>
             </div>
           ))}
         </div>

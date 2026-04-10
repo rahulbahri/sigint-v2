@@ -30,7 +30,7 @@ function KpiImpactPills({ kpis }) {
   return (
     <div className="flex flex-wrap gap-0.5">
       {kpis.slice(0, 3).map(k => (
-        <span key={k} className="text-[9px] bg-[#00AEEF]/10 text-[#00AEEF] px-1.5 py-0.5 rounded font-medium">
+        <span key={k} className="text-[9px] bg-[#0055A4]/10 text-[#0055A4] px-1.5 py-0.5 rounded font-medium">
           {k.replace(/_/g, ' ')}
         </span>
       ))}
@@ -58,7 +58,7 @@ function MappingRow({ mapping, onConfirm }) {
   }
 
   return (
-    <tr className={`border-b border-white/5 ${isNew ? 'bg-cyan-400/5' : needsReview ? 'bg-yellow-400/3' : ''}`}>
+    <tr className={`border-b border-slate-100 ${isNew ? 'bg-cyan-400/5' : needsReview ? 'bg-yellow-400/3' : ''}`}>
       <td className="px-4 py-3">
         <div className="flex items-center gap-1.5">
           <span className="text-gray-300 text-sm font-mono">{mapping.source_field}</span>
@@ -79,7 +79,7 @@ function MappingRow({ mapping, onConfirm }) {
             value={selected}
             onChange={e => setSelected(e.target.value)}
             disabled={mapping.confirmed_by_user}
-            className="appearance-none bg-[#0d1117] border border-white/10 text-white text-xs
+            className="appearance-none bg-white border border-slate-200 text-white text-xs
               rounded-lg pl-3 pr-7 py-1.5 w-full outline-none focus:border-[#00AEEF]/50
               disabled:opacity-60 disabled:cursor-default"
           >
@@ -103,8 +103,8 @@ function MappingRow({ mapping, onConfirm }) {
           <button
             onClick={handleConfirm}
             disabled={saving}
-            className="px-3 py-1 text-xs bg-[#00AEEF] text-white rounded-lg
-              hover:bg-[#0099d4] disabled:opacity-50 transition-colors"
+            className="px-3 py-1 text-xs bg-[#0055A4] text-white rounded-lg
+              hover:bg-[#003d80] disabled:opacity-50 transition-colors"
           >
             {saving ? '...' : 'Confirm'}
           </button>
@@ -120,10 +120,10 @@ function StagingSection({ sourceName, entities, onConfirm }) {
   const totalUnmapped = Object.values(entities).reduce((s, e) => s + (e.unmapped_count || 0), 0)
 
   return (
-    <div className="bg-[#1a1f2e] border border-white/8 rounded-xl overflow-hidden mb-4">
+    <div className="bg-white border border-slate-200 rounded-xl overflow-hidden mb-4">
       <button
         onClick={() => setOpen(o => !o)}
-        className="w-full flex items-center gap-3 px-4 py-3 hover:bg-white/3 transition-colors"
+        className="w-full flex items-center gap-3 px-4 py-3 hover:bg-slate-50 transition-colors"
       >
         {open ? <ChevronDown size={14} className="text-gray-400"/> : <ChevronRight size={14} className="text-gray-400"/>}
         <span className="text-white font-semibold text-sm capitalize">{sourceName}</span>
@@ -141,13 +141,13 @@ function StagingSection({ sourceName, entities, onConfirm }) {
         </div>
       </button>
       {open && Object.entries(entities).map(([entityType, entity]) => (
-        <div key={entityType} className="border-t border-white/5">
-          <div className="px-4 py-2 bg-white/2">
+        <div key={entityType} className="border-t border-slate-100">
+          <div className="px-4 py-2 bg-slate-50/50">
             <span className="text-gray-400 text-xs font-semibold uppercase tracking-wider">{entityType}</span>
           </div>
           <table className="w-full">
             <thead>
-              <tr className="border-b border-white/10">
+              <tr className="border-b border-slate-200">
                 {['Source Field','Source','Entity','Maps To','KPI Impact','Confidence',''].map(h => (
                   <th key={h} className="px-4 py-2 text-left text-gray-500 text-[10px] font-semibold uppercase tracking-wider">
                     {h}
@@ -271,7 +271,7 @@ export default function FieldMappingPage() {
 
   if (loading) return (
     <div className="flex items-center justify-center h-64">
-      <RefreshCw size={20} className="animate-spin text-[#00AEEF]"/>
+      <RefreshCw size={20} className="animate-spin text-[#0055A4]"/>
     </div>
   )
 
@@ -286,11 +286,11 @@ export default function FieldMappingPage() {
         </div>
         <div className="flex items-center gap-2">
           {/* View toggle */}
-          <div className="flex bg-white/5 rounded-lg p-0.5">
+          <div className="flex bg-slate-50 rounded-lg p-0.5">
             <button
               onClick={() => setView('staging')}
               className={`px-3 py-1 text-xs rounded-md transition-colors ${
-                view === 'staging' ? 'bg-[#00AEEF] text-white' : 'text-gray-400 hover:text-white'
+                view === 'staging' ? 'bg-[#0055A4] text-white' : 'text-gray-400 hover:text-white'
               }`}
             >
               Staging
@@ -298,7 +298,7 @@ export default function FieldMappingPage() {
             <button
               onClick={() => setView('flat')}
               className={`px-3 py-1 text-xs rounded-md transition-colors ${
-                view === 'flat' ? 'bg-[#00AEEF] text-white' : 'text-gray-400 hover:text-white'
+                view === 'flat' ? 'bg-[#0055A4] text-white' : 'text-gray-400 hover:text-white'
               }`}
             >
               All Mappings
@@ -306,7 +306,7 @@ export default function FieldMappingPage() {
           </div>
           <button
             onClick={view === 'staging' ? loadStaging : loadFlat}
-            className="flex items-center gap-1.5 px-3 py-1.5 text-xs text-gray-400 bg-white/5 hover:bg-white/10 rounded-lg transition-colors"
+            className="flex items-center gap-1.5 px-3 py-1.5 text-xs text-gray-400 bg-slate-50 hover:bg-slate-100 rounded-lg transition-colors"
           >
             <RefreshCw size={12}/> Refresh
           </button>
@@ -374,7 +374,7 @@ export default function FieldMappingPage() {
         <select
           value={filterSource}
           onChange={e => setFilter(e.target.value)}
-          className="bg-[#1a1f2e] border border-white/10 text-gray-300 text-xs rounded-lg px-3 py-1.5 outline-none"
+          className="bg-white border border-slate-200 text-gray-300 text-xs rounded-lg px-3 py-1.5 outline-none"
         >
           <option value="">All sources</option>
           {(view === 'staging' ? stagingSources : sources).map(s => <option key={s} value={s}>{s}</option>)}
@@ -384,8 +384,8 @@ export default function FieldMappingPage() {
           <button
             onClick={handleBulkConfirm}
             disabled={bulkConfirming}
-            className="flex items-center gap-1.5 px-3 py-1.5 text-xs bg-[#00AEEF] text-white rounded-lg
-              hover:bg-[#0099d4] disabled:opacity-50 transition-colors"
+            className="flex items-center gap-1.5 px-3 py-1.5 text-xs bg-[#0055A4] text-white rounded-lg
+              hover:bg-[#003d80] disabled:opacity-50 transition-colors"
           >
             <Zap size={12}/>
             {bulkConfirming ? 'Confirming...' : 'Confirm All Auto-Detected'}
@@ -404,7 +404,7 @@ export default function FieldMappingPage() {
         {view === 'flat' && needsReview.length > 0 && (
           <button
             onClick={() => setShowAll(a => !a)}
-            className="text-xs text-[#00AEEF] hover:underline"
+            className="text-xs text-[#0055A4] hover:underline"
           >
             {showAll ? 'Show only needs-review' : 'Show all mappings'}
           </button>
@@ -441,10 +441,10 @@ export default function FieldMappingPage() {
               <p className="text-sm">Connect a data source and run a sync to populate mappings.</p>
             </div>
           ) : (
-            <div className="bg-[#1a1f2e] border border-white/8 rounded-xl overflow-hidden">
+            <div className="bg-white border border-slate-200 rounded-xl overflow-hidden">
               <table className="w-full">
                 <thead>
-                  <tr className="border-b border-white/10">
+                  <tr className="border-b border-slate-200">
                     {['Source Field','Source','Entity','Maps To','KPI Impact','Confidence',''].map(h => (
                       <th key={h} className="px-4 py-3 text-left text-gray-500 text-xs font-semibold uppercase tracking-wider">
                         {h}

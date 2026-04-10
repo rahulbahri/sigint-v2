@@ -31,12 +31,12 @@ function pctBarColor(pct) {
 // ─── Summary Card ───────────────────────────────────────────────────────────
 function SummaryCard({ label, value, suffix, color, subLabel }) {
   return (
-    <div className="bg-[#1a1f2e] border border-white/8 rounded-xl px-4 py-3 text-center">
-      <p className="text-[10px] text-gray-400 uppercase tracking-wider mb-1">{label}</p>
+    <div className="bg-white border border-slate-200 rounded-xl px-4 py-3 text-center">
+      <p className="text-[10px] text-slate-500 uppercase tracking-wider mb-1">{label}</p>
       <p className={`text-xl font-bold ${color}`}>
         {value ?? '\u2014'}{suffix || ''}
       </p>
-      {subLabel && <p className="text-[10px] text-gray-500 mt-0.5">{subLabel}</p>}
+      {subLabel && <p className="text-[10px] text-slate-500 mt-0.5">{subLabel}</p>}
     </div>
   )
 }
@@ -45,8 +45,8 @@ function SummaryCard({ label, value, suffix, color, subLabel }) {
 function SecBadge({ breached }) {
   if (breached) {
     return (
-      <div className="bg-[#1a1f2e] border border-red-500/30 rounded-xl px-4 py-3 text-center">
-        <p className="text-[10px] text-gray-400 uppercase tracking-wider mb-1">SEC Threshold</p>
+      <div className="bg-white border border-red-500/30 rounded-xl px-4 py-3 text-center">
+        <p className="text-[10px] text-slate-500 uppercase tracking-wider mb-1">SEC Threshold</p>
         <div className="flex items-center justify-center gap-1.5">
           <AlertTriangle size={14} className="text-red-400" />
           <p className="text-xl font-bold text-red-400">Breached</p>
@@ -56,7 +56,7 @@ function SecBadge({ breached }) {
     )
   }
   return (
-    <div className="bg-[#1a1f2e] border border-green-500/20 rounded-xl px-4 py-3 text-center">
+    <div className="bg-white border border-green-500/20 rounded-xl px-4 py-3 text-center">
       <p className="text-[10px] text-gray-400 uppercase tracking-wider mb-1">SEC Threshold</p>
       <div className="flex items-center justify-center gap-1.5">
         <CheckCircle2 size={14} className="text-green-400" />
@@ -107,14 +107,14 @@ export default function ConcentrationTable() {
   if (!data?.customers?.length) {
     return (
       <div className="p-6 max-w-4xl mx-auto space-y-5">
-        <h2 className="text-white text-xl font-semibold flex items-center gap-2">
+        <h2 className="text-slate-800 text-xl font-semibold flex items-center gap-2">
           <Shield size={18} className="text-[#0055A4]" />
           Customer Concentration
         </h2>
-        <div className="bg-[#1a1f2e] border border-white/8 rounded-2xl p-10 text-center">
-          <Users size={28} className="text-gray-600 mx-auto mb-2" />
-          <p className="text-white text-sm font-semibold">No customer data available</p>
-          <p className="text-gray-500 text-xs mt-1">
+        <div className="bg-white border border-slate-200 rounded-2xl p-10 text-center">
+          <Users size={28} className="text-slate-500 mx-auto mb-2" />
+          <p className="text-slate-800 text-sm font-semibold">No customer data available</p>
+          <p className="text-slate-500 text-xs mt-1">
             Upload data with customer IDs and revenue to enable concentration analysis.
           </p>
         </div>
@@ -132,15 +132,15 @@ export default function ConcentrationTable() {
     <div className="p-6 max-w-5xl mx-auto space-y-5">
       {/* Header */}
       <div>
-        <h2 className="text-white text-xl font-semibold flex items-center gap-2">
+        <h2 className="text-slate-800 text-xl font-semibold flex items-center gap-2">
           <Shield size={18} className="text-[#0055A4]" />
           Customer Concentration
         </h2>
-        <p className="text-gray-400 text-sm mt-1">
+        <p className="text-slate-500 text-sm mt-1">
           Revenue concentration risk analysis.
-          {period && <span className="text-gray-500"> Period: {period}</span>}
+          {period && <span className="text-slate-500"> Period: {period}</span>}
           {total_revenue != null && (
-            <span className="text-gray-500"> &middot; Total Revenue: {fmtKpiValueCompact(total_revenue, 'usd')}</span>
+            <span className="text-slate-500"> &middot; Total Revenue: {fmtKpiValueCompact(total_revenue, 'usd')}</span>
           )}
         </p>
       </div>
@@ -189,29 +189,29 @@ export default function ConcentrationTable() {
       )}
 
       {/* Customer table */}
-      <div className="bg-[#1a1f2e] border border-white/8 rounded-2xl overflow-hidden">
-        <div className="px-5 py-3 border-b border-white/5">
-          <h3 className="text-[11px] font-bold text-gray-400 uppercase tracking-wider">
+      <div className="bg-white border border-slate-200 rounded-2xl overflow-hidden">
+        <div className="px-5 py-3 border-b border-slate-100">
+          <h3 className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">
             Top {customers.length} Customers by Revenue
           </h3>
         </div>
         <div className="overflow-x-auto">
           <table className="w-full text-xs">
             <thead>
-              <tr className="border-b border-white/5">
-                <th className="px-4 py-2.5 text-left text-[10px] font-semibold text-gray-500 uppercase tracking-wider w-12">
+              <tr className="border-b border-slate-100">
+                <th className="px-4 py-2.5 text-left text-[10px] font-semibold text-slate-500 uppercase tracking-wider w-12">
                   Rank
                 </th>
-                <th className="px-4 py-2.5 text-left text-[10px] font-semibold text-gray-500 uppercase tracking-wider">
+                <th className="px-4 py-2.5 text-left text-[10px] font-semibold text-slate-500 uppercase tracking-wider">
                   Customer
                 </th>
-                <th className="px-4 py-2.5 text-right text-[10px] font-semibold text-gray-500 uppercase tracking-wider">
+                <th className="px-4 py-2.5 text-right text-[10px] font-semibold text-slate-500 uppercase tracking-wider">
                   Revenue
                 </th>
-                <th className="px-4 py-2.5 text-left text-[10px] font-semibold text-gray-500 uppercase tracking-wider w-52">
+                <th className="px-4 py-2.5 text-left text-[10px] font-semibold text-slate-500 uppercase tracking-wider w-52">
                   % of Total
                 </th>
-                <th className="px-4 py-2.5 text-center text-[10px] font-semibold text-gray-500 uppercase tracking-wider w-20">
+                <th className="px-4 py-2.5 text-center text-[10px] font-semibold text-slate-500 uppercase tracking-wider w-20">
                   Trend
                 </th>
               </tr>
@@ -222,10 +222,10 @@ export default function ConcentrationTable() {
                 return (
                   <tr
                     key={c.customer_id ?? i}
-                    className={`border-b border-white/3 transition-colors ${
+                    className={`border-b border-slate-50 transition-colors ${
                       isHighConcentration
                         ? 'bg-red-500/8 hover:bg-red-500/12'
-                        : 'hover:bg-white/3'
+                        : 'hover:bg-slate-50'
                     }`}
                   >
                     {/* Rank */}
@@ -233,7 +233,7 @@ export default function ConcentrationTable() {
                       <span className={`inline-flex items-center justify-center w-6 h-6 rounded-full text-[10px] font-bold ${
                         c.rank <= 3
                           ? 'bg-[#0055A4]/20 text-[#0055A4]'
-                          : 'bg-white/5 text-gray-500'
+                          : 'bg-slate-50 text-gray-500'
                       }`}>
                         {c.rank}
                       </span>
@@ -242,7 +242,7 @@ export default function ConcentrationTable() {
                     {/* Customer name */}
                     <td className="px-4 py-2.5">
                       <div className="flex items-center gap-2">
-                        <span className="text-white font-medium truncate max-w-[200px]">
+                        <span className="text-slate-800 font-medium truncate max-w-[200px]">
                           {c.customer_name || c.customer_id}
                         </span>
                         {isHighConcentration && (
@@ -254,21 +254,21 @@ export default function ConcentrationTable() {
                     </td>
 
                     {/* Revenue */}
-                    <td className="px-4 py-2.5 text-right text-gray-300 font-medium">
+                    <td className="px-4 py-2.5 text-right text-slate-700 font-medium">
                       {fmtKpiValueCompact(c.revenue, 'usd')}
                     </td>
 
                     {/* Percent of total with bar */}
                     <td className="px-4 py-2.5">
                       <div className="flex items-center gap-2">
-                        <div className="flex-1 h-1.5 bg-white/5 rounded-full overflow-hidden">
+                        <div className="flex-1 h-1.5 bg-slate-50 rounded-full overflow-hidden">
                           <div
                             className={`h-full rounded-full ${pctBarColor(c.pct_of_total ?? 0)}`}
                             style={{ width: `${Math.min((c.pct_of_total ?? 0) * 2, 100)}%` }}
                           />
                         </div>
                         <span className={`text-xs font-medium shrink-0 w-12 text-right ${
-                          isHighConcentration ? 'text-red-400' : 'text-gray-400'
+                          isHighConcentration ? 'text-red-400' : 'text-slate-500'
                         }`}>
                           {(c.pct_of_total ?? 0).toFixed(1)}%
                         </span>
@@ -290,11 +290,11 @@ export default function ConcentrationTable() {
       </div>
 
       {/* HHI explanation footer */}
-      <div className="bg-[#1a1f2e] border border-white/8 rounded-xl px-5 py-3">
+      <div className="bg-white border border-slate-200 rounded-xl px-5 py-3">
         <div className="flex items-start gap-2">
-          <BarChart3 size={13} className="text-gray-500 mt-0.5 shrink-0" />
-          <div className="text-[10px] text-gray-500 leading-relaxed">
-            <span className="font-semibold text-gray-400">HHI (Herfindahl-Hirschman Index)</span>
+          <BarChart3 size={13} className="text-slate-500 mt-0.5 shrink-0" />
+          <div className="text-[10px] text-slate-500 leading-relaxed">
+            <span className="font-semibold text-slate-500">HHI (Herfindahl-Hirschman Index)</span>
             {' '}measures market concentration. Below 1,500 = low concentration,
             1,500-2,500 = moderate, above 2,500 = high.
             Rows highlighted in red indicate customers exceeding the 10% SEC disclosure threshold.

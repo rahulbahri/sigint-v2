@@ -12,11 +12,11 @@ function fmtLeverValue(val) {
 }
 
 function leverColor(val) {
-  if (val == null) return 'text-gray-500'
+  if (val == null) return 'text-slate-500'
   const n = Number(val)
   if (n > 0) return 'text-emerald-400'
   if (n < 0) return 'text-red-400'
-  return 'text-gray-400'
+  return 'text-slate-500'
 }
 
 // ── Scenario selection checkbox ────────────────────────────────────────────
@@ -25,10 +25,10 @@ function ScenarioCheckbox({ scenario, checked, disabled, onChange }) {
     <label
       className={`flex items-center gap-2.5 px-3 py-2.5 rounded-lg border transition-colors cursor-pointer ${
         checked
-          ? 'bg-[#0055A4]/15 border-[#0055A4]/40 text-white'
+          ? 'bg-[#0055A4]/15 border-[#0055A4]/40 text-slate-800'
           : disabled
-          ? 'bg-white/2 border-white/5 text-gray-600 cursor-not-allowed'
-          : 'bg-white/3 border-white/8 text-gray-400 hover:border-white/15'
+          ? 'bg-slate-50/50 border-slate-100 text-slate-500 cursor-not-allowed'
+          : 'bg-slate-50 border-white/8 text-slate-500 hover:border-slate-200'
       }`}
     >
       <input
@@ -41,14 +41,14 @@ function ScenarioCheckbox({ scenario, checked, disabled, onChange }) {
       <span className={`w-4 h-4 rounded border flex items-center justify-center shrink-0 ${
         checked
           ? 'bg-[#0055A4] border-[#0055A4]'
-          : 'border-white/20 bg-transparent'
+          : 'border-slate-200 bg-transparent'
       }`}>
-        {checked && <Check size={10} className="text-white" />}
+        {checked && <Check size={10} className="text-slate-800" />}
       </span>
       <div className="min-w-0">
         <p className="text-sm font-medium truncate">{scenario.name}</p>
         {scenario.notes && (
-          <p className="text-[10px] text-gray-500 truncate mt-0.5">{scenario.notes}</p>
+          <p className="text-[10px] text-slate-500 truncate mt-0.5">{scenario.notes}</p>
         )}
       </div>
     </label>
@@ -127,14 +127,14 @@ export default function ScenarioComparison() {
   // ── Empty state ──────────────────────────────────────────────────────────
   if (scenarios.length === 0) return (
     <div className="p-6 max-w-5xl mx-auto space-y-5">
-      <h2 className="text-white text-xl font-semibold flex items-center gap-2">
+      <h2 className="text-slate-800 text-xl font-semibold flex items-center gap-2">
         <GitCompare size={20} className="text-[#0055A4]" />
         Scenario Comparison
       </h2>
-      <div className="bg-[#1a1f2e] border border-white/8 rounded-2xl p-12 text-center">
-        <AlertTriangle size={32} className="text-gray-600 mx-auto mb-3" />
-        <p className="text-gray-400 text-sm font-semibold">No saved scenarios</p>
-        <p className="text-gray-500 text-xs mt-1">Create scenarios in the Scenario Planner to compare them here.</p>
+      <div className="bg-white border border-slate-200 rounded-2xl p-12 text-center">
+        <AlertTriangle size={32} className="text-slate-500 mx-auto mb-3" />
+        <p className="text-slate-500 text-sm font-semibold">No saved scenarios</p>
+        <p className="text-slate-500 text-xs mt-1">Create scenarios in the Scenario Planner to compare them here.</p>
       </div>
     </div>
   )
@@ -147,35 +147,35 @@ export default function ScenarioComparison() {
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h2 className="text-white text-xl font-semibold flex items-center gap-2">
+          <h2 className="text-slate-800 text-xl font-semibold flex items-center gap-2">
             <GitCompare size={20} className="text-[#0055A4]" />
             Scenario Comparison
           </h2>
-          <p className="text-gray-400 text-sm mt-1">
+          <p className="text-slate-500 text-sm mt-1">
             Select 2\u20134 scenarios to compare lever adjustments side by side
           </p>
         </div>
         <button
           onClick={loadScenarios}
-          className="flex items-center gap-1.5 px-3 py-1.5 text-xs text-gray-400 hover:text-white bg-white/5 hover:bg-white/10 rounded-lg transition-colors"
+          className="flex items-center gap-1.5 px-3 py-1.5 text-xs text-slate-500 hover:text-slate-800 bg-slate-50 hover:bg-slate-100 rounded-lg transition-colors"
         >
           <RefreshCw size={12} /> Refresh
         </button>
       </div>
 
       {/* Scenario selector */}
-      <div className="bg-[#1a1f2e] border border-white/8 rounded-2xl p-5">
+      <div className="bg-white border border-slate-200 rounded-2xl p-5">
         <button
           onClick={() => setExpanded(e => !e)}
           className="flex items-center justify-between w-full text-left"
         >
           <div>
-            <h3 className="text-white text-sm font-semibold">Select Scenarios</h3>
-            <p className="text-gray-500 text-xs mt-0.5">
+            <h3 className="text-slate-800 text-sm font-semibold">Select Scenarios</h3>
+            <p className="text-slate-500 text-xs mt-0.5">
               {selected.length} of {scenarios.length} selected (min 2, max 4)
             </p>
           </div>
-          {expanded ? <ChevronUp size={16} className="text-gray-500" /> : <ChevronDown size={16} className="text-gray-500" />}
+          {expanded ? <ChevronUp size={16} className="text-slate-500" /> : <ChevronDown size={16} className="text-slate-500" />}
         </button>
 
         {expanded && (
@@ -195,32 +195,32 @@ export default function ScenarioComparison() {
 
       {/* Comparison table */}
       {selected.length < 2 && (
-        <div className="bg-white/3 border border-white/5 rounded-xl px-4 py-8 text-center">
-          <p className="text-gray-500 text-sm">Select at least 2 scenarios to see the comparison table.</p>
+        <div className="bg-slate-50 border border-slate-100 rounded-xl px-4 py-8 text-center">
+          <p className="text-slate-500 text-sm">Select at least 2 scenarios to see the comparison table.</p>
         </div>
       )}
 
       {comparing && (
         <div className="flex items-center justify-center h-32">
           <RefreshCw size={18} className="animate-spin text-[#0055A4]" />
-          <span className="text-gray-400 text-sm ml-2">Loading comparison...</span>
+          <span className="text-slate-500 text-sm ml-2">Loading comparison...</span>
         </div>
       )}
 
       {!comparing && compRows.length > 0 && (
-        <div className="bg-[#1a1f2e] border border-white/8 rounded-2xl overflow-hidden">
-          <div className="p-4 border-b border-white/5">
-            <h3 className="text-white text-sm font-semibold">Lever Comparison</h3>
+        <div className="bg-white border border-slate-200 rounded-2xl overflow-hidden">
+          <div className="p-4 border-b border-slate-100">
+            <h3 className="text-slate-800 text-sm font-semibold">Lever Comparison</h3>
           </div>
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
-                <tr className="border-b border-white/5">
-                  <th className="text-left px-4 py-3 text-gray-400 font-medium text-xs uppercase tracking-wider">
+                <tr className="border-b border-slate-100">
+                  <th className="text-left px-4 py-3 text-slate-500 font-medium text-xs uppercase tracking-wider">
                     Lever
                   </th>
                   {compScenarios.map(s => (
-                    <th key={s.id} className="text-center px-4 py-3 text-gray-400 font-medium text-xs uppercase tracking-wider">
+                    <th key={s.id} className="text-center px-4 py-3 text-slate-500 font-medium text-xs uppercase tracking-wider">
                       {s.name}
                     </th>
                   ))}
@@ -231,8 +231,8 @@ export default function ScenarioComparison() {
                   // Extract scenario values dynamically
                   const scenarioKeys = compScenarios.map(s => `scenario_${s.id}`)
                   return (
-                    <tr key={i} className={`border-b border-white/3 ${i % 2 === 0 ? 'bg-white/[0.01]' : ''}`}>
-                      <td className="px-4 py-3 text-gray-300 font-medium">
+                    <tr key={i} className={`border-b border-slate-50 ${i % 2 === 0 ? 'bg-white/[0.01]' : ''}`}>
+                      <td className="px-4 py-3 text-slate-700 font-medium">
                         {(row.lever || '').replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())}
                       </td>
                       {scenarioKeys.map((key, j) => {
@@ -252,12 +252,12 @@ export default function ScenarioComparison() {
 
           {/* Scenario notes */}
           {compScenarios.some(s => s.notes) && (
-            <div className="p-4 border-t border-white/5 space-y-2">
-              <p className="text-gray-500 text-xs font-medium uppercase tracking-wider">Notes</p>
+            <div className="p-4 border-t border-slate-100 space-y-2">
+              <p className="text-slate-500 text-xs font-medium uppercase tracking-wider">Notes</p>
               {compScenarios.filter(s => s.notes).map(s => (
                 <div key={s.id} className="flex items-start gap-2 text-xs">
                   <span className="text-[#0055A4] font-semibold shrink-0">{s.name}:</span>
-                  <span className="text-gray-400">{s.notes}</span>
+                  <span className="text-slate-500">{s.notes}</span>
                 </div>
               ))}
             </div>

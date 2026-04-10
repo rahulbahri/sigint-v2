@@ -28,10 +28,10 @@ function Ro40Tooltip({ active, payload }) {
   if (!d) return null
   const score = (d.x + d.y).toFixed(1)
   return (
-    <div className="bg-[#232839] border border-white/10 rounded-lg px-3 py-2 shadow-xl text-xs">
-      <p className="text-white font-semibold mb-1">{d.label}</p>
-      <p className="text-gray-400">Revenue Growth: <span className="text-white">{d.x.toFixed(1)}%</span></p>
-      <p className="text-gray-400">EBITDA Margin: <span className="text-white">{d.y.toFixed(1)}%</span></p>
+    <div className="bg-white border border-slate-200 rounded-lg px-3 py-2 shadow-xl text-xs">
+      <p className="text-slate-800 font-semibold mb-1">{d.label}</p>
+      <p className="text-slate-500">Revenue Growth: <span className="text-slate-800">{d.x.toFixed(1)}%</span></p>
+      <p className="text-slate-500">EBITDA Margin: <span className="text-slate-800">{d.y.toFixed(1)}%</span></p>
       <p className={`mt-1 font-semibold ${Number(score) >= 40 ? 'text-emerald-400' : 'text-red-400'}`}>
         Score: {score}
       </p>
@@ -130,14 +130,14 @@ export default function RuleOf40() {
   // ── Empty state ──────────────────────────────────────────────────────────
   if (points.length === 0) return (
     <div className="p-6 max-w-4xl mx-auto space-y-5">
-      <h2 className="text-white text-xl font-semibold flex items-center gap-2">
+      <h2 className="text-slate-800 text-xl font-semibold flex items-center gap-2">
         <Target size={20} className="text-[#0055A4]" />
         Rule of 40
       </h2>
-      <div className="bg-[#1a1f2e] border border-white/8 rounded-2xl p-12 text-center">
-        <AlertTriangle size={32} className="text-gray-600 mx-auto mb-3" />
-        <p className="text-gray-400 text-sm font-semibold">Insufficient data for Rule of 40 analysis</p>
-        <p className="text-gray-500 text-xs mt-1">
+      <div className="bg-white border border-slate-200 rounded-2xl p-12 text-center">
+        <AlertTriangle size={32} className="text-slate-500 mx-auto mb-3" />
+        <p className="text-slate-500 text-sm font-semibold">Insufficient data for Rule of 40 analysis</p>
+        <p className="text-slate-500 text-xs mt-1">
           Both revenue growth and EBITDA margin are required in monthly KPI data.
         </p>
       </div>
@@ -160,28 +160,28 @@ export default function RuleOf40() {
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h2 className="text-white text-xl font-semibold flex items-center gap-2">
+          <h2 className="text-slate-800 text-xl font-semibold flex items-center gap-2">
             <Target size={20} className="text-[#0055A4]" />
             Rule of 40
           </h2>
-          <p className="text-gray-400 text-sm mt-1">
+          <p className="text-slate-500 text-sm mt-1">
             Revenue Growth % + EBITDA Margin % &ge; 40 indicates a healthy SaaS business
           </p>
         </div>
         <button
           onClick={load}
-          className="flex items-center gap-1.5 px-3 py-1.5 text-xs text-gray-400 hover:text-white bg-white/5 hover:bg-white/10 rounded-lg transition-colors"
+          className="flex items-center gap-1.5 px-3 py-1.5 text-xs text-slate-500 hover:text-slate-800 bg-slate-50 hover:bg-slate-100 rounded-lg transition-colors"
         >
           <RefreshCw size={12} /> Refresh
         </button>
       </div>
 
       {/* Scatter chart */}
-      <div className="bg-[#1a1f2e] border border-white/8 rounded-2xl p-5">
+      <div className="bg-white border border-slate-200 rounded-2xl p-5">
         <div className="flex items-center justify-between mb-4">
           <div>
-            <h3 className="text-white text-sm font-semibold">Monthly Scatter</h3>
-            <p className="text-gray-500 text-xs mt-0.5">
+            <h3 className="text-slate-800 text-sm font-semibold">Monthly Scatter</h3>
+            <p className="text-slate-500 text-xs mt-0.5">
               Dashed line = Rule of 40 threshold. Green dots pass, red dots fail.
             </p>
           </div>
@@ -243,45 +243,45 @@ export default function RuleOf40() {
 
       {/* Summary cards */}
       <div className="grid grid-cols-3 gap-4">
-        <div className="bg-[#1a1f2e] border border-white/8 rounded-xl p-5 text-center">
+        <div className="bg-white border border-slate-200 rounded-xl p-5 text-center">
           <div className={`text-3xl font-bold ${
             latestScore != null && latestScore >= 40 ? 'text-emerald-400' : 'text-red-400'
           }`}>
             {latestScore != null ? latestScore.toFixed(1) : '\u2014'}
           </div>
-          <div className="text-gray-400 text-xs mt-1.5 uppercase tracking-wider font-medium">
+          <div className="text-slate-500 text-xs mt-1.5 uppercase tracking-wider font-medium">
             Latest Score
           </div>
           {latest && (
-            <div className="text-gray-500 text-[10px] mt-0.5">{latest.label}</div>
+            <div className="text-slate-500 text-[10px] mt-0.5">{latest.label}</div>
           )}
         </div>
 
-        <div className="bg-[#1a1f2e] border border-white/8 rounded-xl p-5 text-center">
-          <div className="text-3xl font-bold text-white">40</div>
-          <div className="text-gray-400 text-xs mt-1.5 uppercase tracking-wider font-medium">
+        <div className="bg-white border border-slate-200 rounded-xl p-5 text-center">
+          <div className="text-3xl font-bold text-slate-800">40</div>
+          <div className="text-slate-500 text-xs mt-1.5 uppercase tracking-wider font-medium">
             Benchmark
           </div>
-          <div className="text-gray-500 text-[10px] mt-0.5">Growth % + Margin %</div>
+          <div className="text-slate-500 text-[10px] mt-0.5">Growth % + Margin %</div>
         </div>
 
-        <div className="bg-[#1a1f2e] border border-white/8 rounded-xl p-5 text-center">
+        <div className="bg-white border border-slate-200 rounded-xl p-5 text-center">
           <div className="flex items-center justify-center gap-1.5">
             {trajectory === 'improving' && <TrendingUp size={20} className="text-emerald-400" />}
             {trajectory === 'declining' && <TrendingDown size={20} className="text-red-400" />}
             <span className={`text-xl font-bold ${
               trajectory === 'improving' ? 'text-emerald-400'
                 : trajectory === 'declining' ? 'text-red-400'
-                : 'text-gray-400'
+                : 'text-slate-500'
             }`}>
               {trajectory ? trajectory.charAt(0).toUpperCase() + trajectory.slice(1) : '\u2014'}
             </span>
           </div>
-          <div className="text-gray-400 text-xs mt-1.5 uppercase tracking-wider font-medium">
+          <div className="text-slate-500 text-xs mt-1.5 uppercase tracking-wider font-medium">
             Trajectory
           </div>
           {latestScore != null && prevScore != null && (
-            <div className="text-gray-500 text-[10px] mt-0.5">
+            <div className="text-slate-500 text-[10px] mt-0.5">
               {(latestScore - prevScore) >= 0 ? '+' : ''}{(latestScore - prevScore).toFixed(1)} vs prior month
             </div>
           )}

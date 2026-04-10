@@ -22,15 +22,15 @@ const C_GRID       = 'rgba(255,255,255,0.06)'
 function BridgeTooltip({ active, payload, label }) {
   if (!active || !payload?.length) return null
   return (
-    <div className="bg-[#0f1219] border border-white/10 rounded-lg px-4 py-3 shadow-xl text-xs">
-      <p className="text-white font-semibold mb-2">{label}</p>
+    <div className="bg-white border border-slate-200 rounded-lg px-4 py-3 shadow-xl text-xs">
+      <p className="text-slate-800 font-semibold mb-2">{label}</p>
       {payload.map((entry, i) => (
         <div key={i} className="flex items-center justify-between gap-4 py-0.5">
           <span className="flex items-center gap-1.5">
             <span className="w-2 h-2 rounded-full shrink-0" style={{ background: entry.color }} />
-            <span className="text-gray-400">{entry.name}</span>
+            <span className="text-slate-500">{entry.name}</span>
           </span>
-          <span className="text-white font-medium">{fmtKpiValueCompact(entry.value, 'usd')}</span>
+          <span className="text-slate-800 font-medium">{fmtKpiValueCompact(entry.value, 'usd')}</span>
         </div>
       ))}
     </div>
@@ -40,10 +40,10 @@ function BridgeTooltip({ active, payload, label }) {
 // ─── Summary Card ───────────────────────────────────────────────────────────
 function SummaryCard({ label, value, color, icon: Icon }) {
   return (
-    <div className="bg-[#1a1f2e] border border-white/8 rounded-xl px-4 py-3 text-center">
+    <div className="bg-white border border-slate-200 rounded-xl px-4 py-3 text-center">
       <div className="flex items-center justify-center gap-1.5 mb-1">
         {Icon && <Icon size={12} className={color} />}
-        <p className="text-[10px] text-gray-400 uppercase tracking-wider">{label}</p>
+        <p className="text-[10px] text-slate-500 uppercase tracking-wider">{label}</p>
       </div>
       <p className={`text-xl font-bold ${color}`}>{fmtKpiValueCompact(value, 'usd')}</p>
     </div>
@@ -90,14 +90,14 @@ export default function ArrBridge() {
   if (!data?.periods?.length) {
     return (
       <div className="p-6 max-w-4xl mx-auto space-y-5">
-        <h2 className="text-white text-xl font-semibold flex items-center gap-2">
+        <h2 className="text-slate-800 text-xl font-semibold flex items-center gap-2">
           <BarChart3 size={18} className="text-[#0055A4]" />
           ARR Bridge
         </h2>
-        <div className="bg-[#1a1f2e] border border-white/8 rounded-2xl p-10 text-center">
-          <DollarSign size={28} className="text-gray-600 mx-auto mb-2" />
-          <p className="text-white text-sm font-semibold">No revenue data available</p>
-          <p className="text-gray-500 text-xs mt-1">
+        <div className="bg-white border border-slate-200 rounded-2xl p-10 text-center">
+          <DollarSign size={28} className="text-slate-500 mx-auto mb-2" />
+          <p className="text-slate-800 text-sm font-semibold">No revenue data available</p>
+          <p className="text-slate-500 text-xs mt-1">
             Upload subscription data with customer IDs to enable ARR bridge analysis.
           </p>
         </div>
@@ -124,11 +124,11 @@ export default function ArrBridge() {
     <div className="p-6 max-w-5xl mx-auto space-y-5">
       {/* Header */}
       <div>
-        <h2 className="text-white text-xl font-semibold flex items-center gap-2">
+        <h2 className="text-slate-800 text-xl font-semibold flex items-center gap-2">
           <BarChart3 size={18} className="text-[#0055A4]" />
           ARR Bridge
         </h2>
-        <p className="text-gray-400 text-sm mt-1">
+        <p className="text-slate-500 text-sm mt-1">
           Waterfall view of ARR movements across periods — new, expansion, contraction, and churn.
         </p>
       </div>
@@ -168,8 +168,8 @@ export default function ArrBridge() {
       </div>
 
       {/* Waterfall chart */}
-      <div className="bg-[#1a1f2e] border border-white/8 rounded-2xl p-5">
-        <h3 className="text-[11px] font-bold text-gray-400 uppercase tracking-wider mb-4">
+      <div className="bg-white border border-slate-200 rounded-2xl p-5">
+        <h3 className="text-[11px] font-bold text-slate-500 uppercase tracking-wider mb-4">
           ARR Movement by Period
         </h3>
         <div className="h-80">
@@ -248,18 +248,18 @@ export default function ArrBridge() {
       </div>
 
       {/* Period detail table */}
-      <div className="bg-[#1a1f2e] border border-white/8 rounded-2xl overflow-hidden">
-        <div className="px-5 py-3 border-b border-white/5">
-          <h3 className="text-[11px] font-bold text-gray-400 uppercase tracking-wider">
+      <div className="bg-white border border-slate-200 rounded-2xl overflow-hidden">
+        <div className="px-5 py-3 border-b border-slate-100">
+          <h3 className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">
             Period Detail
           </h3>
         </div>
         <div className="overflow-x-auto">
           <table className="w-full text-xs">
             <thead>
-              <tr className="border-b border-white/5">
+              <tr className="border-b border-slate-100">
                 {['Period', 'Beginning ARR', 'New', 'Expansion', 'Contraction', 'Churned', 'Net New', 'Ending ARR'].map(h => (
-                  <th key={h} className="px-4 py-2.5 text-left text-[10px] font-semibold text-gray-500 uppercase tracking-wider">
+                  <th key={h} className="px-4 py-2.5 text-left text-[10px] font-semibold text-slate-500 uppercase tracking-wider">
                     {h}
                   </th>
                 ))}
@@ -267,9 +267,9 @@ export default function ArrBridge() {
             </thead>
             <tbody>
               {periods.map((p, i) => (
-                <tr key={i} className="border-b border-white/3 hover:bg-white/3 transition-colors">
-                  <td className="px-4 py-2.5 text-white font-medium">{p.period}</td>
-                  <td className="px-4 py-2.5 text-gray-300">{fmtKpiValueCompact(p.beginning_arr, 'usd')}</td>
+                <tr key={i} className="border-b border-slate-50 hover:bg-slate-50 transition-colors">
+                  <td className="px-4 py-2.5 text-slate-800 font-medium">{p.period}</td>
+                  <td className="px-4 py-2.5 text-slate-700">{fmtKpiValueCompact(p.beginning_arr, 'usd')}</td>
                   <td className="px-4 py-2.5 text-green-400 font-medium">{fmtKpiValueCompact(p.new_arr, 'usd')}</td>
                   <td className="px-4 py-2.5 text-teal-400 font-medium">{fmtKpiValueCompact(p.expansion_arr, 'usd')}</td>
                   <td className="px-4 py-2.5 text-orange-400 font-medium">{fmtKpiValueCompact(p.contraction_arr, 'usd')}</td>
@@ -277,7 +277,7 @@ export default function ArrBridge() {
                   <td className={`px-4 py-2.5 font-medium ${(p.net_new_arr ?? 0) >= 0 ? 'text-green-400' : 'text-red-400'}`}>
                     {fmtKpiValueCompact(p.net_new_arr, 'usd')}
                   </td>
-                  <td className="px-4 py-2.5 text-white font-semibold">{fmtKpiValueCompact(p.ending_arr, 'usd')}</td>
+                  <td className="px-4 py-2.5 text-slate-800 font-semibold">{fmtKpiValueCompact(p.ending_arr, 'usd')}</td>
                 </tr>
               ))}
             </tbody>

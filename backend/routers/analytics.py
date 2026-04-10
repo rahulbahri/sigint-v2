@@ -2234,13 +2234,18 @@ async def arr_bridge(request: Request, from_year: int = 0, from_month: int = 1,
     workspace_id = _get_workspace(request)
     conn = get_db()
     try:
-        # Get all revenue records with customer_id and period
-        rows = conn.execute(
-            "SELECT customer_id, period, amount, subscription_type "
-            "FROM canonical_revenue WHERE workspace_id=? AND amount IS NOT NULL "
-            "ORDER BY period",
-            [workspace_id],
-        ).fetchall()
+        # Build period filter
+        sql = ("SELECT customer_id, period, amount, subscription_type "
+               "FROM canonical_revenue WHERE workspace_id=? AND amount IS NOT NULL")
+        args: list = [workspace_id]
+        if from_year > 0:
+            sql += " AND period >= ?"
+            args.append(f"{from_year}-{from_month:02d}")
+        if to_year > 0:
+            sql += " AND period <= ?"
+            args.append(f"{to_year}-{to_month:02d}")
+        sql += " ORDER BY period"
+        rows = conn.execute(sql, args).fetchall()
     except Exception:
         rows = []
     conn.close()
@@ -2310,16 +2315,23 @@ async def arr_bridge(request: Request, from_year: int = 0, from_month: int = 1,
 
 
 @router.get("/api/analytics/cohort-retention", tags=["Analytics"])
-async def cohort_retention(request: Request, metric: str = "revenue"):
+async def cohort_retention(request: Request, metric: str = "revenue",
+                           from_year: int = 0, from_month: int = 1,
+                           to_year: int = 0, to_month: int = 12):
     """Cohort Revenue/Count Retention Matrix — vintage analysis."""
     workspace_id = _get_workspace(request)
     conn = get_db()
     try:
-        rev_rows = conn.execute(
-            "SELECT customer_id, period, amount FROM canonical_revenue "
-            "WHERE workspace_id=? AND customer_id IS NOT NULL AND amount IS NOT NULL",
-            [workspace_id],
-        ).fetchall()
+        sql = ("SELECT customer_id, period, amount FROM canonical_revenue "
+               "WHERE workspace_id=? AND customer_id IS NOT NULL AND amount IS NOT NULL")
+        args: list = [workspace_id]
+        if from_year > 0:
+            sql += " AND period >= ?"
+            args.append(f"{from_year}-{from_month:02d}")
+        if to_year > 0:
+            sql += " AND period <= ?"
+            args.append(f"{to_year}-{to_month:02d}")
+        rev_rows = conn.execute(sql, args).fetchall()
     except Exception:
         rev_rows = []
     conn.close()
@@ -2378,7 +2390,9 @@ async def cohort_retention(request: Request, metric: str = "revenue"):
 
 
 @router.get("/api/analytics/customer-concentration", tags=["Analytics"])
-async def customer_concentration(request: Request, top_n: int = 10, period: str = "latest"):
+async def customer_concentration(request: Request, top_n: int = 10, period: str = "latest",
+                                  from_year: int = 0, from_month: int = 1,
+                                  to_year: int = 0, to_month: int = 12):
     """Top-N Customer Concentration — SEC disclosure trigger at 10%."""
     workspace_id = _get_workspace(request)
     conn = get_db()
@@ -2451,7 +2465,8 @@ async def customer_concentration(request: Request, top_n: int = 10, period: str 
 
 
 @router.get("/api/analytics/margin-decomposition", tags=["Analytics"])
-async def margin_decomposition(request: Request):
+async def margin_decomposition(request: Request, from_year: int = 0, from_month: int = 1,
+                                to_year: int = 0, to_month: int = 12):
     """Gross Margin Decomposition — breaks down COGS components over time."""
     workspace_id = _get_workspace(request)
     conn = get_db()
@@ -2459,18 +2474,28 @@ async def margin_decomposition(request: Request):
     _COGS_KEYWORDS = {"cogs", "cost of goods", "cost of revenue", "hosting",
                       "infrastructure", "direct", "support", "implementation"}
 
+    # Build period filter clause
+    _pf = ""
+    _pa: list = []
+    if from_year > 0:
+        _pf += " AND period >= ?"
+        _pa.append(f"{from_year}-{from_month:02d}")
+    if to_year > 0:
+        _pf += " AND period <= ?"
+        _pa.append(f"{to_year}-{to_month:02d}")
+
     try:
         exp_rows = conn.execute(
             "SELECT period, category, SUM(amount) as total "
-            "FROM canonical_expenses WHERE workspace_id=? AND amount IS NOT NULL "
-            "GROUP BY period, category ORDER BY period",
-            [workspace_id],
+            "FROM canonical_expenses WHERE workspace_id=? AND amount IS NOT NULL"
+            + _pf + " GROUP BY period, category ORDER BY period",
+            [workspace_id] + _pa,
         ).fetchall()
         rev_rows = conn.execute(
             "SELECT period, SUM(amount) as total "
-            "FROM canonical_revenue WHERE workspace_id=? AND amount IS NOT NULL "
-            "GROUP BY period ORDER BY period",
-            [workspace_id],
+            "FROM canonical_revenue WHERE workspace_id=? AND amount IS NOT NULL"
+            + _pf + " GROUP BY period ORDER BY period",
+            [workspace_id] + _pa,
         ).fetchall()
     except Exception:
         exp_rows, rev_rows = [], []
@@ -2519,7 +2544,8 @@ async def margin_decomposition(request: Request):
 
 
 @router.get("/api/analytics/cash-waterfall", tags=["Analytics"])
-async def cash_waterfall(request: Request):
+async def cash_waterfall(request: Request, from_year: int = 0, from_month: int = 1,
+                         to_year: int = 0, to_month: int = 12):
     """Cash Burn Waterfall — Opening Cash → Inflows → Outflows → Closing Cash."""
     workspace_id = _get_workspace(request)
     conn = get_db()
@@ -2597,7 +2623,8 @@ async def cash_waterfall(request: Request):
 
 
 @router.get("/api/analytics/unit-economics", tags=["Analytics"])
-async def unit_economics(request: Request):
+async def unit_economics(request: Request, from_year: int = 0, from_month: int = 1,
+                         to_year: int = 0, to_month: int = 12):
     """Unit Economics Waterfall — per-customer profitability decomposition."""
     workspace_id = _get_workspace(request)
     conn = get_db()

@@ -13,3 +13,4 @@ frontend/node_modules/
 
 # Keep frontend/dist (Railway needs it pre-built)
 # Keep backend/uploads/axiom.db (seeds demo data on first run anyway)
+.github/
