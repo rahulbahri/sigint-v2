@@ -103,7 +103,7 @@ export default function CohortMatrix() {
           {metric === 'revenue' ? (
             <ToggleRight size={16} className="text-[#0055A4]" />
           ) : (
-            <ToggleLeft size={16} className="text-gray-500" />
+            <ToggleLeft size={16} className="text-slate-500" />
           )}
           {metric === 'revenue' ? 'Revenue' : 'Customer Count'}
         </button>

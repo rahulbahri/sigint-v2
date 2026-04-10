@@ -28,7 +28,7 @@ function ScenarioCheckbox({ scenario, checked, disabled, onChange }) {
           ? 'bg-[#0055A4]/15 border-[#0055A4]/40 text-slate-800'
           : disabled
           ? 'bg-slate-50/50 border-slate-100 text-slate-500 cursor-not-allowed'
-          : 'bg-slate-50 border-white/8 text-slate-500 hover:border-slate-200'
+          : 'bg-slate-50 border-slate-200 text-slate-500 hover:border-slate-300'
       }`}
     >
       <input
@@ -43,7 +43,7 @@ function ScenarioCheckbox({ scenario, checked, disabled, onChange }) {
           ? 'bg-[#0055A4] border-[#0055A4]'
           : 'border-slate-200 bg-transparent'
       }`}>
-        {checked && <Check size={10} className="text-slate-800" />}
+        {checked && <Check size={10} className="text-white" />}
       </span>
       <div className="min-w-0">
         <p className="text-sm font-medium truncate">{scenario.name}</p>
@@ -231,7 +231,7 @@ export default function ScenarioComparison() {
                   // Extract scenario values dynamically
                   const scenarioKeys = compScenarios.map(s => `scenario_${s.id}`)
                   return (
-                    <tr key={i} className={`border-b border-slate-50 ${i % 2 === 0 ? 'bg-white/[0.01]' : ''}`}>
+                    <tr key={i} className={`border-b border-slate-50 ${i % 2 === 0 ? 'bg-slate-50/50' : ''}`}>
                       <td className="px-4 py-3 text-slate-700 font-medium">
                         {(row.lever || '').replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())}
                       </td>

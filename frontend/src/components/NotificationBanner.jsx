@@ -57,17 +57,17 @@ export default function NotificationBanner({ onNavigate, source }) {
           <div key={n.id} className={`border rounded-lg px-4 py-3 flex items-start gap-3 ${bgClass}`}>
             <Icon size={18} className={`${iconClass} mt-0.5 flex-shrink-0`} />
             <div className="flex-1 min-w-0">
-              <p className="text-white text-sm font-medium">{n.title}</p>
-              <p className="text-gray-400 text-xs mt-0.5">{n.message}</p>
+              <p className="text-slate-800 text-sm font-medium">{n.title}</p>
+              <p className="text-slate-500 text-xs mt-0.5">{n.message}</p>
               {data.blocked_kpis && data.blocked_kpis.length > 0 && (
                 <div className="flex flex-wrap gap-1 mt-1.5">
                   {data.blocked_kpis.slice(0, 5).map(kpi => (
-                    <span key={kpi} className="text-[10px] bg-white/5 text-gray-300 px-1.5 py-0.5 rounded">
+                    <span key={kpi} className="text-[10px] bg-slate-50 text-slate-700 px-1.5 py-0.5 rounded">
                       {kpi}
                     </span>
                   ))}
                   {data.blocked_kpis.length > 5 && (
-                    <span className="text-[10px] text-gray-500">+{data.blocked_kpis.length - 5} more</span>
+                    <span className="text-[10px] text-slate-500">+{data.blocked_kpis.length - 5} more</span>
                   )}
                 </div>
               )}
@@ -76,15 +76,15 @@ export default function NotificationBanner({ onNavigate, source }) {
               {onNavigate && (
                 <button
                   onClick={() => onNavigate('field-mapping')}
-                  className="flex items-center gap-1 px-2.5 py-1 text-xs bg-[#00AEEF]/20 text-[#00AEEF]
-                    rounded-lg hover:bg-[#00AEEF]/30 transition-colors"
+                  className="flex items-center gap-1 px-2.5 py-1 text-xs bg-[#0055A4]/10 text-[#0055A4]
+                    rounded-lg hover:bg-[#0055A4]/20 transition-colors"
                 >
                   Review Mappings <ArrowRight size={12} />
                 </button>
               )}
               <button
                 onClick={() => dismiss(n.id)}
-                className="p-1 text-gray-500 hover:text-gray-300 transition-colors"
+                className="p-1 text-slate-500 hover:text-slate-700 transition-colors"
                 title="Dismiss"
               >
                 <X size={14} />

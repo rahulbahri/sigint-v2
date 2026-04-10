@@ -26,7 +26,7 @@ function ConfidencePill({ confidence, confirmed }) {
 }
 
 function KpiImpactPills({ kpis }) {
-  if (!kpis || kpis.length === 0) return <span className="text-xs text-gray-600">-</span>
+  if (!kpis || kpis.length === 0) return <span className="text-xs text-slate-500">-</span>
   return (
     <div className="flex flex-wrap gap-0.5">
       {kpis.slice(0, 3).map(k => (
@@ -35,7 +35,7 @@ function KpiImpactPills({ kpis }) {
         </span>
       ))}
       {kpis.length > 3 && (
-        <span className="text-[9px] text-gray-500">+{kpis.length - 3}</span>
+        <span className="text-[9px] text-slate-500">+{kpis.length - 3}</span>
       )}
     </div>
   )
@@ -58,20 +58,20 @@ function MappingRow({ mapping, onConfirm }) {
   }
 
   return (
-    <tr className={`border-b border-slate-100 ${isNew ? 'bg-cyan-400/5' : needsReview ? 'bg-yellow-400/3' : ''}`}>
+    <tr className={`border-b border-slate-100 ${isNew ? 'bg-blue-50' : needsReview ? 'bg-yellow-400/3' : ''}`}>
       <td className="px-4 py-3">
         <div className="flex items-center gap-1.5">
-          <span className="text-gray-300 text-sm font-mono">{mapping.source_field}</span>
+          <span className="text-slate-700 text-sm font-mono">{mapping.source_field}</span>
           {isNew && (
-            <span className="text-[9px] font-bold bg-cyan-400/20 text-cyan-400 px-1.5 py-0.5 rounded-full">NEW</span>
+            <span className="text-[9px] font-bold bg-blue-100 text-[#0055A4] px-1.5 py-0.5 rounded-full">NEW</span>
           )}
         </div>
       </td>
       <td className="px-4 py-3">
-        <span className="text-gray-500 text-xs">{mapping.source_name || mapping.source}</span>
+        <span className="text-slate-500 text-xs">{mapping.source_name || mapping.source}</span>
       </td>
       <td className="px-4 py-3">
-        <span className="text-gray-500 text-xs">{mapping.canonical_table}</span>
+        <span className="text-slate-500 text-xs">{mapping.canonical_table}</span>
       </td>
       <td className="px-4 py-3">
         <div className="relative">
@@ -79,8 +79,8 @@ function MappingRow({ mapping, onConfirm }) {
             value={selected}
             onChange={e => setSelected(e.target.value)}
             disabled={mapping.confirmed_by_user}
-            className="appearance-none bg-white border border-slate-200 text-white text-xs
-              rounded-lg pl-3 pr-7 py-1.5 w-full outline-none focus:border-[#00AEEF]/50
+            className="appearance-none bg-white border border-slate-200 text-slate-800 text-xs
+              rounded-lg pl-3 pr-7 py-1.5 w-full outline-none focus:border-[#0055A4]/50
               disabled:opacity-60 disabled:cursor-default"
           >
             {ALL_CANONICAL_OPTIONS.map(opt => (
@@ -88,7 +88,7 @@ function MappingRow({ mapping, onConfirm }) {
             ))}
           </select>
           {!mapping.confirmed_by_user && (
-            <ChevronDown size={12} className="absolute right-2 top-2.5 text-gray-500 pointer-events-none"/>
+            <ChevronDown size={12} className="absolute right-2 top-2.5 text-slate-500 pointer-events-none"/>
           )}
         </div>
       </td>
@@ -125,11 +125,11 @@ function StagingSection({ sourceName, entities, onConfirm }) {
         onClick={() => setOpen(o => !o)}
         className="w-full flex items-center gap-3 px-4 py-3 hover:bg-slate-50 transition-colors"
       >
-        {open ? <ChevronDown size={14} className="text-gray-400"/> : <ChevronRight size={14} className="text-gray-400"/>}
-        <span className="text-white font-semibold text-sm capitalize">{sourceName}</span>
+        {open ? <ChevronDown size={14} className="text-slate-500"/> : <ChevronRight size={14} className="text-slate-500"/>}
+        <span className="text-slate-800 font-semibold text-sm capitalize">{sourceName}</span>
         <div className="flex items-center gap-2 ml-auto">
           {totalNew > 0 && (
-            <span className="text-[10px] font-bold bg-cyan-400/20 text-cyan-400 px-2 py-0.5 rounded-full">
+            <span className="text-[10px] font-bold bg-blue-100 text-[#0055A4] px-2 py-0.5 rounded-full">
               {totalNew} new
             </span>
           )}
@@ -143,13 +143,13 @@ function StagingSection({ sourceName, entities, onConfirm }) {
       {open && Object.entries(entities).map(([entityType, entity]) => (
         <div key={entityType} className="border-t border-slate-100">
           <div className="px-4 py-2 bg-slate-50/50">
-            <span className="text-gray-400 text-xs font-semibold uppercase tracking-wider">{entityType}</span>
+            <span className="text-slate-500 text-xs font-semibold uppercase tracking-wider">{entityType}</span>
           </div>
           <table className="w-full">
             <thead>
               <tr className="border-b border-slate-200">
                 {['Source Field','Source','Entity','Maps To','KPI Impact','Confidence',''].map(h => (
-                  <th key={h} className="px-4 py-2 text-left text-gray-500 text-[10px] font-semibold uppercase tracking-wider">
+                  <th key={h} className="px-4 py-2 text-left text-slate-500 text-[10px] font-semibold uppercase tracking-wider">
                     {h}
                   </th>
                 ))}
@@ -279,8 +279,8 @@ export default function FieldMappingPage() {
     <div className="p-6 max-w-5xl mx-auto">
       <div className="flex items-start justify-between mb-6">
         <div>
-          <h2 className="text-white text-xl font-semibold">Field Mappings</h2>
-          <p className="text-gray-400 text-sm mt-1">
+          <h2 className="text-slate-800 text-xl font-semibold">Field Mappings</h2>
+          <p className="text-slate-500 text-sm mt-1">
             Review how source fields map to canonical data fields. Confirm uncertain ones.
           </p>
         </div>
@@ -290,7 +290,7 @@ export default function FieldMappingPage() {
             <button
               onClick={() => setView('staging')}
               className={`px-3 py-1 text-xs rounded-md transition-colors ${
-                view === 'staging' ? 'bg-[#0055A4] text-white' : 'text-gray-400 hover:text-white'
+                view === 'staging' ? 'bg-[#0055A4] text-white' : 'text-slate-500 hover:text-slate-800'
               }`}
             >
               Staging
@@ -298,7 +298,7 @@ export default function FieldMappingPage() {
             <button
               onClick={() => setView('flat')}
               className={`px-3 py-1 text-xs rounded-md transition-colors ${
-                view === 'flat' ? 'bg-[#0055A4] text-white' : 'text-gray-400 hover:text-white'
+                view === 'flat' ? 'bg-[#0055A4] text-white' : 'text-slate-500 hover:text-slate-800'
               }`}
             >
               All Mappings
@@ -306,7 +306,7 @@ export default function FieldMappingPage() {
           </div>
           <button
             onClick={view === 'staging' ? loadStaging : loadFlat}
-            className="flex items-center gap-1.5 px-3 py-1.5 text-xs text-gray-400 bg-slate-50 hover:bg-slate-100 rounded-lg transition-colors"
+            className="flex items-center gap-1.5 px-3 py-1.5 text-xs text-slate-500 bg-slate-50 hover:bg-slate-100 rounded-lg transition-colors"
           >
             <RefreshCw size={12}/> Refresh
           </button>
@@ -321,27 +321,27 @@ export default function FieldMappingPage() {
               <span className={`font-bold ${qualityLabel === 'high' ? 'text-green-400' : qualityLabel === 'moderate' ? 'text-yellow-400' : 'text-red-400'}`}>
                 {qualityScore}%
               </span>
-              <span className="text-gray-500">mapping quality</span>
+              <span className="text-slate-500">mapping quality</span>
             </div>
             {staging.total_new > 0 && (
               <div className="flex items-center gap-2 text-sm">
-                <Sparkles size={14} className="text-cyan-400"/>
-                <span className="text-cyan-400 font-medium">{staging.total_new}</span>
-                <span className="text-gray-500">new field(s)</span>
+                <Sparkles size={14} className="text-[#0055A4]"/>
+                <span className="text-[#0055A4] font-medium">{staging.total_new}</span>
+                <span className="text-slate-500">new field(s)</span>
               </div>
             )}
             {staging.total_unmapped > 0 && (
               <div className="flex items-center gap-2 text-sm">
                 <AlertCircle size={14} className="text-yellow-400"/>
                 <span className="text-yellow-400 font-medium">{staging.total_unmapped}</span>
-                <span className="text-gray-500">unmapped</span>
+                <span className="text-slate-500">unmapped</span>
               </div>
             )}
             {staging.critical_unmapped > 0 && (
               <div className="flex items-center gap-2 text-sm">
                 <AlertCircle size={14} className="text-red-400"/>
                 <span className="text-red-400 font-medium">{staging.critical_unmapped}</span>
-                <span className="text-gray-500">critical</span>
+                <span className="text-slate-500">critical</span>
               </div>
             )}
             {staging.total_new === 0 && staging.total_unmapped === 0 && (
@@ -355,14 +355,14 @@ export default function FieldMappingPage() {
         {view === 'flat' && (
           <>
             <div className="flex items-center gap-2 text-sm">
-              <span className="text-white font-medium">{mappings.length}</span>
-              <span className="text-gray-500">total mappings</span>
+              <span className="text-slate-800 font-medium">{mappings.length}</span>
+              <span className="text-slate-500">total mappings</span>
             </div>
             {needsReview.length > 0 && (
               <div className="flex items-center gap-2 text-sm">
                 <AlertCircle size={14} className="text-yellow-400"/>
                 <span className="text-yellow-400 font-medium">{needsReview.length}</span>
-                <span className="text-gray-500">need your review</span>
+                <span className="text-slate-500">need your review</span>
               </div>
             )}
           </>
@@ -374,7 +374,7 @@ export default function FieldMappingPage() {
         <select
           value={filterSource}
           onChange={e => setFilter(e.target.value)}
-          className="bg-white border border-slate-200 text-gray-300 text-xs rounded-lg px-3 py-1.5 outline-none"
+          className="bg-white border border-slate-200 text-slate-700 text-xs rounded-lg px-3 py-1.5 outline-none"
         >
           <option value="">All sources</option>
           {(view === 'staging' ? stagingSources : sources).map(s => <option key={s} value={s}>{s}</option>)}
@@ -395,7 +395,7 @@ export default function FieldMappingPage() {
         {view === 'staging' && staging && staging.total_new > 0 && (
           <button
             onClick={handleMarkReviewed}
-            className="text-xs text-gray-400 hover:text-white transition-colors"
+            className="text-xs text-slate-500 hover:text-slate-800 transition-colors"
           >
             Mark all as reviewed
           </button>
@@ -415,8 +415,8 @@ export default function FieldMappingPage() {
       {view === 'staging' && staging && (
         <>
           {Object.keys(staging.sources || {}).length === 0 ? (
-            <div className="text-center py-16 text-gray-500">
-              <p className="text-white font-medium mb-1">No field mappings yet</p>
+            <div className="text-center py-16 text-slate-500">
+              <p className="text-slate-800 font-medium mb-1">No field mappings yet</p>
               <p className="text-sm">Connect a data source and run a sync to populate mappings.</p>
             </div>
           ) : (
@@ -436,8 +436,8 @@ export default function FieldMappingPage() {
       {view === 'flat' && (
         <>
           {mappings.length === 0 ? (
-            <div className="text-center py-16 text-gray-500">
-              <p className="text-white font-medium mb-1">No field mappings yet</p>
+            <div className="text-center py-16 text-slate-500">
+              <p className="text-slate-800 font-medium mb-1">No field mappings yet</p>
               <p className="text-sm">Connect a data source and run a sync to populate mappings.</p>
             </div>
           ) : (
@@ -446,7 +446,7 @@ export default function FieldMappingPage() {
                 <thead>
                   <tr className="border-b border-slate-200">
                     {['Source Field','Source','Entity','Maps To','KPI Impact','Confidence',''].map(h => (
-                      <th key={h} className="px-4 py-3 text-left text-gray-500 text-xs font-semibold uppercase tracking-wider">
+                      <th key={h} className="px-4 py-3 text-left text-slate-500 text-xs font-semibold uppercase tracking-wider">
                         {h}
                       </th>
                     ))}

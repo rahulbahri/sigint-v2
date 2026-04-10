@@ -8,7 +8,7 @@ import { fmtKpiValueCompact } from './kpiFormat'
 
 // ─── Color helpers ──────────────────────────────────────────────────────────
 function hhiColor(hhi) {
-  if (hhi == null) return 'text-gray-400'
+  if (hhi == null) return 'text-slate-500'
   if (hhi < 1500) return 'text-green-400'
   if (hhi < 2500) return 'text-yellow-400'
   return 'text-red-400'
@@ -57,7 +57,7 @@ function SecBadge({ breached }) {
   }
   return (
     <div className="bg-white border border-green-500/20 rounded-xl px-4 py-3 text-center">
-      <p className="text-[10px] text-gray-400 uppercase tracking-wider mb-1">SEC Threshold</p>
+      <p className="text-[10px] text-slate-500 uppercase tracking-wider mb-1">SEC Threshold</p>
       <div className="flex items-center justify-center gap-1.5">
         <CheckCircle2 size={14} className="text-green-400" />
         <p className="text-xl font-bold text-green-400">Clear</p>
@@ -233,7 +233,7 @@ export default function ConcentrationTable() {
                       <span className={`inline-flex items-center justify-center w-6 h-6 rounded-full text-[10px] font-bold ${
                         c.rank <= 3
                           ? 'bg-[#0055A4]/20 text-[#0055A4]'
-                          : 'bg-slate-50 text-gray-500'
+                          : 'bg-slate-50 text-slate-500'
                       }`}>
                         {c.rank}
                       </span>
@@ -279,7 +279,7 @@ export default function ConcentrationTable() {
                     <td className="px-4 py-2.5 text-center">
                       {c.trend === 'up' && <TrendingUp size={14} className="text-green-400 mx-auto" />}
                       {c.trend === 'down' && <TrendingDown size={14} className="text-red-400 mx-auto" />}
-                      {(!c.trend || c.trend === 'flat') && <Minus size={14} className="text-gray-500 mx-auto" />}
+                      {(!c.trend || c.trend === 'flat') && <Minus size={14} className="text-slate-500 mx-auto" />}
                     </td>
                   </tr>
                 )
