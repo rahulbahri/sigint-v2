@@ -70,7 +70,7 @@ function SummaryCard({ label, value, unit, color }) {
 }
 
 // ── Main component ─────────────────────────────────────────────────────────
-export default function UnitEconomics() {
+export default function UnitEconomics({ periodDates }) {
   const [data, setData]       = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError]     = useState('')
@@ -78,14 +78,21 @@ export default function UnitEconomics() {
   const load = useCallback(async () => {
     setLoading(true); setError('')
     try {
-      const { data: d } = await axios.get('/api/analytics/unit-economics')
+      const params = new URLSearchParams()
+      if (periodDates?.fromYear) {
+        params.set('from_year', periodDates.fromYear)
+        params.set('from_month', periodDates.fromMonth)
+        params.set('to_year', periodDates.toYear)
+        params.set('to_month', periodDates.toMonth)
+      }
+      const { data: d } = await axios.get(`/api/analytics/unit-economics?${params}`)
       setData(d)
     } catch (e) {
       setError(e.response?.data?.detail || 'Failed to load unit economics')
     } finally {
       setLoading(false)
     }
-  }, [])
+  }, [periodDates?.fromYear, periodDates?.fromMonth, periodDates?.toYear, periodDates?.toMonth])
 
   useEffect(() => { load() }, [load])
 

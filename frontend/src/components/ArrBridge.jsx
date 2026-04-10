@@ -51,7 +51,7 @@ function SummaryCard({ label, value, color, icon: Icon }) {
 }
 
 // ─── Main Component ─────────────────────────────────────────────────────────
-export default function ArrBridge() {
+export default function ArrBridge({ periodDates }) {
   const [data, setData]       = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError]     = useState('')
@@ -59,11 +59,18 @@ export default function ArrBridge() {
   useEffect(() => {
     setLoading(true)
     setError('')
-    axios.get('/api/analytics/arr-bridge')
+    const params = new URLSearchParams()
+    if (periodDates?.fromYear) {
+      params.set('from_year', periodDates.fromYear)
+      params.set('from_month', periodDates.fromMonth)
+      params.set('to_year', periodDates.toYear)
+      params.set('to_month', periodDates.toMonth)
+    }
+    axios.get(`/api/analytics/arr-bridge?${params}`)
       .then(r => setData(r.data))
       .catch(e => setError(e.response?.data?.detail || 'Failed to load ARR bridge data'))
       .finally(() => setLoading(false))
-  }, [])
+  }, [periodDates?.fromYear, periodDates?.fromMonth, periodDates?.toYear, periodDates?.toMonth])
 
   // ── Loading state ──
   if (loading) {

@@ -1955,7 +1955,7 @@ export default function HomeScreen({ onNavigate, onAskAnika, externalPeriodDates
       </div>
 
       {/* ── Health Score + Most Critical (side-by-side) ────────────────── */}
-      <div className={`grid grid-cols-1 ${topCritical.length > 0 ? 'lg:grid-cols-[1fr_1.2fr_auto]' : 'lg:grid-cols-[1fr_auto]'} gap-4 items-start`}>
+      <div className={`grid grid-cols-1 ${topCritical.length > 0 ? 'lg:grid-cols-[minmax(380px,1.1fr)_1.3fr_220px]' : 'lg:grid-cols-[1fr_220px]'} gap-4 items-start`}>
 
       {/* ── Health Score Card ───────────────────────────────────────────── */}
       <div className="card p-5 shadow-sm hover:shadow-md transition-shadow">
@@ -2159,37 +2159,48 @@ export default function HomeScreen({ onNavigate, onAskAnika, externalPeriodDates
       )}
 
       {/* ── Deep Analytics Card (3rd column) ─────────────────────────── */}
-      <div className="card p-4 shadow-sm hover:shadow-md transition-shadow border-blue-100 bg-blue-50/20">
+      <div className="card p-4 shadow-sm hover:shadow-md transition-shadow border-blue-100 bg-blue-50/20 min-w-[210px]">
         <div className="flex items-center gap-2 mb-3">
           <Activity size={13} className="text-[#0055A4]" />
           <h2 className="text-slate-700 text-[11px] font-bold uppercase tracking-wider">Deep Analytics</h2>
         </div>
-        <div className="space-y-1">
+        <div className="space-y-0.5">
           {[
-            { id: 'arr_bridge',     label: 'ARR Bridge',              kpi: 'arr',                    icon: '📊' },
-            { id: 'cohort_matrix',  label: 'Cohort Retention',        kpi: 'nrr',                    icon: '🔄' },
-            { id: 'concentration',  label: 'Customer Concentration',  kpi: 'customer_concentration', icon: '🎯' },
-            { id: 'margin_decomp',  label: 'Margin Breakdown',        kpi: 'gross_margin',           icon: '📉' },
-            { id: 'cash_waterfall', label: 'Cash Waterfall',          kpi: 'cash_runway',            icon: '💰' },
-            { id: 'unit_economics', label: 'Unit Economics',          kpi: 'ltv_cac',                icon: '⚡' },
-            { id: 'rule_of_40',    label: 'Rule of 40',              kpi: 'rule_of_40',             icon: '📐' },
+            { id: 'arr_bridge',     label: 'ARR Bridge',              kpi: 'arr',                    Icon: BarChart2 },
+            { id: 'cohort_matrix',  label: 'Cohort Retention',        kpi: 'nrr',                    Icon: RefreshCw },
+            { id: 'concentration',  label: 'Concentration',           kpi: 'customer_concentration', Icon: AlertCircle },
+            { id: 'margin_decomp',  label: 'Margin Breakdown',        kpi: 'gross_margin',           Icon: TrendingDown },
+            { id: 'cash_waterfall', label: 'Cash Waterfall',          kpi: 'cash_runway',            Icon: Activity },
+            { id: 'unit_economics', label: 'Unit Economics',          kpi: 'ltv_cac',                Icon: Zap },
+            { id: 'rule_of_40',    label: 'Rule of 40',              kpi: 'rule_of_40',             Icon: Target },
           ].map(v => {
-            // Pull mini KPI value from health data if available
-            const allKpis = [...(needs_attention || []), ...(doing_well || []), ...(watchKpis || [])]
+            // Pull mini KPI value from all available health data sources
+            const allKpis = [
+              ...(needs_attention || []),
+              ...(doing_well || []),
+              ...(watchKpis || []),
+              ...(data?.grey_kpis_detail || []),
+              ...(health?.green_kpis_detail || []),
+              ...(health?.yellow_kpis_detail || []),
+              ...(health?.red_kpis_detail || []),
+            ]
             const kpiData = allKpis.find(k => k.key === v.kpi)
-            const miniVal = kpiData?.avg != null ? fmtKpiValue(kpiData.avg, kpiData.unit) : null
+            const miniVal = kpiData?.avg != null
+              ? fmtKpiValue(kpiData.avg, kpiData.unit)
+              : (kpiData?.value != null ? fmtKpiValue(kpiData.value, kpiData.unit) : null)
+            const VIcon = v.Icon
             return (
               <button key={v.id} onClick={() => onNavigate?.(v.id)}
-                className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-lg
+                className="w-full flex items-center gap-2 px-2 py-1.5 rounded-lg
                   text-left hover:bg-[#0055A4]/5 transition-colors group">
-                <span className="text-sm flex-shrink-0">{v.icon}</span>
+                <VIcon size={12} className="text-slate-400 group-hover:text-[#0055A4] flex-shrink-0" />
                 <span className="text-[11px] font-medium text-slate-700 group-hover:text-[#0055A4] flex-1 truncate">
                   {v.label}
                 </span>
                 {miniVal && (
-                  <span className="text-[10px] font-bold text-slate-500 flex-shrink-0">{miniVal}</span>
+                  <span className="text-[10px] font-bold text-[#0055A4] flex-shrink-0">{miniVal}</span>
                 )}
-                <ArrowRight size={10} className="text-slate-300 group-hover:text-[#0055A4] flex-shrink-0" />
+                <ChevronRight size={10} className="text-slate-300 group-hover:text-[#0055A4] flex-shrink-0" />
               </button>
             )
           })}

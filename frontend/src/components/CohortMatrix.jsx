@@ -32,18 +32,25 @@ function fmtSize(v, metric) {
   return v.toLocaleString()
 }
 
-export default function CohortMatrix() {
+export default function CohortMatrix({ periodDates }) {
   const [metric, setMetric] = useState('revenue')
   const [data, setData] = useState(null)
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
     setLoading(true)
-    axios.get(`/api/analytics/cohort-retention?metric=${metric}`)
+    const params = new URLSearchParams({ metric })
+    if (periodDates?.fromYear) {
+      params.set('from_year', periodDates.fromYear)
+      params.set('from_month', periodDates.fromMonth)
+      params.set('to_year', periodDates.toYear)
+      params.set('to_month', periodDates.toMonth)
+    }
+    axios.get(`/api/analytics/cohort-retention?${params}`)
       .then(r => setData(r.data))
       .catch(() => setData(null))
       .finally(() => setLoading(false))
-  }, [metric])
+  }, [metric, periodDates?.fromYear, periodDates?.fromMonth, periodDates?.toYear, periodDates?.toMonth])
 
   if (loading) {
     return (

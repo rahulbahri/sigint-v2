@@ -47,16 +47,24 @@ function CustomTooltip({ active, payload, label }) {
   )
 }
 
-export default function MarginDecomposition() {
+export default function MarginDecomposition({ periodDates }) {
   const [data, setData] = useState(null)
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
-    axios.get('/api/analytics/margin-decomposition')
+    setLoading(true)
+    const params = new URLSearchParams()
+    if (periodDates?.fromYear) {
+      params.set('from_year', periodDates.fromYear)
+      params.set('from_month', periodDates.fromMonth)
+      params.set('to_year', periodDates.toYear)
+      params.set('to_month', periodDates.toMonth)
+    }
+    axios.get(`/api/analytics/margin-decomposition?${params}`)
       .then(r => setData(r.data))
       .catch(() => setData(null))
       .finally(() => setLoading(false))
-  }, [])
+  }, [periodDates?.fromYear, periodDates?.fromMonth, periodDates?.toYear, periodDates?.toMonth])
 
   if (loading) {
     return (

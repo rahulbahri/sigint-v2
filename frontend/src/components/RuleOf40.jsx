@@ -68,7 +68,7 @@ function DiagonalReferenceLine({ xAxisMap, yAxisMap }) {
 }
 
 // ── Main component ─────────────────────────────────────────────────────────
-export default function RuleOf40() {
+export default function RuleOf40({ periodDates }) {
   const [raw, setRaw]         = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError]     = useState('')
@@ -76,14 +76,18 @@ export default function RuleOf40() {
   const load = useCallback(async () => {
     setLoading(true); setError('')
     try {
-      const { data } = await axios.get('/api/monthly')
+      const params = new URLSearchParams()
+      if (periodDates?.fromYear) {
+        params.set('year', periodDates.fromYear)  // /api/monthly uses ?year= filter
+      }
+      const { data } = await axios.get(`/api/monthly?${params}`)
       setRaw(Array.isArray(data) ? data : [])
     } catch (e) {
       setError(e.response?.data?.detail || 'Failed to load monthly data')
     } finally {
       setLoading(false)
     }
-  }, [])
+  }, [periodDates?.fromYear, periodDates?.fromMonth, periodDates?.toYear, periodDates?.toMonth])
 
   useEffect(() => { load() }, [load])
 

@@ -47,16 +47,24 @@ function TrendTooltip({ active, payload, label }) {
   )
 }
 
-export default function CashWaterfall() {
+export default function CashWaterfall({ periodDates }) {
   const [data, setData] = useState(null)
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
-    axios.get('/api/analytics/cash-waterfall')
+    setLoading(true)
+    const params = new URLSearchParams()
+    if (periodDates?.fromYear) {
+      params.set('from_year', periodDates.fromYear)
+      params.set('from_month', periodDates.fromMonth)
+      params.set('to_year', periodDates.toYear)
+      params.set('to_month', periodDates.toMonth)
+    }
+    axios.get(`/api/analytics/cash-waterfall?${params}`)
       .then(r => setData(r.data))
       .catch(() => setData(null))
       .finally(() => setLoading(false))
-  }, [])
+  }, [periodDates?.fromYear, periodDates?.fromMonth, periodDates?.toYear, periodDates?.toMonth])
 
   // Build waterfall chart data from the latest period
   const { waterfallData, latest, trendData } = useMemo(() => {
