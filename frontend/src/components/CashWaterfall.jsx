@@ -185,20 +185,25 @@ export default function CashWaterfall({ periodDates }) {
         </div>
         <div className="bg-white rounded-xl border border-slate-200 px-4 py-3 text-center">
           <div className="flex items-center justify-center gap-1 mb-0.5">
-            <TrendingDown size={12} className="text-[#DC2626]" />
-            <p className="text-[10px] text-slate-500 uppercase tracking-wider">Monthly Burn</p>
+            {latest.net_burn >= 0
+              ? <TrendingDown size={12} className="text-emerald-500" style={{ transform: 'scaleY(-1)' }} />
+              : <TrendingDown size={12} className="text-[#DC2626]" />
+            }
+            <p className="text-[10px] text-slate-500 uppercase tracking-wider">
+              {latest.net_burn >= 0 ? 'Net Surplus' : 'Monthly Burn'}
+            </p>
           </div>
-          <p className="text-xl font-bold text-[#DC2626]">
+          <p className={`text-xl font-bold ${latest.net_burn >= 0 ? 'text-emerald-500' : 'text-[#DC2626]'}`}>
             {fmtKpiValueCompact(Math.abs(latest.net_burn), 'usd')}
           </p>
         </div>
         <div className="bg-white rounded-xl border border-slate-200 px-4 py-3 text-center">
           <div className="flex items-center justify-center gap-1 mb-0.5">
-            <Clock size={12} className={runwayColor} />
+            <Clock size={12} className={latest.runway_months >= 999 ? 'text-emerald-500' : runwayColor} />
             <p className="text-[10px] text-slate-500 uppercase tracking-wider">Runway</p>
           </div>
-          <p className={`text-xl font-bold ${runwayColor}`}>
-            {latest.runway_months != null ? `${latest.runway_months.toFixed(1)} mo` : '\u2014'}
+          <p className={`text-xl font-bold ${latest.runway_months >= 999 ? 'text-emerald-500' : runwayColor}`}>
+            {latest.runway_months >= 999 ? 'Cash Positive' : latest.runway_months != null ? `${latest.runway_months.toFixed(1)} mo` : '\u2014'}
           </p>
         </div>
       </div>
