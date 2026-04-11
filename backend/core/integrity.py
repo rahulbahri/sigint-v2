@@ -95,6 +95,44 @@ class DataIntegrityValidator:
         s4 = self.run_stage4()
 
         correction_log = []
+
+        # Auto-correct source contamination (seed data mixed with uploads)
+        if auto_correct and s1["status"] == "fail":
+            contamination_checks = [
+                c for c in s1.get("checks", [])
+                if c.get("check", "").startswith("source_contamination_") and not c.get("passed", True)
+            ]
+            if contamination_checks:
+                try:
+                    for _tbl in ["canonical_revenue", "canonical_expenses", "canonical_customers",
+                                 "canonical_pipeline", "canonical_invoices", "canonical_employees",
+                                 "canonical_marketing", "canonical_balance_sheet",
+                                 "canonical_time_tracking", "canonical_surveys",
+                                 "canonical_support", "canonical_product_usage"]:
+                        try:
+                            self._conn.execute(
+                                f"DELETE FROM {_tbl} WHERE workspace_id=? AND source='seed'",
+                                [self._ws],
+                            )
+                        except Exception:
+                            pass
+                    self._conn.commit()
+                    correction_log.append({
+                        "stage": "stage1",
+                        "action": "removed_seed_data",
+                        "succeeded": True,
+                        "note": "Cleared demo seed data from canonical tables to resolve source contamination",
+                    })
+                    # Re-run stage 1 to verify
+                    s1 = self.run_stage1(upload_id=upload_id, source_name=source_name)
+                except Exception as e:
+                    correction_log.append({
+                        "stage": "stage1",
+                        "action": "remove_seed_data_failed",
+                        "succeeded": False,
+                        "note": str(e),
+                    })
+
         if auto_correct and s2["status"] == "fail":
             correction = self._correct_stage2()
             correction_log.append(correction)
@@ -294,6 +332,34 @@ class DataIntegrityValidator:
                 elif currencies and currencies[0].upper() != "USD":
                     checks.append({"check": "non_usd_currency", "currency": currencies[0],
                                     "passed": True, "note": f"All revenue in {currencies[0]} (non-USD)"})
+            except Exception:
+                pass
+
+            # Source contamination check — detect mixed data sources
+            # (e.g. seed + csv_upload in same table = data contamination)
+            try:
+                for _tbl in ["canonical_revenue", "canonical_expenses", "canonical_customers"]:
+                    src_rows = _safe_query(
+                        self._conn,
+                        f"SELECT DISTINCT source FROM {_tbl} WHERE workspace_id=? AND source IS NOT NULL",
+                        [self._ws],
+                    )
+                    sources = [r["source"] for r in src_rows]
+                    if len(sources) > 1 and "seed" in sources:
+                        non_seed = [s for s in sources if s != "seed"]
+                        checks.append({
+                            "check": f"source_contamination_{_tbl}",
+                            "sources": sources,
+                            "passed": False,
+                            "note": (
+                                f"{_tbl} has MIXED data sources: {', '.join(sources)}. "
+                                f"Demo seed data is mixing with uploaded data ({', '.join(non_seed)}). "
+                                f"Re-upload with 'Replace existing data' checked to fix."
+                            ),
+                        })
+                        self._auto_correct_notes.append(
+                            f"Source contamination in {_tbl}: {', '.join(sources)}"
+                        )
             except Exception:
                 pass
 
