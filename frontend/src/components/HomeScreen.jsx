@@ -1437,7 +1437,7 @@ function ScoreBar({ label, value, weight, Icon, onClick }) {
       </div>
       <div className="flex-1 min-w-0">
         <div className="flex items-center justify-between mb-1">
-          <span className="text-slate-600 text-[11px] font-medium group-hover:text-slate-800 transition-colors">{label}</span>
+          <span className="text-slate-600 text-[11px] font-medium group-hover:text-slate-800 transition-colors whitespace-nowrap">{label}</span>
           <div className="flex items-center gap-1.5">
             <span className="text-slate-400 text-[10px]">{weight}</span>
             <span className="text-[11px] font-bold" style={{ color }}>{(value ?? 0).toFixed(0)}</span>
@@ -1958,13 +1958,13 @@ export default function HomeScreen({ onNavigate, onAskAnika, externalPeriodDates
       <div className={`grid grid-cols-1 ${topCritical.length > 0 ? 'lg:grid-cols-[1fr_1.4fr]' : ''} gap-4 items-start`}>
 
       {/* ── Health Score Card ───────────────────────────────────────────── */}
-      <div className="card p-5 shadow-sm hover:shadow-md transition-shadow">
-        <div className="flex items-stretch gap-5">
+      <div className="card p-4 shadow-sm hover:shadow-md transition-shadow">
+        <div className="flex items-stretch gap-4">
 
           {/* Gauge column */}
           <div className="flex flex-col items-center justify-center flex-shrink-0 gap-2">
             <div className="relative">
-              <HealthGauge score={score} color={color} size={110} />
+              <HealthGauge score={score} color={color} size={96} />
               <div className="absolute inset-0 flex flex-col items-center justify-center">
                 <span className="text-3xl font-extrabold text-slate-900 leading-none">{score}</span>
                 <span className="text-slate-400 text-[10px]">/ 100</span>
@@ -2008,7 +2008,7 @@ export default function HomeScreen({ onNavigate, onAskAnika, externalPeriodDates
                   <Info size={11} />
                 </button>
               </div>
-              <button onClick={() => setShowDistModal(true)} className="grid grid-cols-4 gap-2 w-full text-left hover:bg-slate-50 rounded-xl p-1.5 -mx-1.5 transition-colors group">
+              <button onClick={() => setShowDistModal(true)} className="grid grid-cols-4 gap-1 w-full text-left hover:bg-slate-50 rounded-xl p-1 -mx-1 transition-colors group">
                 {[
                   { count: health?.kpis_green,  label: 'On Target', color: '#059669' },
                   { count: health?.kpis_yellow, label: 'Watch',     color: '#D97706' },
@@ -2016,8 +2016,8 @@ export default function HomeScreen({ onNavigate, onAskAnika, externalPeriodDates
                   { count: health?.kpis_grey,   label: 'No Target', color: '#94a3b8' },
                 ].map(({ count, label, color: c }) => (
                   <div key={label} className="text-center">
-                    <div className="text-xl font-extrabold leading-tight" style={{ color: c }}>{count ?? 0}</div>
-                    <div className="text-slate-400 text-[10px] font-medium leading-tight">{label}</div>
+                    <div className="text-lg font-extrabold leading-tight" style={{ color: c }}>{count ?? 0}</div>
+                    <div className="text-slate-400 text-[9px] font-medium leading-tight whitespace-nowrap">{label}</div>
                   </div>
                 ))}
               </button>

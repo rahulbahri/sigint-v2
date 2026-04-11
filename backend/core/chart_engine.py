@@ -63,7 +63,7 @@ SERIES_COLORS = [
     "#0891B2", "#65A30D", "#EA580C", "#4F46E5",
 ]
 
-DPI = 200
+DPI = 300
 FONT_FAMILY = "sans-serif"
 
 
@@ -510,3 +510,363 @@ def select_chart_for_context(context: str, **kwargs) -> str:
         "benchmark_comparison": "grouped_bar_h",
     }
     return mapping.get(context, "bar_h")
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# NATIVE PPTX CHARTS — enterprise-grade, editable, resolution-independent
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# These functions add charts directly to slides as native PowerPoint objects.
+# They render at full resolution, are editable (right-click → Edit Data),
+# and scale proportionally when resized.
+
+def _hex_rgb(hex_str: str):
+    """Convert hex color to pptx RGBColor."""
+    from pptx.dml.color import RGBColor
+    h = hex_str.lstrip("#")
+    return RGBColor(int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16))
+
+
+def _apply_chart_style(chart, title: str = "", has_legend: bool = True):
+    """Apply consistent Corporate Blue styling to any native chart."""
+    from pptx.util import Pt
+    if title:
+        chart.has_title = True
+        chart.chart_title.has_text_frame = True
+        chart.chart_title.text_frame.text = title
+        for p in chart.chart_title.text_frame.paragraphs:
+            p.font.size = Pt(11)
+            p.font.bold = True
+            p.font.color.rgb = _hex_rgb(PALETTE["text"])
+    else:
+        chart.has_title = False
+    chart.has_legend = has_legend
+    if has_legend and chart.legend:
+        chart.legend.font.size = Pt(8)
+        chart.legend.include_in_layout = False
+
+
+def add_native_line(slide, x, y, w, h, periods, values, target, name, unit=""):
+    """Add a native PowerPoint line chart to a slide.
+
+    Returns the chart GraphicFrame shape.
+    """
+    from pptx.chart.data import CategoryChartData
+    from pptx.enum.chart import XL_CHART_TYPE
+    from pptx.util import Inches, Pt
+
+    cd = CategoryChartData()
+    cd.categories = periods
+    cd.add_series(name, tuple(v if v is not None else 0 for v in values))
+    if target is not None:
+        cd.add_series("Target", tuple(target for _ in periods))
+
+    frame = slide.shapes.add_chart(
+        XL_CHART_TYPE.LINE_MARKERS,
+        Inches(x), Inches(y), Inches(w), Inches(h), cd,
+    )
+    chart = frame.chart
+    _apply_chart_style(chart, name, has_legend=target is not None)
+
+    # Style the data series
+    plot = chart.plots[0]
+    plot.has_data_labels = False
+    s0 = plot.series[0]
+    s0.format.line.color.rgb = _hex_rgb(PALETTE["accent"])
+    s0.format.line.width = Pt(2.5)
+    s0.smooth = True
+
+    if target is not None and len(plot.series) > 1:
+        s1 = plot.series[1]
+        s1.format.line.color.rgb = _hex_rgb(PALETTE["muted"])
+        s1.format.line.width = Pt(1.5)
+        s1.format.line.dash_style = 4  # dash
+
+    return frame
+
+
+def add_native_multi_line(slide, x, y, w, h, periods, series_dict, title, targets=None):
+    """Add a multi-series native line chart.
+
+    series_dict: {name: [values]}
+    targets: optional {name: target_value}
+    """
+    from pptx.chart.data import CategoryChartData
+    from pptx.enum.chart import XL_CHART_TYPE
+    from pptx.util import Inches, Pt
+
+    targets = targets or {}
+    cd = CategoryChartData()
+    cd.categories = periods
+    for name, vals in list(series_dict.items())[:6]:
+        cd.add_series(name, tuple(v if v is not None else 0 for v in vals))
+
+    frame = slide.shapes.add_chart(
+        XL_CHART_TYPE.LINE_MARKERS,
+        Inches(x), Inches(y), Inches(w), Inches(h), cd,
+    )
+    chart = frame.chart
+    _apply_chart_style(chart, title, has_legend=True)
+
+    plot = chart.plots[0]
+    for i, series in enumerate(plot.series):
+        color = SERIES_COLORS[i % len(SERIES_COLORS)]
+        series.format.line.color.rgb = _hex_rgb(color)
+        series.format.line.width = Pt(2)
+        series.smooth = True
+
+    return frame
+
+
+def add_native_donut(slide, x, y, w, h, labels, values, colors):
+    """Add a native PowerPoint doughnut chart."""
+    from pptx.chart.data import CategoryChartData
+    from pptx.enum.chart import XL_CHART_TYPE
+    from pptx.util import Inches, Pt
+
+    # Filter out zeros
+    filtered = [(l, v, c) for l, v, c in zip(labels, values, colors) if v > 0]
+    if not filtered:
+        return None
+
+    f_labels, f_values, f_colors = zip(*filtered)
+    cd = CategoryChartData()
+    cd.categories = list(f_labels)
+    cd.add_series("Status", tuple(f_values))
+
+    frame = slide.shapes.add_chart(
+        XL_CHART_TYPE.DOUGHNUT,
+        Inches(x), Inches(y), Inches(w), Inches(h), cd,
+    )
+    chart = frame.chart
+    _apply_chart_style(chart, "", has_legend=True)
+
+    # Color each segment
+    plot = chart.plots[0]
+    series = plot.series[0]
+    for i, color in enumerate(f_colors):
+        pt = series.points[i]
+        pt.format.fill.solid()
+        pt.format.fill.fore_color.rgb = _hex_rgb(color)
+
+    # Data labels with percentages
+    plot.has_data_labels = True
+    dl = plot.data_labels
+    dl.show_percentage = True
+    dl.show_value = False
+    dl.show_category_name = False
+    dl.font.size = Pt(9)
+    dl.font.bold = True
+    dl.font.color.rgb = _hex_rgb("FFFFFF")
+
+    return frame
+
+
+def add_native_bar_h(slide, x, y, w, h, names, values, colors, title, unit=""):
+    """Add a native horizontal bar chart."""
+    from pptx.chart.data import CategoryChartData
+    from pptx.enum.chart import XL_CHART_TYPE
+    from pptx.util import Inches, Pt
+
+    cd = CategoryChartData()
+    cd.categories = list(names)
+    cd.add_series("Value", tuple(values))
+
+    frame = slide.shapes.add_chart(
+        XL_CHART_TYPE.BAR_CLUSTERED,
+        Inches(x), Inches(y), Inches(w), Inches(h), cd,
+    )
+    chart = frame.chart
+    _apply_chart_style(chart, title, has_legend=False)
+
+    plot = chart.plots[0]
+    plot.gap_width = 80
+    series = plot.series[0]
+
+    # Color each bar individually
+    for i, color in enumerate(colors):
+        pt = series.points[i]
+        pt.format.fill.solid()
+        pt.format.fill.fore_color.rgb = _hex_rgb(color)
+
+    # Data labels
+    plot.has_data_labels = True
+    dl = plot.data_labels
+    dl.show_value = True
+    dl.font.size = Pt(8)
+    dl.font.bold = True
+    dl.font.color.rgb = _hex_rgb(PALETTE["text"])
+
+    return frame
+
+
+def add_native_grouped_bar_h(slide, x, y, w, h, names, co_vals, peer_vals,
+                              bar_colors, title, peer_label="Peer Median"):
+    """Add a grouped horizontal bar chart (company vs peer)."""
+    from pptx.chart.data import CategoryChartData
+    from pptx.enum.chart import XL_CHART_TYPE
+    from pptx.util import Inches, Pt
+
+    cd = CategoryChartData()
+    cd.categories = list(names)
+    cd.add_series("Company", tuple(co_vals))
+    cd.add_series(peer_label, tuple(peer_vals))
+
+    frame = slide.shapes.add_chart(
+        XL_CHART_TYPE.BAR_CLUSTERED,
+        Inches(x), Inches(y), Inches(w), Inches(h), cd,
+    )
+    chart = frame.chart
+    _apply_chart_style(chart, title, has_legend=True)
+
+    plot = chart.plots[0]
+    plot.gap_width = 100
+    plot.overlap = 0
+
+    # Company series — use status colors per bar
+    s0 = plot.series[0]
+    for i, color in enumerate(bar_colors):
+        s0.points[i].format.fill.solid()
+        s0.points[i].format.fill.fore_color.rgb = _hex_rgb(color)
+
+    # Peer series — muted grey
+    s1 = plot.series[1]
+    s1.format.fill.solid()
+    s1.format.fill.fore_color.rgb = _hex_rgb(PALETTE["muted"])
+
+    return frame
+
+
+def add_native_radar(slide, x, y, w, h, dimensions, actual_values,
+                      target_values=None, title="Domain Health"):
+    """Add a native radar/spider chart."""
+    from pptx.chart.data import CategoryChartData
+    from pptx.enum.chart import XL_CHART_TYPE
+    from pptx.util import Inches, Pt
+
+    if len(dimensions) < 3:
+        return None
+
+    cd = CategoryChartData()
+    cd.categories = list(dimensions)
+    cd.add_series("Actual", tuple(actual_values))
+    if target_values:
+        cd.add_series("Target", tuple(target_values))
+
+    frame = slide.shapes.add_chart(
+        XL_CHART_TYPE.RADAR_MARKERS,
+        Inches(x), Inches(y), Inches(w), Inches(h), cd,
+    )
+    chart = frame.chart
+    _apply_chart_style(chart, title, has_legend=target_values is not None)
+
+    plot = chart.plots[0]
+    s0 = plot.series[0]
+    s0.format.line.color.rgb = _hex_rgb(PALETTE["accent"])
+    s0.format.line.width = Pt(2.5)
+
+    if target_values and len(plot.series) > 1:
+        s1 = plot.series[1]
+        s1.format.line.color.rgb = _hex_rgb(PALETTE["muted"])
+        s1.format.line.width = Pt(1.5)
+        s1.format.line.dash_style = 4
+
+    return frame
+
+
+def add_native_table_heatmap(slide, x, y, w, h, kpi_names, month_labels,
+                               status_matrix, value_matrix=None):
+    """Add a colored table as a heatmap (crisp at any resolution).
+
+    Uses python-pptx table shapes instead of matplotlib images.
+    """
+    from pptx.util import Inches, Pt, Emu
+    from pptx.dml.color import RGBColor
+
+    n_rows = len(kpi_names) + 1  # +1 for header
+    n_cols = len(month_labels) + 1  # +1 for KPI name column
+
+    if n_rows <= 1 or n_cols <= 1:
+        return None
+
+    table_shape = slide.shapes.add_table(n_rows, n_cols,
+                                          Inches(x), Inches(y),
+                                          Inches(w), Inches(h))
+    table = table_shape.table
+
+    status_bg = {
+        "green":  RGBColor(0x05, 0x96, 0x69),
+        "yellow": RGBColor(0xD9, 0x77, 0x06),
+        "red":    RGBColor(0xDC, 0x26, 0x26),
+        "grey":   RGBColor(0xCB, 0xD5, 0xE1),
+    }
+    status_fg = {
+        "green":  RGBColor(0xFF, 0xFF, 0xFF),
+        "yellow": RGBColor(0xFF, 0xFF, 0xFF),
+        "red":    RGBColor(0xFF, 0xFF, 0xFF),
+        "grey":   RGBColor(0x64, 0x74, 0x8B),
+    }
+
+    # Header row
+    header_cell = table.cell(0, 0)
+    header_cell.text = "KPI"
+    _style_cell(header_cell, Pt(8), bold=True, bg=RGBColor(0x0F, 0x17, 0x2A),
+                fg=RGBColor(0xFF, 0xFF, 0xFF))
+
+    for j, ml in enumerate(month_labels):
+        cell = table.cell(0, j + 1)
+        cell.text = ml
+        _style_cell(cell, Pt(7), bold=True, bg=RGBColor(0x0F, 0x17, 0x2A),
+                    fg=RGBColor(0xFF, 0xFF, 0xFF))
+
+    # Data rows
+    for i, kpi_name in enumerate(kpi_names):
+        # KPI name cell
+        name_cell = table.cell(i + 1, 0)
+        name_cell.text = kpi_name[:22]
+        _style_cell(name_cell, Pt(7), bold=False,
+                    bg=RGBColor(0xF8, 0xFA, 0xFC), fg=RGBColor(0x0F, 0x17, 0x2A))
+
+        for j in range(len(month_labels)):
+            cell = table.cell(i + 1, j + 1)
+            status = "grey"
+            if i < len(status_matrix) and j < len(status_matrix[i]):
+                status = status_matrix[i][j]
+
+            # Cell value
+            val_text = ""
+            if value_matrix and i < len(value_matrix) and j < len(value_matrix[i]):
+                v = value_matrix[i][j]
+                if v is not None:
+                    val_text = f"{v:.0f}" if abs(v) >= 10 else f"{v:.1f}"
+            cell.text = val_text
+
+            bg = status_bg.get(status, status_bg["grey"])
+            fg = status_fg.get(status, status_fg["grey"])
+            _style_cell(cell, Pt(7), bold=True, bg=bg, fg=fg)
+
+    return table_shape
+
+
+def _style_cell(cell, font_size, bold=False, bg=None, fg=None):
+    """Apply styling to a table cell."""
+    from pptx.util import Pt
+    from pptx.enum.text import PP_ALIGN
+
+    if bg:
+        cell.fill.solid()
+        cell.fill.fore_color.rgb = bg
+
+    for paragraph in cell.text_frame.paragraphs:
+        paragraph.font.size = font_size
+        paragraph.font.bold = bold
+        paragraph.alignment = PP_ALIGN.CENTER
+        if fg:
+            paragraph.font.color.rgb = fg
+
+    cell.text_frame.word_wrap = False
+    # Reduce cell margins for compact look
+    cell.margin_left = Pt(3)
+    cell.margin_right = Pt(3)
+    cell.margin_top = Pt(2)
+    cell.margin_bottom = Pt(2)

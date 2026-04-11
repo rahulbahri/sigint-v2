@@ -97,9 +97,10 @@ def _build_board_pack(workspace_id: str, body: BoardPackRequest, modes: set[str]
     from core.kpi_defs import KPI_DEFS, EXTENDED_ONTOLOGY_METRICS, BENCHMARKS, ALL_CAUSATION_RULES
     from core.kpi_utils import compute_kpi_avg
     from core.chart_engine import (
-        render_line, render_multi_line, render_donut, render_bar_h,
-        render_heatmap, render_radar, render_waterfall, render_grouped_bar_h,
-        PALETTE, STATUS_COLORS,
+        render_waterfall, PALETTE, STATUS_COLORS,
+        add_native_line, add_native_multi_line, add_native_donut,
+        add_native_bar_h, add_native_grouped_bar_h, add_native_radar,
+        add_native_table_heatmap,
     )
     from core.board_narrative import (
         detect_signals, generate_executive_summary, generate_causal_narratives,
@@ -374,15 +375,12 @@ def _build_board_pack(workspace_id: str, body: BoardPackRequest, modes: set[str]
         paras.append(("", 6, False, None))
     _add_paragraphs(slide, paras, 0.5, 1.0, 7.5, 5.5)
 
-    # Right: donut chart
-    donut = render_donut(
+    # Right: donut chart (native)
+    add_native_donut(slide, 8.8, 0.8, 4.0, 4.0,
         [f"Critical ({len(red_kpis)})", f"Watch ({len(yellow_kpis)})", f"On Target ({len(green_kpis)})"],
         [len(red_kpis), len(yellow_kpis), len(green_kpis)],
         [PALETTE["critical"], PALETTE["warning"], PALETTE["positive"]],
-        center_text=str(total), center_sub="KPIs",
     )
-    slide.shapes.add_picture(donut.image, Inches(8.8), Inches(0.8),
-                             Inches(4.0), Inches(4.0))
 
     # Health score badge
     score = health.get("score", 0)
@@ -430,10 +428,10 @@ def _build_board_pack(workspace_id: str, body: BoardPackRequest, modes: set[str]
                     status_matrix.append(row_status)
                     value_matrix.append(row_values)
 
-                heatmap = render_heatmap(kpi_names, month_labels, status_matrix, value_matrix)
-                slide.shapes.add_picture(heatmap.image, Inches(0.3), Inches(1.3),
-                                         Inches(min(heatmap.width_inches, 12.5)),
-                                         Inches(min(heatmap.height_inches, 5.8)))
+                add_native_table_heatmap(slide, 0.3, 1.3,
+                                         min(12.5, len(month_labels) * 0.8 + 2.5),
+                                         min(5.8, len(kpi_names) * 0.35 + 0.8),
+                                         kpi_names, month_labels, status_matrix, value_matrix)
 
             _notes(slide, "This heatmap shows every KPI's status for each month in the selected period. "
                    "Green = on target, yellow = watch, red = critical. "
@@ -457,9 +455,8 @@ def _build_board_pack(workspace_id: str, body: BoardPackRequest, modes: set[str]
                 # Domain score = % on target
                 actuals.append(round(info["green_count"] / info["total"] * 100) if info["total"] else 50)
 
-            radar = render_radar(dims, actuals, title="Domain Health (% On Target)")
-            slide.shapes.add_picture(radar.image, Inches(0.5), Inches(1.3),
-                                     Inches(5.5), Inches(5.5))
+            add_native_radar(slide, 0.5, 1.3, 5.5, 5.5,
+                            dims, actuals, title="Domain Health (% On Target)")
 
             # Domain summary on right
             dom_paras = []
@@ -547,9 +544,8 @@ def _build_board_pack(workspace_id: str, body: BoardPackRequest, modes: set[str]
                     series[k["name"][:20]] = [by_p.get(ml) for ml in month_labels_all]
                     if k.get("target"):
                         tgts[k["name"][:20]] = k["target"]
-                chart = render_multi_line(month_labels_all, series, "Critical KPI Trends", tgts)
-                slide.shapes.add_picture(chart.image, Inches(7.8), Inches(1.2),
-                                         Inches(5.2), Inches(5.2))
+                add_native_multi_line(slide, 7.8, 1.2, 5.2, 5.2,
+                                     month_labels_all, series, "Critical KPI Trends", tgts)
 
             _notes(slide, generate_talk_track("causal_analysis", {"narratives": causal_narratives}))
 
@@ -603,9 +599,8 @@ def _build_board_pack(workspace_id: str, body: BoardPackRequest, modes: set[str]
                 for k in kpis_with_data:
                     by_p = {m["period"]: m["value"] for m in k.get("monthly", [])}
                     series[k["name"][:18]] = [by_p.get(p) for p in ml]
-                chart = render_multi_line(ml, series, f"{info['label']} Trends")
-                slide.shapes.add_picture(chart.image, Inches(7.5), Inches(1.2),
-                                         Inches(5.5), Inches(5.5))
+                add_native_multi_line(slide, 7.5, 1.2, 5.5, 5.5,
+                                     ml, series, f"{info['label']} Trends")
 
             _notes(slide, generate_talk_track("domain", {"domain_info": info}))
 
@@ -711,11 +706,10 @@ def _build_board_pack(workspace_id: str, body: BoardPackRequest, modes: set[str]
                 for k in kpis_for_bench
             ]
 
-            chart = render_grouped_bar_h(names, company_vals, peer_vals, bar_colors,
-                                         f"Company vs {stage_label} Median",
-                                         peer_label=f"{stage_label} Median")
-            slide.shapes.add_picture(chart.image, Inches(0.3), Inches(1.3),
-                                     Inches(8.0), Inches(min(chart.height_inches, 5.8)))
+            add_native_grouped_bar_h(slide, 0.3, 1.3, 8.0, 5.5,
+                                     names, company_vals, peer_vals, bar_colors,
+                                     f"Company vs {stage_label} Median",
+                                     peer_label=f"{stage_label} Median")
 
             # Narrative: below P25 / above P75
             bench_paras = []
@@ -855,8 +849,8 @@ def _add_sec_slides(prs, blank, workspace_id, body, _add_text, _add_paragraphs,
     from pptx.util import Inches, Pt
     from core.database import get_db
     from core.chart_engine import (
-        render_waterfall, render_heatmap, render_bar_h, render_grouped_bar_h,
-        render_line, render_radar, PALETTE,
+        render_waterfall, PALETTE,
+        add_native_line, add_native_bar_h, add_native_table_heatmap,
     )
     import json
 
@@ -1033,11 +1027,11 @@ def _add_sec_slides(prs, blank, workspace_id, body, _add_text, _add_paragraphs,
                 slide = _slide_header("Cohort Revenue Retention",
                                       "Vintage analysis — revenue retention by acquisition cohort")
 
-                hm = render_heatmap(cohort_labels, offset_labels,
-                                    retention_matrix, value_matrix)
-                slide.shapes.add_picture(hm.image, Inches(0.3), Inches(1.5),
-                                         Inches(min(hm.width_inches, 12.5)),
-                                         Inches(min(hm.height_inches, 5.5)))
+                add_native_table_heatmap(slide, 0.3, 1.5,
+                                         min(12.5, len(offset_labels) * 0.8 + 2.5),
+                                         min(5.5, len(cohort_labels) * 0.35 + 0.8),
+                                         cohort_labels, offset_labels,
+                                         retention_matrix, value_matrix)
 
                 if include_notes:
                     _notes(slide, "Cohort retention shows whether customers acquired in each period "
@@ -1083,10 +1077,9 @@ def _add_sec_slides(prs, blank, workspace_id, body, _add_text, _add_paragraphs,
             colors = [PALETTE["critical"] if v > 10 else (PALETTE["warning"] if v > 5 else PALETTE["positive"])
                       for v in values]
 
-            bar = render_bar_h(names, values, colors,
-                               "Top Customers — % of Total Revenue", unit="pct")
-            slide.shapes.add_picture(bar.image, Inches(0.3), Inches(1.5),
-                                     Inches(7.5), Inches(min(bar.height_inches, 5.5)))
+            add_native_bar_h(slide, 0.3, 1.5, 7.5, 5.0,
+                             names, values, colors,
+                             "Top Customers — % of Total Revenue", unit="pct")
 
             # Summary on right
             top1_pct = values[0] if values else 0
@@ -1200,10 +1193,8 @@ def _add_sec_slides(prs, blank, workspace_id, body, _add_text, _add_paragraphs,
                 gm_values.append(round((rev - cogs) / rev * 100, 1) if rev else 0)
             series["Gross Margin %"] = gm_values
 
-            chart = render_line(filtered_periods, gm_values, None,
-                                "Gross Margin %", "pct", PALETTE["positive"])
-            slide.shapes.add_picture(chart.image, Inches(0.3), Inches(1.5),
-                                     Inches(7.5), Inches(5.0))
+            add_native_line(slide, 0.3, 1.5, 7.5, 5.0,
+                            filtered_periods, gm_values, None, "Gross Margin %", "pct")
 
             # Latest breakdown on right
             if filtered_periods:
