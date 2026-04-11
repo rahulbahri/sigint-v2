@@ -158,15 +158,29 @@ def _auto_seed_if_empty():
     try:
         conn = get_db()
 
-        # Check if either workspace has data
+        # Check if either workspace has data (monthly_data OR canonical tables)
         for ws_check in [_DEFAULT_WS, _LEGACY_WS]:
             try:
                 row = conn.execute(
                     "SELECT COUNT(*) FROM monthly_data WHERE workspace_id=?", [ws_check]
                 ).fetchone()
                 count = row[0] if not isinstance(row, dict) else list(row.values())[0]
-                if count > 10:
-                    log.info("[AUTO_SEED] Database has %d months for %s — skipping seed.", count, ws_check)
+
+                # Also check canonical_revenue for uploaded/connector data
+                # This prevents re-seeding after a clean upload clears monthly_data
+                canonical_count = 0
+                try:
+                    cr = conn.execute(
+                        "SELECT COUNT(*) FROM canonical_revenue WHERE workspace_id=? AND source != 'seed'",
+                        [ws_check]
+                    ).fetchone()
+                    canonical_count = cr[0] if not isinstance(cr, dict) else list(cr.values())[0]
+                except Exception:
+                    pass
+
+                if count > 10 or canonical_count > 0:
+                    log.info("[AUTO_SEED] Database has %d months + %d canonical rows for %s — skipping seed.",
+                             count, canonical_count, ws_check)
                     # If data exists under legacy workspace, migrate it to new workspace
                     if ws_check == _LEGACY_WS and ws_check != _DEFAULT_WS:
                         log.info("[AUTO_SEED] Migrating data from %s to %s...", _LEGACY_WS, _DEFAULT_WS)
