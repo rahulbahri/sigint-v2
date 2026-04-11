@@ -2396,26 +2396,37 @@ async def customer_concentration(request: Request, top_n: int = 10, period: str 
     """Top-N Customer Concentration — SEC disclosure trigger at 10%."""
     workspace_id = _get_workspace(request)
     conn = get_db()
-    try:
-        # Get the latest period
-        if period == "latest":
-            p_row = conn.execute(
-                "SELECT MAX(period) as p FROM canonical_revenue WHERE workspace_id=?",
-                [workspace_id],
-            ).fetchone()
-            period = p_row[0] if p_row else None
-        if not period:
-            conn.close()
-            return {"period": None, "customers": [], "total_revenue": 0}
 
+    # Build period filter
+    _pf = ""
+    _pp = []
+    if from_year > 0 and to_year > 0:
+        _pf = " AND period >= ? AND period <= ?"
+        _pp = [f"{from_year}-{from_month:02d}", f"{to_year}-{to_month:02d}"]
+        period = f"{from_year}-{from_month:02d} to {to_year}-{to_month:02d}"
+    elif period == "latest":
+        p_row = conn.execute(
+            "SELECT MAX(period) as p FROM canonical_revenue WHERE workspace_id=?",
+            [workspace_id],
+        ).fetchone()
+        period = p_row[0] if p_row else None
+        if period:
+            _pf = " AND period = ?"
+            _pp = [period]
+
+    if not period:
+        conn.close()
+        return {"period": None, "customers": [], "total_revenue": 0}
+
+    try:
         rows = conn.execute(
             "SELECT customer_id, SUM(amount) as total "
-            "FROM canonical_revenue WHERE workspace_id=? AND period=? "
-            "AND customer_id IS NOT NULL GROUP BY customer_id ORDER BY total DESC",
-            [workspace_id, period],
+            "FROM canonical_revenue WHERE workspace_id=? "
+            "AND customer_id IS NOT NULL AND amount IS NOT NULL"
+            f"{_pf} GROUP BY customer_id ORDER BY total DESC",
+            [workspace_id] + _pp,
         ).fetchall()
 
-        # Get customer names
         name_rows = conn.execute(
             "SELECT source_id, name FROM canonical_customers WHERE workspace_id=?",
             [workspace_id],
@@ -2554,21 +2565,28 @@ async def cash_waterfall(request: Request, from_year: int = 0, from_month: int =
     _RD_KEYWORDS = {"r&d", "research", "engineering", "development", "product"}
     _GA_KEYWORDS = {"g&a", "general", "admin", "office", "legal", "hr", "finance"}
 
+    # Period filter
+    _pf = ""
+    _pp = []
+    if from_year > 0 and to_year > 0:
+        _pf = " AND period >= ? AND period <= ?"
+        _pp = [f"{from_year}-{from_month:02d}", f"{to_year}-{to_month:02d}"]
+
     try:
         bs_rows = conn.execute(
             "SELECT period, cash_balance FROM canonical_balance_sheet "
-            "WHERE workspace_id=? ORDER BY period",
-            [workspace_id],
+            f"WHERE workspace_id=?{_pf} ORDER BY period",
+            [workspace_id] + _pp,
         ).fetchall()
         rev_rows = conn.execute(
             "SELECT period, SUM(amount) as total FROM canonical_revenue "
-            "WHERE workspace_id=? AND amount IS NOT NULL GROUP BY period",
-            [workspace_id],
+            f"WHERE workspace_id=? AND amount IS NOT NULL{_pf} GROUP BY period",
+            [workspace_id] + _pp,
         ).fetchall()
         exp_rows = conn.execute(
             "SELECT period, category, SUM(amount) as total FROM canonical_expenses "
-            "WHERE workspace_id=? AND amount IS NOT NULL GROUP BY period, category",
-            [workspace_id],
+            f"WHERE workspace_id=? AND amount IS NOT NULL{_pf} GROUP BY period, category",
+            [workspace_id] + _pp,
         ).fetchall()
     except Exception:
         bs_rows, rev_rows, exp_rows = [], [], []
@@ -2628,35 +2646,47 @@ async def unit_economics(request: Request, from_year: int = 0, from_month: int =
     """Unit Economics Waterfall — per-customer profitability decomposition."""
     workspace_id = _get_workspace(request)
     conn = get_db()
+
+    # Period filter
+    _pf = ""
+    _pp = []
+    _kpi_filter = ""
+    _kpi_pp = []
+    if from_year > 0 and to_year > 0:
+        _pf = " AND period >= ? AND period <= ?"
+        _pp = [f"{from_year}-{from_month:02d}", f"{to_year}-{to_month:02d}"]
+        _kpi_filter = " AND (year > ? OR (year = ? AND month >= ?)) AND (year < ? OR (year = ? AND month <= ?))"
+        _kpi_pp = [from_year, from_year, from_month, to_year, to_year, to_month]
+
     try:
-        # Get latest month's data
+        # Get KPI data for the selected period (latest month within range)
         row = conn.execute(
-            "SELECT data_json FROM monthly_data WHERE workspace_id=? "
-            "ORDER BY year DESC, month DESC LIMIT 1",
-            [workspace_id],
+            "SELECT data_json FROM monthly_data WHERE workspace_id=?"
+            f"{_kpi_filter} ORDER BY year DESC, month DESC LIMIT 1",
+            [workspace_id] + _kpi_pp,
         ).fetchone()
         data = json.loads(row[0]) if row else {}
 
-        # Count active customers
+        # Count active customers within period (those with revenue)
         cust_row = conn.execute(
-            "SELECT COUNT(DISTINCT source_id) as cnt FROM canonical_customers "
-            "WHERE workspace_id=?",
-            [workspace_id],
+            "SELECT COUNT(DISTINCT customer_id) as cnt FROM canonical_revenue "
+            f"WHERE workspace_id=? AND customer_id IS NOT NULL AND amount > 0{_pf}",
+            [workspace_id] + _pp,
         ).fetchone()
         customer_count = cust_row[0] if cust_row else 0
 
-        # Total revenue and expenses
+        # Revenue and expenses within period
         rev_row = conn.execute(
-            "SELECT SUM(amount) FROM canonical_revenue WHERE workspace_id=?",
-            [workspace_id],
+            f"SELECT SUM(amount) FROM canonical_revenue WHERE workspace_id=? AND amount IS NOT NULL{_pf}",
+            [workspace_id] + _pp,
         ).fetchone()
         exp_row = conn.execute(
-            "SELECT SUM(amount) FROM canonical_expenses WHERE workspace_id=?",
-            [workspace_id],
+            f"SELECT SUM(amount) FROM canonical_expenses WHERE workspace_id=? AND amount IS NOT NULL{_pf}",
+            [workspace_id] + _pp,
         ).fetchone()
         period_count_row = conn.execute(
-            "SELECT COUNT(DISTINCT period) FROM canonical_revenue WHERE workspace_id=?",
-            [workspace_id],
+            f"SELECT COUNT(DISTINCT period) FROM canonical_revenue WHERE workspace_id=?{_pf}",
+            [workspace_id] + _pp,
         ).fetchone()
     except Exception:
         data, customer_count, rev_row, exp_row, period_count_row = {}, 0, None, None, None
