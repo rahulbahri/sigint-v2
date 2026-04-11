@@ -1431,17 +1431,15 @@ function KpiCard({ kpi, status, onOpen }) {
 function ScoreBar({ label, value, weight, Icon, onClick }) {
   const color = value >= 70 ? '#059669' : value >= 50 ? '#D97706' : '#DC2626'
   return (
-    <button className="flex items-center gap-2.5 w-full text-left group" onClick={onClick}>
+    <button className="flex items-center gap-2 w-full text-left group" onClick={onClick}>
       <div className="w-5 h-5 rounded-md bg-slate-100 flex items-center justify-center flex-shrink-0 group-hover:bg-slate-200 transition-colors">
         <Icon size={11} className="text-slate-500" />
       </div>
       <div className="flex-1 min-w-0">
-        <div className="flex items-center justify-between mb-1">
-          <span className="text-slate-600 text-[11px] font-medium group-hover:text-slate-800 transition-colors whitespace-nowrap">{label}</span>
-          <div className="flex items-center gap-1.5">
-            <span className="text-slate-400 text-[10px]">{weight}</span>
-            <span className="text-[11px] font-bold" style={{ color }}>{(value ?? 0).toFixed(0)}</span>
-          </div>
+        <div className="flex items-baseline gap-2 mb-1">
+          <span className="text-slate-600 text-[11px] font-medium group-hover:text-slate-800 transition-colors truncate">{label}</span>
+          <span className="text-slate-400 text-[9px] flex-shrink-0">{weight}</span>
+          <span className="text-[12px] font-bold flex-shrink-0 ml-auto" style={{ color }}>{(value ?? 0).toFixed(0)}</span>
         </div>
         <div className="h-1.5 bg-slate-100 rounded-full overflow-hidden">
           <div className="h-full rounded-full transition-all duration-1000" style={{ width: `${Math.round(value)}%`, backgroundColor: color }} />
@@ -2008,16 +2006,17 @@ export default function HomeScreen({ onNavigate, onAskAnika, externalPeriodDates
                   <Info size={11} />
                 </button>
               </div>
-              <button onClick={() => setShowDistModal(true)} className="grid grid-cols-4 gap-1 w-full text-left hover:bg-slate-50 rounded-xl p-1 -mx-1 transition-colors group">
+              <button onClick={() => setShowDistModal(true)} className="flex items-end justify-between w-full hover:bg-slate-50 rounded-xl p-1.5 -mx-1.5 transition-colors group">
                 {[
-                  { count: health?.kpis_green,  label: 'On Target', color: '#059669' },
-                  { count: health?.kpis_yellow, label: 'Watch',     color: '#D97706' },
-                  { count: health?.kpis_red,    label: 'Critical',  color: '#DC2626' },
-                  { count: health?.kpis_grey,   label: 'No Target', color: '#94a3b8' },
-                ].map(({ count, label, color: c }) => (
-                  <div key={label} className="text-center">
-                    <div className="text-lg font-extrabold leading-tight" style={{ color: c }}>{count ?? 0}</div>
-                    <div className="text-slate-400 text-[9px] font-medium leading-tight whitespace-nowrap">{label}</div>
+                  { count: health?.kpis_green,  label: 'On Target', dot: 'bg-emerald-500', color: '#059669' },
+                  { count: health?.kpis_yellow, label: 'Watch',     dot: 'bg-amber-400',   color: '#D97706' },
+                  { count: health?.kpis_red,    label: 'Critical',  dot: 'bg-red-500',     color: '#DC2626' },
+                  { count: health?.kpis_grey,   label: 'No Target', dot: 'bg-slate-300',   color: '#94a3b8' },
+                ].map(({ count, label, dot, color: c }) => (
+                  <div key={label} className="flex items-center gap-1.5">
+                    <span className={`w-2 h-2 rounded-full ${dot} flex-shrink-0`} />
+                    <span className="text-[15px] font-extrabold leading-none" style={{ color: c }}>{count ?? 0}</span>
+                    <span className="text-slate-400 text-[9px] font-medium leading-none">{label}</span>
                   </div>
                 ))}
               </button>
