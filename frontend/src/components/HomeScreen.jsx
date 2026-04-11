@@ -1431,15 +1431,15 @@ function KpiCard({ kpi, status, onOpen }) {
 function ScoreBar({ label, value, weight, Icon, onClick }) {
   const color = value >= 70 ? '#059669' : value >= 50 ? '#D97706' : '#DC2626'
   return (
-    <button className="flex items-center gap-2 w-full text-left group" onClick={onClick}>
+    <button className="flex items-center gap-2.5 w-full text-left group" onClick={onClick}>
       <div className="w-5 h-5 rounded-md bg-slate-100 flex items-center justify-center flex-shrink-0 group-hover:bg-slate-200 transition-colors">
         <Icon size={11} className="text-slate-500" />
       </div>
-      <div className="flex-1 min-w-0">
-        <div className="flex items-baseline gap-2 mb-1">
-          <span className="text-slate-600 text-[11px] font-medium group-hover:text-slate-800 transition-colors truncate">{label}</span>
-          <span className="text-slate-400 text-[9px] flex-shrink-0">{weight}</span>
-          <span className="text-[12px] font-bold flex-shrink-0 ml-auto" style={{ color }}>{(value ?? 0).toFixed(0)}</span>
+      <div className="flex-1">
+        <div className="flex items-baseline justify-between mb-1">
+          <span className="text-slate-600 text-[11px] font-medium group-hover:text-slate-800 transition-colors whitespace-nowrap">{label}</span>
+          <span className="text-slate-400 text-[9px] whitespace-nowrap ml-2">{weight}</span>
+          <span className="text-[12px] font-bold whitespace-nowrap ml-1" style={{ color }}>{(value ?? 0).toFixed(0)}</span>
         </div>
         <div className="h-1.5 bg-slate-100 rounded-full overflow-hidden">
           <div className="h-full rounded-full transition-all duration-1000" style={{ width: `${Math.round(value)}%`, backgroundColor: color }} />
@@ -1956,13 +1956,13 @@ export default function HomeScreen({ onNavigate, onAskAnika, externalPeriodDates
       <div className={`grid grid-cols-1 ${topCritical.length > 0 ? 'lg:grid-cols-[1fr_1.4fr]' : ''} gap-4 items-start`}>
 
       {/* ── Health Score Card ───────────────────────────────────────────── */}
-      <div className="card p-4 shadow-sm hover:shadow-md transition-shadow">
-        <div className="flex items-stretch gap-4">
+      <div className="card p-5 shadow-sm hover:shadow-md transition-shadow">
+        <div className="flex items-stretch gap-5">
 
           {/* Gauge column */}
           <div className="flex flex-col items-center justify-center flex-shrink-0 gap-2">
             <div className="relative">
-              <HealthGauge score={score} color={color} size={96} />
+              <HealthGauge score={score} color={color} size={100} />
               <div className="absolute inset-0 flex flex-col items-center justify-center">
                 <span className="text-3xl font-extrabold text-slate-900 leading-none">{score}</span>
                 <span className="text-slate-400 text-[10px]">/ 100</span>
@@ -1981,17 +1981,17 @@ export default function HomeScreen({ onNavigate, onAskAnika, externalPeriodDates
           <div className="w-px bg-slate-100 flex-shrink-0" />
 
           {/* Breakdown + Distribution column */}
-          <div className="flex-1 min-w-0 flex flex-col justify-between gap-4">
+          <div className="flex-1 min-w-0 flex flex-col justify-between gap-5">
 
             {/* Score breakdown */}
             <div>
-              <div className="flex items-center gap-1.5 mb-2.5">
+              <div className="flex items-center gap-1.5 mb-3">
                 <p className="text-slate-400 text-[10px] font-bold uppercase tracking-widest">Score Breakdown</p>
                 <button onClick={() => setShowScoreModal(true)} className="text-slate-300 hover:text-slate-500 transition-colors" title="Click to explain / adjust weights">
                   <Info size={11} />
                 </button>
               </div>
-              <div className="space-y-2.5">
+              <div className="space-y-3">
                 <ScoreBar label="Momentum"           value={health?.momentum ?? 0}           weight="30%" Icon={Activity} onClick={() => setShowScoreModal(true)}/>
                 <ScoreBar label="Target Achievement" value={health?.target_achievement ?? 0} weight="40%" Icon={Target}   onClick={() => setShowScoreModal(true)}/>
                 <ScoreBar label="Risk Score"         value={health?.risk_flags ?? 0}         weight="30%" Icon={Shield}   onClick={() => setShowScoreModal(true)}/>
@@ -1999,45 +1999,25 @@ export default function HomeScreen({ onNavigate, onAskAnika, externalPeriodDates
             </div>
 
             {/* KPI Distribution */}
-            <div>
-              <div className="flex items-center gap-1.5 mb-2">
-                <p className="text-slate-400 text-[10px] font-bold uppercase tracking-widest">KPI Distribution</p>
-                <button onClick={() => setShowDistModal(true)} className="text-slate-300 hover:text-slate-500 transition-colors" title="Click to explore">
-                  <Info size={11} />
-                </button>
-              </div>
-              <button onClick={() => setShowDistModal(true)} className="flex items-end justify-between w-full hover:bg-slate-50 rounded-xl p-1.5 -mx-1.5 transition-colors group">
+            <button onClick={() => setShowDistModal(true)} className="flex items-center gap-4 hover:bg-slate-50 rounded-xl px-2 py-2 -mx-2 transition-colors">
+              <p className="text-slate-400 text-[10px] font-bold uppercase tracking-widest whitespace-nowrap">KPIs</p>
+              <div className="flex items-center gap-3 flex-wrap">
                 {[
                   { count: health?.kpis_green,  label: 'On Target', dot: 'bg-emerald-500', color: '#059669' },
                   { count: health?.kpis_yellow, label: 'Watch',     dot: 'bg-amber-400',   color: '#D97706' },
                   { count: health?.kpis_red,    label: 'Critical',  dot: 'bg-red-500',     color: '#DC2626' },
                   { count: health?.kpis_grey,   label: 'No Target', dot: 'bg-slate-300',   color: '#94a3b8' },
                 ].map(({ count, label, dot, color: c }) => (
-                  <div key={label} className="flex items-center gap-1.5">
-                    <span className={`w-2 h-2 rounded-full ${dot} flex-shrink-0`} />
-                    <span className="text-[15px] font-extrabold leading-none" style={{ color: c }}>{count ?? 0}</span>
-                    <span className="text-slate-400 text-[9px] font-medium leading-none">{label}</span>
+                  <div key={label} className="flex items-center gap-1">
+                    <span className={`w-1.5 h-1.5 rounded-full ${dot}`} />
+                    <span className="text-[13px] font-bold" style={{ color: c }}>{count ?? 0}</span>
+                    <span className="text-slate-400 text-[9px]">{label}</span>
                   </div>
                 ))}
-              </button>
-            </div>
-          </div>
-
-          {/* Right: narrative (hidden on smaller cards to prevent overflow) */}
-          {narrative && (
-            <>
-              <div className="w-px bg-slate-100 flex-shrink-0 hidden xl:block" />
-              <div className="hidden xl:flex flex-col justify-center max-w-[200px]">
-                <p className="text-slate-500 text-[11px] leading-relaxed">{narrative}</p>
-                <button
-                  onClick={() => setShowScoreModal(true)}
-                  className="mt-3 text-[10px] font-semibold text-[#0055A4] hover:underline self-start"
-                >
-                  How is this score computed?
-                </button>
               </div>
-            </>
-          )}
+              <Info size={10} className="text-slate-300 flex-shrink-0" />
+            </button>
+          </div>
         </div>
       </div>
 
