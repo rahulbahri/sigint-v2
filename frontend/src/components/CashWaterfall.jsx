@@ -211,11 +211,11 @@ export default function CashWaterfall({ periodDates }) {
         <div className="h-72">
           <ResponsiveContainer width="100%" height="100%">
             <BarChart data={waterfallData} barCategoryGap="15%">
-              <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.06)" />
+              <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
               <XAxis
                 dataKey="label"
                 tick={{ fontSize: 10, fill: '#9ca3af' }}
-                axisLine={{ stroke: 'rgba(255,255,255,0.1)' }}
+                axisLine={{ stroke: '#e2e8f0' }}
                 tickLine={false}
                 interval={0}
                 angle={-20}
@@ -225,11 +225,11 @@ export default function CashWaterfall({ periodDates }) {
               <YAxis
                 tick={{ fontSize: 10, fill: '#9ca3af' }}
                 tickFormatter={v => fmtKpiValueCompact(v, 'usd')}
-                axisLine={{ stroke: 'rgba(255,255,255,0.1)' }}
+                axisLine={{ stroke: '#e2e8f0' }}
                 tickLine={false}
               />
               <Tooltip content={<WaterfallTooltip />} cursor={false} />
-              <ReferenceLine y={0} stroke="rgba(255,255,255,0.15)" />
+              <ReferenceLine y={0} stroke="#94a3b8" />
               {/* Invisible base bar */}
               <Bar dataKey="base" stackId="waterfall" fill="transparent" isAnimationActive={false} />
               {/* Visible value bar */}
@@ -255,17 +255,17 @@ export default function CashWaterfall({ periodDates }) {
           <div className="h-56">
             <ResponsiveContainer width="100%" height="100%">
               <LineChart data={trendData}>
-                <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.06)" />
+                <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
                 <XAxis
                   dataKey="period"
                   tick={{ fontSize: 10, fill: '#9ca3af' }}
-                  axisLine={{ stroke: 'rgba(255,255,255,0.1)' }}
+                  axisLine={{ stroke: '#e2e8f0' }}
                   tickLine={false}
                 />
                 <YAxis
                   tick={{ fontSize: 10, fill: '#9ca3af' }}
                   tickFormatter={v => fmtKpiValueCompact(v, 'usd')}
-                  axisLine={{ stroke: 'rgba(255,255,255,0.1)' }}
+                  axisLine={{ stroke: '#e2e8f0' }}
                   tickLine={false}
                 />
                 <Tooltip content={<TrendTooltip />} />

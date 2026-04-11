@@ -16,7 +16,7 @@ const C_EXPANSION  = '#0d9488'   // teal  — expansion
 const C_CONTRACTION = '#D97706'  // orange — contraction (negative)
 const C_CHURNED    = '#DC2626'   // red   — churned (negative)
 const C_ENDING_ARR = '#0055A4'   // accent blue — ending ARR line
-const C_GRID       = 'rgba(255,255,255,0.06)'
+const C_GRID       = '#e2e8f0'
 
 // ─── Custom Tooltip ─────────────────────────────────────────────────────────
 function BridgeTooltip({ active, payload, label }) {
@@ -186,12 +186,12 @@ export default function ArrBridge({ periodDates }) {
               <XAxis
                 dataKey="period"
                 tick={{ fill: '#9ca3af', fontSize: 10 }}
-                axisLine={{ stroke: 'rgba(255,255,255,0.1)' }}
+                axisLine={{ stroke: '#e2e8f0' }}
                 tickLine={false}
               />
               <YAxis
                 tick={{ fill: '#9ca3af', fontSize: 10 }}
-                axisLine={{ stroke: 'rgba(255,255,255,0.1)' }}
+                axisLine={{ stroke: '#e2e8f0' }}
                 tickLine={false}
                 tickFormatter={v => fmtKpiValueCompact(v, 'usd')}
               />
@@ -201,7 +201,7 @@ export default function ArrBridge({ periodDates }) {
                 iconType="circle"
                 iconSize={8}
               />
-              <ReferenceLine y={0} stroke="rgba(255,255,255,0.15)" strokeWidth={1} />
+              <ReferenceLine y={0} stroke="#94a3b8" strokeWidth={1} />
 
               {/* Positive bars: stacked New + Expansion */}
               <Bar

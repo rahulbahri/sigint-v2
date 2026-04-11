@@ -144,18 +144,18 @@ export default function MarginDecomposition({ periodDates }) {
         <div className="h-80">
           <ResponsiveContainer width="100%" height="100%">
             <ComposedChart data={chartData}>
-              <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.06)" />
+              <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
               <XAxis
                 dataKey="period"
                 tick={{ fontSize: 10, fill: '#9ca3af' }}
-                axisLine={{ stroke: 'rgba(255,255,255,0.1)' }}
+                axisLine={{ stroke: '#e2e8f0' }}
                 tickLine={false}
               />
               <YAxis
                 yAxisId="left"
                 tick={{ fontSize: 10, fill: '#9ca3af' }}
                 tickFormatter={v => fmtUsd(v)}
-                axisLine={{ stroke: 'rgba(255,255,255,0.1)' }}
+                axisLine={{ stroke: '#e2e8f0' }}
                 tickLine={false}
               />
               <YAxis
@@ -163,7 +163,7 @@ export default function MarginDecomposition({ periodDates }) {
                 orientation="right"
                 tick={{ fontSize: 10, fill: '#9ca3af' }}
                 tickFormatter={v => `${v}%`}
-                axisLine={{ stroke: 'rgba(255,255,255,0.1)' }}
+                axisLine={{ stroke: '#e2e8f0' }}
                 tickLine={false}
                 domain={[0, 100]}
               />
