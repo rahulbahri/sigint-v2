@@ -29,7 +29,7 @@ const SECTIONS = [
   // Intelligence
   { id: 'home',       label: 'Home',               Icon: Gauge,         accent: '#0055A4', group: 'Intelligence', tab: 'home'       },
   { id: 'board',      label: 'Executive Brief',     Icon: Layers,        accent: '#059669', group: 'Intelligence', tab: 'board'      },
-  { id: 'board_pack', label: 'Board Pack',          Icon: Presentation,  accent: '#D97706', group: 'Intelligence', tab: 'board_pack' },
+  { id: 'board', label: 'Board Pack',          Icon: Presentation,  accent: '#D97706', group: 'Intelligence', tab: 'board' },
   { id: 'variance',   label: 'Variance Command',    Icon: Activity,      accent: '#DC2626', group: 'Intelligence', tab: 'variance'   },
   { id: 'decisions',  label: 'Decision Log',        Icon: BookMarked,    accent: '#7c3aed', group: 'Intelligence', tab: 'decisions'  },
 
@@ -470,7 +470,7 @@ function SectionBoardPack({ onNavigate }) {
         Generate a board pack the day before your board meeting. Set the period label to match your board cadence (monthly or quarterly), and use the "Slate Professional" theme for a clean, neutral look.
       </TipBox>
 
-      <GoToTabButton label="Board Pack" onClick={() => onNavigate?.('board_pack')} />
+      <GoToTabButton label="Board Pack" onClick={() => onNavigate?.('board')} />
     </div>
   )
 }
@@ -1236,7 +1236,7 @@ const SECTION_RENDERERS = {
   getting_started: SectionGettingStarted,
   home:        SectionHome,
   board:       SectionBoard,
-  board_pack:  SectionBoardPack,
+  board:  SectionBoardPack,
   variance:    SectionVariance,
   decisions:   SectionDecisions,
   fingerprint: SectionFingerprint,

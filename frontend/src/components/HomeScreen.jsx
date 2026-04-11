@@ -1955,7 +1955,7 @@ export default function HomeScreen({ onNavigate, onAskAnika, externalPeriodDates
       </div>
 
       {/* ── Health Score + Most Critical (side-by-side) ────────────────── */}
-      <div className={`grid grid-cols-1 ${topCritical.length > 0 ? 'lg:grid-cols-[minmax(380px,1.1fr)_1.3fr_220px]' : 'lg:grid-cols-[1fr_220px]'} gap-4 items-start`}>
+      <div className={`grid grid-cols-1 ${topCritical.length > 0 ? 'lg:grid-cols-[1fr_1.4fr]' : ''} gap-4 items-start`}>
 
       {/* ── Health Score Card ───────────────────────────────────────────── */}
       <div className="card p-5 shadow-sm hover:shadow-md transition-shadow">
@@ -2158,23 +2158,24 @@ export default function HomeScreen({ onNavigate, onAskAnika, externalPeriodDates
         </div>
       )}
 
-      {/* ── Deep Analytics Card (3rd column) ─────────────────────────── */}
-      <div className="card p-4 shadow-sm hover:shadow-md transition-shadow border-blue-100 bg-blue-50/20 min-w-[210px]">
-        <div className="flex items-center gap-2 mb-3">
+      </div>{/* end side-by-side grid */}
+
+      {/* ── Deep Analytics — full-width horizontal strip ───────────────── */}
+      <div className="card px-5 py-3.5 shadow-sm hover:shadow-md transition-shadow border-blue-100 bg-blue-50/20">
+        <div className="flex items-center gap-2 mb-2.5">
           <Activity size={13} className="text-[#0055A4]" />
           <h2 className="text-slate-700 text-[11px] font-bold uppercase tracking-wider">Deep Analytics</h2>
         </div>
-        <div className="space-y-0.5">
+        <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-1">
           {[
-            { id: 'arr_bridge',     label: 'ARR Bridge',              kpi: 'arr',                    Icon: BarChart2 },
-            { id: 'cohort_matrix',  label: 'Cohort Retention',        kpi: 'nrr',                    Icon: RefreshCw },
-            { id: 'concentration',  label: 'Concentration',           kpi: 'customer_concentration', Icon: AlertCircle },
-            { id: 'margin_decomp',  label: 'Margin Breakdown',        kpi: 'gross_margin',           Icon: TrendingDown },
-            { id: 'cash_waterfall', label: 'Cash Waterfall',          kpi: 'cash_runway',            Icon: Activity },
-            { id: 'unit_economics', label: 'Unit Economics',          kpi: 'ltv_cac',                Icon: Zap },
-            { id: 'rule_of_40',    label: 'Rule of 40',              kpi: 'rule_of_40',             Icon: Target },
+            { id: 'arr_bridge',     label: 'ARR Bridge',         kpi: 'arr',                    Icon: BarChart2 },
+            { id: 'cohort_matrix',  label: 'Cohort Retention',   kpi: 'nrr',                    Icon: RefreshCw },
+            { id: 'concentration',  label: 'Concentration',      kpi: 'customer_concentration', Icon: AlertCircle },
+            { id: 'margin_decomp',  label: 'Margin Breakdown',   kpi: 'gross_margin',           Icon: TrendingDown },
+            { id: 'cash_waterfall', label: 'Cash Waterfall',     kpi: 'cash_runway',            Icon: Activity },
+            { id: 'unit_economics', label: 'Unit Economics',     kpi: 'ltv_cac',                Icon: Zap },
+            { id: 'rule_of_40',    label: 'Rule of 40',         kpi: 'rule_of_40',             Icon: Target },
           ].map(v => {
-            // Pull mini KPI value from all available health data sources
             const allKpis = [
               ...(needs_attention || []),
               ...(doing_well || []),
@@ -2191,23 +2192,21 @@ export default function HomeScreen({ onNavigate, onAskAnika, externalPeriodDates
             const VIcon = v.Icon
             return (
               <button key={v.id} onClick={() => onNavigate?.(v.id)}
-                className="w-full flex items-center gap-2 px-2 py-1.5 rounded-lg
-                  text-left hover:bg-[#0055A4]/5 transition-colors group">
-                <VIcon size={12} className="text-slate-400 group-hover:text-[#0055A4] flex-shrink-0" />
-                <span className="text-[11px] font-medium text-slate-700 group-hover:text-[#0055A4] flex-1 truncate">
-                  {v.label}
-                </span>
-                {miniVal && (
-                  <span className="text-[10px] font-bold text-[#0055A4] flex-shrink-0">{miniVal}</span>
-                )}
+                className="flex items-center gap-2 px-3 py-2 rounded-xl
+                  text-left hover:bg-[#0055A4]/8 transition-all group border border-transparent hover:border-blue-200">
+                <VIcon size={13} className="text-slate-400 group-hover:text-[#0055A4] flex-shrink-0" />
+                <div className="min-w-0 flex-1">
+                  <div className="text-[11px] font-semibold text-slate-700 group-hover:text-[#0055A4] truncate">{v.label}</div>
+                  {miniVal && (
+                    <div className="text-[10px] font-bold text-[#0055A4]">{miniVal}</div>
+                  )}
+                </div>
                 <ChevronRight size={10} className="text-slate-300 group-hover:text-[#0055A4] flex-shrink-0" />
               </button>
             )
           })}
         </div>
       </div>
-
-      </div>{/* end side-by-side grid */}
 
       {/* ── Decision Check-ins (30-day reminders) ──────────────────── */}
       {data?.decision_check_ins?.length > 0 && (
@@ -2558,7 +2557,7 @@ export default function HomeScreen({ onNavigate, onAskAnika, externalPeriodDates
           { label: 'Variance Analysis',   tab: 'variance',    desc: 'KPI gap deep-dive',      accent: '#0055A4' },
           { label: 'Performance Heatmap', tab: 'fingerprint', desc: '12-month pattern view',  accent: '#7c3aed' },
           { label: 'Trend Explorer',      tab: 'trends',      desc: 'Historical trend lines', accent: '#0891b2' },
-          { label: 'Board Pack',          tab: 'board_pack',  desc: 'Executive presentation', accent: '#d97706' },
+          { label: 'Executive Brief',     tab: 'board',       desc: 'Executive presentation', accent: '#d97706' },
         ].map(({ label, tab, desc, accent }) => (
           <button key={tab} onClick={() => onNavigate?.(tab)}
             className="card text-left p-3.5 hover:shadow-md transition-shadow group shadow-sm">

@@ -5,7 +5,7 @@ import {
   Upload, Code2, RefreshCw, ChevronRight,
   Activity, GitBranch, Network, Layers, BarChart2, BookOpen, Bell, Settings2, Target,
   Shield, Menu, X, Zap, LogOut, User, ShieldCheck, AlertCircle as AlertCircleIcon,
-  BookMarked, Sliders, Users, Gauge, FlaskConical, Presentation,
+  BookMarked, Sliders, Users, Gauge, FlaskConical,
   Database, Lock, PieChart, Clock,
 } from 'lucide-react'
 
@@ -61,7 +61,6 @@ const ScenarioComparison     = lazy(() => import('./components/ScenarioCompariso
 const AccountabilityDashboard = lazy(() => import('./components/AccountabilityDashboard.jsx'))
 const DocsPage          = lazy(() => import('./components/DocsPage.jsx'))
 const DataHealthPage    = lazy(() => import('./components/DataHealthPage.jsx'))
-const BoardPackGenerator= lazy(() => import('./components/BoardPackGenerator.jsx'))
 const TutorialPage      = lazy(() => import('./components/TutorialPage.jsx'))
 
 // ── Error boundary — catches React render crashes ───────────────────────────
@@ -105,7 +104,6 @@ const NAV_GROUPS = [
     tabs: [
       { id: 'home',       label: 'Home',               Icon: Gauge      },
       { id: 'board',      label: 'Executive Brief',     Icon: Layers     },
-      { id: 'board_pack', label: 'Board Pack',          Icon: Presentation},
       { id: 'variance',   label: 'Variance Command',    Icon: Activity   },
       { id: 'decisions',  label: 'Decision Log',        Icon: BookMarked },
     ],
@@ -180,7 +178,6 @@ const TABS_BASE = [...NAV_GROUPS.flatMap(g => g.tabs), ...LABS_TABS_BASE, ...ROA
 const PAGE_TITLES = {
   home:        'Home',
   board:       'Executive Brief',
-  board_pack:  'Board Pack Generator',
   variance:    'Variance Command Center',
   decisions:   'Decision Log',
   dashboard:   'Command Center',
@@ -1005,7 +1002,6 @@ function AppInner() {
               {tab === 'decisions'   && <DecisionLog authToken={authToken} fingerprint={fingerprint} prefillDecision={prefillDecision} onPrefillConsumed={() => setPrefillDecision(null)} />}
               {tab === 'scenario'    && <ScenarioPlanner fingerprint={filteredFingerprint} authToken={authToken} onNavigateToDecisions={(data) => { setPrefillDecision(data); setTab('decisions') }} />}
               {tab === 'ontology'    && <OntologyPage />}
-              {tab === 'board_pack'  && <BoardPackGenerator companySettings={companySettings} />}
 
               {/* ── SEC-grade analytics views (period-aware) ──────────────── */}
               {tab === 'arr_bridge'       && <ArrBridge periodDates={periodDates} />}
