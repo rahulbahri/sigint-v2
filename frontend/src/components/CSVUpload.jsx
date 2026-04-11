@@ -320,6 +320,7 @@ export default function CSVUpload({ onUploaded }) {
   const [loading,     setLoading]     = useState(false)
   const [seeding,     setSeeding]     = useState(false)
   const [uploads,     setUploads]     = useState([])
+  const [clearExisting, setClearExisting] = useState(false)
   const fileRef = useRef()
 
   async function fetchUploads() {
@@ -329,9 +330,11 @@ export default function CSVUpload({ onUploaded }) {
     if (!/\.(csv|xlsx|xls)$/i.test(file?.name || '')) { setError('Please upload a .csv or .xlsx file'); return }
     setLoading(true); setResult(null); setError(null)
     const fd = new FormData(); fd.append('file', file)
+    const url = clearExisting ? '/api/upload?clear_existing=true' : '/api/upload'
     try {
-      const r = await axios.post('/api/upload', fd)
+      const r = await axios.post(url, fd)
       setResult(r.data); onUploaded?.(); fetchUploads()
+      setClearExisting(false)
     } catch(e) { setError(e.response?.data?.detail || 'Upload failed') }
     setLoading(false)
   }
@@ -512,6 +515,14 @@ export default function CSVUpload({ onUploaded }) {
             Upload a CSV of raw transactions to compute all 18 KPIs. Column names are auto-detected.
           </p>
         </div>
+
+        {/* Replace existing data checkbox */}
+        <label className="flex items-center gap-2 mb-3 cursor-pointer">
+          <input type="checkbox" checked={clearExisting} onChange={e => setClearExisting(e.target.checked)}
+            className="rounded border-slate-300 text-[#0055A4] focus:ring-[#0055A4]" />
+          <span className="text-[12px] text-slate-600 font-medium">Replace existing data</span>
+          <span className="text-[10px] text-slate-400">(clear demo/seed data before uploading)</span>
+        </label>
 
         {/* Drop zone */}
         <div

@@ -244,9 +244,15 @@ def _populate_canonical_from_csv(conn, workspace_id: str, df: pd.DataFrame, col_
 
 
 @router.post("/api/upload", tags=["Data Ingestion"])
-async def upload_csv(request: Request, file: UploadFile = File(...)):
+async def upload_csv(request: Request, file: UploadFile = File(...),
+                     clear_existing: bool = False):
     """
     Upload a CSV file to update KPI data.
+
+    **Parameters:**
+    - clear_existing: if true, wipes all existing canonical + monthly data
+      for this workspace before ingesting. Use when replacing demo/seed data
+      with real data to avoid mixing datasets.
 
     **Supported columns** (case-insensitive, spaces/underscores normalised):
     - date / transaction_date / month / period
@@ -265,6 +271,34 @@ async def upload_csv(request: Request, file: UploadFile = File(...)):
     Returns column mapping detected and KPI preview.
     """
     workspace_id = _require_workspace(request)
+
+    # ── Clear existing data if requested ─────────────────────────────────
+    if clear_existing:
+        _conn = get_db()
+        try:
+            _canonical_tables = [
+                "canonical_revenue", "canonical_expenses", "canonical_customers",
+                "canonical_pipeline", "canonical_invoices", "canonical_employees",
+                "canonical_marketing", "canonical_balance_sheet",
+                "canonical_time_tracking", "canonical_surveys",
+                "canonical_support", "canonical_product_usage",
+            ]
+            for _tbl in _canonical_tables:
+                try:
+                    _conn.execute(f"DELETE FROM {_tbl} WHERE workspace_id=?", [workspace_id])
+                except Exception:
+                    pass  # Table may not exist yet
+            # Clear aggregator-derived monthly_data (sentinel rows)
+            _conn.execute("DELETE FROM monthly_data WHERE workspace_id=? AND upload_id=?",
+                          [workspace_id, -999])
+            # Clear previous uploads' monthly_data too
+            _conn.execute("DELETE FROM monthly_data WHERE workspace_id=?", [workspace_id])
+            _conn.execute("DELETE FROM uploads WHERE workspace_id=?", [workspace_id])
+            _conn.commit()
+            _audit("data_clear", "upload", "", "Existing data cleared before upload",
+                   workspace_id=workspace_id)
+        finally:
+            _conn.close()
     _allowed_exts = {".csv", ".CSV", ".xlsx", ".xls"}
     _ext = os.path.splitext(file.filename or "")[1]
     if _ext not in _allowed_exts:
