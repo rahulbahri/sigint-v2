@@ -77,7 +77,10 @@ def _cell_status(val, target, direction: str) -> str:
     """Determine status: green/yellow/red/grey."""
     if val is None or target is None or target == 0:
         return "grey"
-    r = val / target if direction == "higher" else target / val
+    if direction == "higher":
+        r = val / target
+    else:
+        r = target / val if val != 0 else 0
     if r >= 0.98:
         return "green"
     if r >= 0.90:

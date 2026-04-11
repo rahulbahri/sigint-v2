@@ -1989,10 +1989,9 @@ export default function HomeScreen({ onNavigate, onAskAnika, externalPeriodDates
             <div>
               <div className="flex items-center gap-1.5 mb-2.5">
                 <p className="text-slate-400 text-[10px] font-bold uppercase tracking-widest">Score Breakdown</p>
-                <button onClick={() => setShowScoreModal(true)} className="text-slate-300 hover:text-slate-500 transition-colors" title="How is this calculated?">
+                <button onClick={() => setShowScoreModal(true)} className="text-slate-300 hover:text-slate-500 transition-colors" title="Click to explain / adjust weights">
                   <Info size={11} />
                 </button>
-                <span className="text-[9px] text-slate-300 ml-auto cursor-pointer hover:text-slate-400" onClick={() => setShowScoreModal(true)}>click to explain / adjust weights</span>
               </div>
               <div className="space-y-2.5">
                 <ScoreBar label="Momentum"           value={health?.momentum ?? 0}           weight="30%" Icon={Activity} onClick={() => setShowScoreModal(true)}/>
@@ -2005,10 +2004,9 @@ export default function HomeScreen({ onNavigate, onAskAnika, externalPeriodDates
             <div>
               <div className="flex items-center gap-1.5 mb-2">
                 <p className="text-slate-400 text-[10px] font-bold uppercase tracking-widest">KPI Distribution</p>
-                <button onClick={() => setShowDistModal(true)} className="text-slate-300 hover:text-slate-500 transition-colors">
+                <button onClick={() => setShowDistModal(true)} className="text-slate-300 hover:text-slate-500 transition-colors" title="Click to explore">
                   <Info size={11} />
                 </button>
-                <span className="text-[9px] text-slate-300 ml-auto cursor-pointer hover:text-slate-400" onClick={() => setShowDistModal(true)}>click to explore</span>
               </div>
               <button onClick={() => setShowDistModal(true)} className="grid grid-cols-4 gap-2 w-full text-left hover:bg-slate-50 rounded-xl p-1.5 -mx-1.5 transition-colors group">
                 {[
@@ -2026,11 +2024,11 @@ export default function HomeScreen({ onNavigate, onAskAnika, externalPeriodDates
             </div>
           </div>
 
-          {/* Right: narrative */}
+          {/* Right: narrative (hidden on smaller cards to prevent overflow) */}
           {narrative && (
             <>
-              <div className="w-px bg-slate-100 flex-shrink-0 hidden lg:block" />
-              <div className="hidden lg:flex flex-col justify-center max-w-[220px]">
+              <div className="w-px bg-slate-100 flex-shrink-0 hidden xl:block" />
+              <div className="hidden xl:flex flex-col justify-center max-w-[200px]">
                 <p className="text-slate-500 text-[11px] leading-relaxed">{narrative}</p>
                 <button
                   onClick={() => setShowScoreModal(true)}
