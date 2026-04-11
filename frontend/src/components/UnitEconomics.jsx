@@ -10,13 +10,16 @@ import { fmtKpiValueCompact } from './kpiFormat'
 function buildWaterfallData(metrics) {
   if (!metrics?.length) return []
 
-  const byLabel = {}
-  metrics.forEach(m => { byLabel[m.label.toLowerCase()] = m })
+  // Match metric labels from API (e.g. "ARPU (Monthly)", "COGS per Customer", "CAC (Allocated)")
+  const find = (keyword) => {
+    const m = metrics.find(m => m.label.toLowerCase().includes(keyword))
+    return Math.abs(m?.value ?? 0)
+  }
 
-  const arpu        = byLabel['arpu']?.value        ?? 0
-  const cogs        = byLabel['cogs']?.value        ?? 0
+  const arpu        = find('arpu')
+  const cogs        = find('cogs')
   const grossProfit = arpu - cogs
-  const cac         = byLabel['cac']?.value         ?? 0
+  const cac         = find('cac')
   const netContrib  = grossProfit - cac
 
   let running = 0
