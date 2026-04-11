@@ -31,11 +31,14 @@ function buildWaterfallData(metrics) {
   return steps.map(s => {
     const base = running
     running += s.value
+    const lo = Math.min(base, base + s.value)
+    const hi = Math.max(base, base + s.value)
     return {
       name:       s.name,
       value:      s.value,
-      base:       Math.min(base, base + s.value),
-      top:        Math.max(base, base + s.value),
+      base:       lo,
+      top:        hi,
+      height:     hi - lo,
       isPositive: s.isPositive,
     }
   })
@@ -172,7 +175,7 @@ export default function UnitEconomics({ periodDates }) {
             {/* Invisible base bar for waterfall offset */}
             <Bar dataKey="base" stackId="stack" fill="transparent" />
             {/* Visible bar for the step value */}
-            <Bar dataKey={(d) => d.top - d.base} stackId="stack" radius={[4, 4, 0, 0]} barSize={48}>
+            <Bar dataKey="height" stackId="stack" radius={[4, 4, 0, 0]} barSize={48}>
               {waterfallData.map((entry, i) => (
                 <Cell key={i} fill={entry.isPositive ? '#059669' : '#DC2626'} />
               ))}
