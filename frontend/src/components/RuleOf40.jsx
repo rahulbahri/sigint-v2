@@ -78,7 +78,10 @@ export default function RuleOf40({ periodDates }) {
     try {
       const params = new URLSearchParams()
       if (periodDates?.fromYear) {
-        params.set('year', periodDates.fromYear)  // /api/monthly uses ?year= filter
+        params.set('from_year', periodDates.fromYear)
+        params.set('from_month', periodDates.fromMonth)
+        params.set('to_year', periodDates.toYear)
+        params.set('to_month', periodDates.toMonth)
       }
       const { data } = await axios.get(`/api/monthly?${params}`)
       setRaw(Array.isArray(data) ? data : [])

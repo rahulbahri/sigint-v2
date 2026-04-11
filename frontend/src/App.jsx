@@ -1011,8 +1011,8 @@ function AppInner() {
               {tab === 'cash_waterfall'   && <CashWaterfall periodDates={periodDates} />}
               {tab === 'unit_economics'   && <UnitEconomics periodDates={periodDates} />}
               {tab === 'rule_of_40'       && <RuleOf40 periodDates={periodDates} />}
-              {tab === 'scenario_compare' && <ScenarioComparison />}
-              {tab === 'accountability'   && <AccountabilityDashboard />}
+              {tab === 'scenario_compare' && <ScenarioComparison periodDates={periodDates} />}
+              {tab === 'accountability'   && <AccountabilityDashboard periodDates={periodDates} />}
               {tab === 'projection'  && (
                 <ProjectionBridge
                   bridgeData={filteredBridgeData}

@@ -27,15 +27,26 @@ from core.criticality import DOMAIN_URGENCY, DEFAULT_WEIGHTS as CRIT_DEFAULT_WEI
 router = APIRouter()
 
 @router.get("/api/monthly", tags=["KPIs"])
-def monthly_kpis(request: Request, year: Optional[int] = None):
-    """Return computed monthly KPI values. Optionally filter by year."""
+def monthly_kpis(request: Request, year: Optional[int] = None,
+                 from_year: int = 0, from_month: int = 1,
+                 to_year: int = 0, to_month: int = 12):
+    """Return computed monthly KPI values. Supports full period range filtering."""
     workspace_id = _require_workspace(request)
     conn = get_db()
     query = "SELECT * FROM monthly_data WHERE workspace_id=?"
     params: list = [workspace_id]
-    if year:
+
+    if from_year > 0 and to_year > 0:
+        # Full range filter: (year > from OR (year = from AND month >= from_m))
+        #                 AND (year < to   OR (year = to   AND month <= to_m))
+        query += (" AND (year > ? OR (year = ? AND month >= ?))"
+                  " AND (year < ? OR (year = ? AND month <= ?))")
+        params.extend([from_year, from_year, from_month,
+                       to_year, to_year, to_month])
+    elif year:
         query += " AND year = ?"
         params.append(year)
+
     rows = conn.execute(query, params).fetchall()
     conn.close()
     result = []
@@ -2723,21 +2734,31 @@ async def unit_economics(request: Request, from_year: int = 0, from_month: int =
 
 
 @router.get("/api/analytics/accountability-rollup", tags=["Analytics"])
-async def accountability_rollup(request: Request):
+async def accountability_rollup(request: Request, from_year: int = 0, from_month: int = 1,
+                                 to_year: int = 0, to_month: int = 12):
     """KPI Owner Accountability Dashboard — grouped by owner with status rollup."""
     workspace_id = _get_workspace(request)
     conn = get_db()
+
+    # Period filter for monthly_data
+    _kf = ""
+    _kp = []
+    if from_year > 0 and to_year > 0:
+        _kf = (" AND (year > ? OR (year = ? AND month >= ?))"
+               " AND (year < ? OR (year = ? AND month <= ?))")
+        _kp = [from_year, from_year, from_month, to_year, to_year, to_month]
+
     try:
         acct_rows = conn.execute(
             "SELECT kpi_key, owner, due_date, status, last_updated "
             "FROM kpi_accountability WHERE workspace_id=?",
             [workspace_id],
         ).fetchall()
-        # Get latest KPI values and targets
+        # Get KPI values within selected period (latest month in range)
         kpi_row = conn.execute(
-            "SELECT data_json FROM monthly_data WHERE workspace_id=? "
-            "ORDER BY year DESC, month DESC LIMIT 1",
-            [workspace_id],
+            "SELECT data_json FROM monthly_data WHERE workspace_id=?"
+            f"{_kf} ORDER BY year DESC, month DESC LIMIT 1",
+            [workspace_id] + _kp,
         ).fetchone()
         kpi_data = json.loads(kpi_row[0]) if kpi_row else {}
 
